@@ -6,6 +6,7 @@ import Layout from '../components/Layout/Layout';
 import Button from '../components/Forms/Button';
 import Input from '../components/Forms/Input';
 import { useAuth } from '../context/AuthContext';
+import ConfirmationDialog from '../components/Auth/ConfirmationDialog';
 
 type Mode = 'login' | 'signup';
 type SignupStep = 'choice' | 'form';
@@ -16,6 +17,7 @@ const AuthPortal: React.FC = () => {
   const [formData, setFormData] = useState({ name: '', email: '', password: '' });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [showConfirmation, setShowConfirmation] = useState(false);
   const navigate = useNavigate();
   const { signIn, signUp } = useAuth();
 
@@ -40,9 +42,8 @@ const AuthPortal: React.FC = () => {
         await signIn(formData.email, formData.password);
         navigate('/dashboard');
       } else {
-        await signUp(formData.email, formData.password, undefined, formData.name);
-        // Redireciona para a página de exploração de arenas após o cadastro do cliente
-        navigate('/arenas');
+        await signUp(formData.email, formData.password, formData.name, 'cliente');
+        setShowConfirmation(true);
       }
     } catch (err: any) {
       setError(err.message || 'Ocorreu um erro. Tente novamente.');
@@ -182,6 +183,14 @@ const AuthPortal: React.FC = () => {
           </div>
         </div>
       </div>
+      <ConfirmationDialog
+        isOpen={showConfirmation}
+        onClose={() => {
+          setShowConfirmation(false);
+          setMode('login');
+        }}
+        email={formData.email}
+      />
     </Layout>
   );
 };

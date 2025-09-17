@@ -1,10 +1,10 @@
 import React from 'react';
-import { ArenaSettings } from '../../types';
+import { Arena } from '../../types';
 import { FileText, Info } from 'lucide-react';
 
 interface OperationTabProps {
-  formData: ArenaSettings;
-  setFormData: React.Dispatch<React.SetStateAction<ArenaSettings>>;
+  formData: Partial<Arena>;
+  setFormData: React.Dispatch<React.SetStateAction<Partial<Arena>>>;
 }
 
 const FormTextArea: React.FC<React.TextareaHTMLAttributes<HTMLTextAreaElement> & { label: string }> = ({ label, ...props }) => (
@@ -25,15 +25,15 @@ const OperationTab: React.FC<OperationTabProps> = ({ formData, setFormData }) =>
       <Section title="Políticas da Arena" icon={FileText}>
         <FormTextArea
           label="Política de Cancelamento"
-          name="cancellationPolicy"
-          value={formData.cancellationPolicy}
+          name="cancellation_policy"
+          value={formData.cancellation_policy || ''}
           onChange={handleChange}
           placeholder="Ex: Cancelamentos com até 24h de antecedência têm reembolso de 100%. Após esse período, não há reembolso."
         />
         <FormTextArea
           label="Termos de Uso"
-          name="termsOfUse"
-          value={formData.termsOfUse}
+          name="terms_of_use"
+          value={formData.terms_of_use || ''}
           onChange={handleChange}
           placeholder="Ex: É obrigatório o uso de calçado apropriado. Proibido fumar nas dependências da quadra."
         />

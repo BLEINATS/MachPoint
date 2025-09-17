@@ -11,7 +11,13 @@ import Quadras from './pages/Quadras';
 import ClientProfile from './pages/ClientProfile';
 import AuthPortal from './pages/AuthPortal';
 import Arenas from './pages/Arenas';
+import Alunos from './pages/Alunos';
+import Torneios from './pages/Torneios';
+import TorneioDetail from './pages/TorneioDetail';
+import Eventos from './pages/Eventos';
+import EventoDetail from './pages/EventoDetail';
 import { ThemeProvider } from './context/ThemeContext';
+import { ToastProvider } from './context/ToastContext';
 
 const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, isLoading } = useAuth();
@@ -68,6 +74,46 @@ const AppRoutes: React.FC = () => {
           }
         />
         <Route
+          path="/alunos"
+          element={
+            <ProtectedRoute>
+              <Alunos />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/torneios"
+          element={
+            <ProtectedRoute>
+              <Torneios />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/torneios/:id"
+          element={
+            <ProtectedRoute>
+              <TorneioDetail />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/eventos"
+          element={
+            <ProtectedRoute>
+              <Eventos />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/eventos/:id"
+          element={
+            <ProtectedRoute>
+              <EventoDetail />
+            </ProtectedRoute>
+          }
+        />
+        <Route
           path="/perfil"
           element={
             <ProtectedRoute>
@@ -84,9 +130,11 @@ const AppRoutes: React.FC = () => {
 function App() {
   return (
     <ThemeProvider>
-      <AuthProvider>
-        <AppRoutes />
-      </AuthProvider>
+      <ToastProvider>
+        <AuthProvider>
+          <AppRoutes />
+        </AuthProvider>
+      </ToastProvider>
     </ThemeProvider>
   );
 }

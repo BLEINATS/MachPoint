@@ -7,20 +7,13 @@ import ClientDashboard from '../components/Client/ClientDashboard';
 
 const Dashboard: React.FC = () => {
   const { profile } = useAuth();
-  const navigate = useNavigate();
-
-  const handleDayClick = (date: Date) => {
-    navigate('/reservas', { state: { selectedDate: date.toISOString() } });
-  };
   
   // Lógica para renderizar o dashboard correto
   const renderDashboard = () => {
     if (profile?.role === 'admin_arena') {
-      // O AnalyticsDashboard agora busca seus próprios dados
-      return <AnalyticsDashboard onDayClick={handleDayClick} />;
+      return <AnalyticsDashboard />;
     }
     if (profile?.role === 'cliente') {
-      // O ClientDashboard agora busca seus próprios dados do contexto
       return <ClientDashboard />;
     }
     return (

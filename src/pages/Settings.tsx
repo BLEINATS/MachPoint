@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { Building, FileText, BarChart2, CheckCircle, Save, ArrowLeft } from 'lucide-react';
 import Layout from '../components/Layout/Layout';
 import { useAuth } from '../context/AuthContext';
-import { ArenaSettings, Arena } from '../types';
+import { Arena } from '../types';
 import Button from '../components/Forms/Button';
 import ProfileTab from '../components/Settings/ProfileTab';
 import OperationTab from '../components/Settings/OperationTab';
@@ -12,44 +12,16 @@ import PlanTab from '../components/Settings/PlanTab';
 
 type TabType = 'profile' | 'operation' | 'plan';
 
-const getInitialFormData = (initialData?: ArenaSettings | null, arena?: Arena | null): ArenaSettings => {
-  return {
-    logoUrl: initialData?.logoUrl || '',
-    arenaName: initialData?.arenaName || arena?.name || '',
-    arenaSlug: initialData?.arenaSlug || arena?.slug || '',
-    cnpjCpf: initialData?.cnpjCpf || '',
-    responsibleName: initialData?.responsibleName || '',
-    contactPhone: initialData?.contactPhone || '',
-    publicEmail: initialData?.publicEmail || '',
-    cep: initialData?.cep || '',
-    address: initialData?.address || '',
-    number: initialData?.number || '',
-    neighborhood: initialData?.neighborhood || '',
-    city: initialData?.city || '',
-    state: initialData?.state || '',
-    googleMapsLink: initialData?.googleMapsLink || '',
-    cancellationPolicy: initialData?.cancellationPolicy || '',
-    termsOfUse: initialData?.termsOfUse || '',
-  };
-};
-
 const Settings: React.FC = () => {
-  const { arena } = useAuth();
+  const { arena, updateArena, isLoading: isAuthLoading } = useAuth();
   const [activeTab, setActiveTab] = useState<TabType>('profile');
-  const [formData, setFormData] = useState<ArenaSettings>(() => getInitialFormData(null, arena));
-  const [isLoading, setIsLoading] = useState(true);
+  const [formData, setFormData] = useState<Partial<Arena>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
 
   useEffect(() => {
     if (arena) {
-      const savedSettings = localStorage.getItem(`arena_settings_${arena.id}`);
-      if (savedSettings) {
-        setFormData(getInitialFormData(JSON.parse(savedSettings), arena));
-      } else {
-        setFormData(getInitialFormData(null, arena));
-      }
-      setIsLoading(false);
+      setFormData(arena);
     }
   }, [arena]);
 
@@ -59,15 +31,19 @@ const Settings: React.FC = () => {
     { id: 'plan', label: 'Plano e Faturamento', icon: BarChart2 },
   ];
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!arena) return;
     setIsSaving(true);
-    localStorage.setItem(`arena_settings_${arena.id}`, JSON.stringify(formData));
-    setTimeout(() => {
-      setIsSaving(false);
+    try {
+      await updateArena(formData);
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 2000);
-    }, 1000);
+    } catch (error) {
+      console.error("Erro ao salvar configurações:", error);
+      alert("Falha ao salvar. Tente novamente.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const renderContent = () => {
@@ -83,7 +59,7 @@ const Settings: React.FC = () => {
     }
   };
 
-  if (isLoading) {
+  if (isAuthLoading) {
     return (
       <Layout>
         <div className="flex justify-center items-center h-64">
@@ -158,13 +134,9 @@ const Settings: React.FC = () => {
                       className="flex items-center"
                     >
                       {showSuccess ? (
-                        <>
-                          <CheckCircle className="h-4 w-4 mr-2" /> Salvo com sucesso!
-                        </>
+                        <><CheckCircle className="h-4 w-4 mr-2" /> Salvo com sucesso!</>
                       ) : (
-                        <>
-                          <Save className="h-4 w-4 mr-2" /> Salvar Alterações
-                        </>
+                        <><Save className="h-4 w-4 mr-2" /> Salvar Alterações</>
                       )}
                     </motion.span>
                   </AnimatePresence>

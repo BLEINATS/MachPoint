@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Calendar, MapPin, Clock, Mail, Key, Shield } from 'lucide-react';
+import { Calendar, Mail, Key, Shield, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import Layout from '../components/Layout/Layout';
 import Input from '../components/Forms/Input';
 import Button from '../components/Forms/Button';
+import ConfirmationDialog from '../components/Auth/ConfirmationDialog';
 
 const ArenaSignup: React.FC = () => {
   const [formData, setFormData] = useState({
@@ -15,6 +16,7 @@ const ArenaSignup: React.FC = () => {
   });
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [showConfirmation, setShowConfirmation] = useState(false);
 
   const { signUp } = useAuth();
   const navigate = useNavigate();
@@ -36,10 +38,10 @@ const ArenaSignup: React.FC = () => {
         return;
       }
 
-      await signUp(formData.email, formData.password, formData.arenaName);
-      navigate('/dashboard');
-    } catch (error) {
-      setErrors({ submit: 'Erro ao criar conta. Tente novamente.' });
+      await signUp(formData.email, formData.password, formData.arenaName, 'admin_arena');
+      setShowConfirmation(true);
+    } catch (error: any) {
+      setErrors({ submit: error.message || 'Erro ao criar conta. Tente novamente.' });
     } finally {
       setIsLoading(false);
     }
@@ -90,7 +92,7 @@ const ArenaSignup: React.FC = () => {
           <div className="bg-white dark:bg-brand-gray-900 py-8 px-4 shadow-xl dark:shadow-2xl dark:shadow-brand-blue-500/10 rounded-lg sm:px-10">
             <form className="space-y-6" onSubmit={handleSubmit}>
               <Input
-                label="E-mail"
+                label="E-mail de Administrador"
                 name="email"
                 type="email"
                 value={formData.email}
@@ -140,42 +142,30 @@ const ArenaSignup: React.FC = () => {
               </Button>
             </form>
 
-            <div className="mt-8">
-              <div className="relative">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-brand-gray-300 dark:border-brand-gray-700" />
-                </div>
-                <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-white dark:bg-brand-gray-900 text-brand-gray-500 dark:text-brand-gray-400">
-                    O que você terá acesso
-                  </span>
-                </div>
-              </div>
-
-              <div className="mt-6 space-y-4">
-                <div className="flex items-center">
-                  <MapPin className="h-5 w-5 text-green-500" />
-                  <span className="ml-3 text-sm text-brand-gray-700 dark:text-brand-gray-300">
-                    Gerenciamento completo de quadras
-                  </span>
-                </div>
-                <div className="flex items-center">
-                  <Calendar className="h-5 w-5 text-green-500" />
-                  <span className="ml-3 text-sm text-brand-gray-700 dark:text-brand-gray-300">
-                    Sistema de reservas automatizado
-                  </span>
-                </div>
-                <div className="flex items-center">
-                  <Clock className="h-5 w-5 text-green-500" />
-                  <span className="ml-3 text-sm text-brand-gray-700 dark:text-brand-gray-300">
-                    Controle de horários em tempo real
-                  </span>
-                </div>
-              </div>
+            <p className="mt-6 text-center text-sm text-brand-gray-600 dark:text-brand-gray-400">
+              Já tem uma conta?{' '}
+              <Link to="/auth" className="font-medium text-brand-blue-600 hover:text-brand-blue-500 dark:text-brand-blue-400 dark:hover:text-brand-blue-300">
+                Entrar
+              </Link>
+            </p>
+            
+            <div className="mt-4 text-center">
+                <Link to="/auth" className="inline-flex items-center text-sm font-medium text-brand-gray-600 dark:text-brand-gray-400 hover:text-brand-blue-500 dark:hover:text-brand-blue-400 transition-colors">
+                    <ArrowLeft className="h-4 w-4 mr-2" />
+                    Voltar para a seleção
+                </Link>
             </div>
           </div>
         </motion.div>
       </div>
+      <ConfirmationDialog
+        isOpen={showConfirmation}
+        onClose={() => {
+          setShowConfirmation(false);
+          navigate('/auth');
+        }}
+        email={formData.email}
+      />
     </Layout>
   );
 };

@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { ArenaSettings } from '../../types';
+import { Arena } from '../../types';
+import { supabase } from '../../lib/supabaseClient';
+import { useAuth } from '../../context/AuthContext';
 import Input from '../Forms/Input';
 import Button from '../Forms/Button';
-import { Building, User, Phone, Mail, Hash, Map, MapPin, Link as LinkIcon, Loader2, Image as ImageIcon } from 'lucide-react';
+import { Building, User, Phone, Mail, Hash, Map, MapPin, Link as LinkIcon, Loader2, Image as ImageIcon, Trash2 } from 'lucide-react';
 import { maskCEP, maskPhone, maskCPFOrCNPJ } from '../../utils/masks';
 
 // Define types for IBGE API response
@@ -19,15 +21,18 @@ interface IBGECity {
 }
 
 interface ProfileTabProps {
-  formData: ArenaSettings;
-  setFormData: React.Dispatch<React.SetStateAction<ArenaSettings>>;
+  formData: Partial<Arena>;
+  setFormData: React.Dispatch<React.SetStateAction<Partial<Arena>>>;
 }
 
 const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
+  const { arena, updateArena } = useAuth();
   const [states, setStates] = useState<IBGEState[]>([]);
   const [cities, setCities] = useState<IBGECity[]>([]);
   const [isFetchingCep, setIsFetchingCep] = useState(false);
   const [isFetchingCities, setIsFetchingCities] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
 
   // Fetch states from IBGE API on component mount
   useEffect(() => {
@@ -58,6 +63,7 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
   }, [formData.state, states]);
 
   const handleCepBlur = async () => {
+    if (!formData.cep) return;
     const cep = formData.cep.replace(/\D/g, '');
     if (cep.length === 8) {
       setIsFetchingCep(true);
@@ -84,13 +90,13 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
     const { name, value } = e.target;
     
     let processedValue = value;
-    if (name === 'cnpjCpf') {
+    if (name === 'cnpj_cpf') {
       processedValue = maskCPFOrCNPJ(value);
-    } else if (name === 'contactPhone') {
+    } else if (name === 'contact_phone') {
       processedValue = maskPhone(value);
     } else if (name === 'cep') {
       processedValue = maskCEP(value);
-    } else if (name === 'arenaSlug') {
+    } else if (name === 'slug') {
       processedValue = value
         .toLowerCase()
         .replace(/\s+/g, '-') // replace spaces with -
@@ -103,87 +109,148 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
     setFormData(prev => ({ ...prev, [name]: processedValue }));
   };
   
-  const handleLogoChange = () => {
-    const newLogo = `https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://placehold.co/200x200/${Math.floor(Math.random()*16777215).toString(16)}/FFFFFF?text=Logo`;
-    setFormData(prev => ({ ...prev, logoUrl: newLogo }));
+  const handleLogoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!arena) return;
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    try {
+      // Proactively remove old logo if it exists
+      if (formData.logo_url) {
+        try {
+          const oldLogoPath = formData.logo_url.split('/arena-logos/')[1];
+          if (oldLogoPath) {
+            await supabase.storage.from('arena-logos').remove([oldLogoPath]);
+          }
+        } catch (removeError) {
+          console.error("Failed to remove old logo, but continuing:", removeError);
+        }
+      }
+
+      const filePath = `${arena.id}/${Date.now()}-${file.name}`;
+      
+      const { error: uploadError } = await supabase.storage
+        .from('arena-logos')
+        .upload(filePath, file);
+      if (uploadError) throw uploadError;
+
+      const { data: publicUrlData } = supabase.storage
+        .from('arena-logos')
+        .getPublicUrl(filePath);
+      if (!publicUrlData.publicUrl) throw new Error("Não foi possível obter a URL pública do logo.");
+      
+      const newLogoUrl = publicUrlData.publicUrl;
+      await updateArena({ logo_url: newLogoUrl });
+      setFormData(prev => ({ ...prev, logo_url: newLogoUrl }));
+
+    } catch (error: any) {
+      alert(error.message || 'Falha no upload do logo.');
+    } finally {
+      setIsUploading(false);
+    }
   };
 
-  const removeLogo = () => {
-    setFormData(prev => ({ ...prev, logoUrl: '' }));
+  const removeLogo = async () => {
+    if (!arena || !formData.logo_url) return;
+    
+    setIsUploading(true);
+    try {
+      const oldLogoPath = formData.logo_url.split('/arena-logos/')[1];
+      if (oldLogoPath) {
+        await supabase.storage.from('arena-logos').remove([oldLogoPath]);
+      }
+      await updateArena({ logo_url: '' });
+      setFormData(prev => ({ ...prev, logo_url: '' }));
+    } catch (error: any) {
+      alert(error.message || 'Falha ao remover o logo.');
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   return (
     <div className="space-y-8">
-      <Section title="Identidade Visual" icon={ImageIcon}>
-        <div className="flex items-center gap-6">
+      <Section title="Perfil da Arena" icon={Building}>
+        <div className="flex flex-col sm:flex-row items-center gap-6 pb-6 border-b border-brand-gray-200 dark:border-brand-gray-700">
+          <div className="relative group">
             <div className="w-24 h-24 rounded-lg bg-brand-gray-100 dark:bg-brand-gray-700 flex items-center justify-center overflow-hidden border-2 border-brand-gray-200 dark:border-brand-gray-600">
-                {formData.logoUrl ? (
-                    <img src={formData.logoUrl} alt="Logo da Arena" className="w-full h-full object-cover" />
+                {isUploading ? (
+                    <Loader2 className="w-10 h-10 text-brand-gray-400 animate-spin" />
+                ) : formData.logo_url ? (
+                    <img src={formData.logo_url} alt="Logo da Arena" className="w-full h-full object-cover" />
                 ) : (
                     <ImageIcon className="w-10 h-10 text-brand-gray-400" />
                 )}
             </div>
-            <div className="flex flex-col gap-2">
-                <Button type="button" onClick={handleLogoChange}>Alterar Logo</Button>
-                {formData.logoUrl && <Button type="button" variant="outline" size="sm" onClick={removeLogo}>Remover</Button>}
+            <div className="absolute inset-0 bg-black/50 rounded-lg flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <Button type="button" size="sm" onClick={() => logoInputRef.current?.click()} className="mb-1">Alterar</Button>
+                {formData.logo_url && <Button type="button" variant="ghost" size="sm" onClick={removeLogo} className="!text-white hover:!bg-white/10"><Trash2 className="h-4 w-4" /></Button>}
             </div>
+            <input
+              type="file"
+              ref={logoInputRef}
+              className="hidden"
+              accept="image/png, image/jpeg, image/webp"
+              onChange={handleLogoUpload}
+              disabled={isUploading}
+            />
+          </div>
+          <div className="flex-1 w-full text-center sm:text-left">
+            <Input 
+              label="Nome da Arena"
+              name="name" 
+              value={formData.name || ''}
+              onChange={handleChange}
+              placeholder="Arena Beira Rio" 
+              className="text-xl font-bold !p-0 !border-0 !bg-transparent !shadow-none focus:!ring-0 dark:!text-white"
+            />
+            <div className="relative mt-1">
+              <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
+                  <span className="text-brand-gray-500 sm:text-sm">matchplay.com/</span>
+              </div>
+              <input
+                  name="slug"
+                  value={formData.slug || ''}
+                  onChange={handleChange}
+                  className="w-full form-input rounded-md border-brand-gray-300 dark:border-brand-gray-600 bg-white dark:bg-brand-gray-800 text-brand-gray-900 dark:text-white placeholder-brand-gray-400 dark:placeholder-brand-gray-500 focus:border-brand-blue-500 focus:ring-brand-blue-500 shadow-sm pl-[125px]"
+                  placeholder="arena-beira-rio"
+              />
+            </div>
+          </div>
         </div>
-      </Section>
-
-      <Section title="Dados da Empresa" icon={Building}>
+        
+        <h4 className="text-md font-semibold text-brand-gray-800 dark:text-white pt-4">Dados de Contato e Fiscais</h4>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <Input 
-            label="Nome da Arena" 
-            name="arenaName" 
-            value={formData.arenaName}
-            onChange={handleChange}
-            placeholder="Arena Beira Rio" 
-            icon={<Building className="h-4 w-4 text-brand-gray-400" />} 
-          />
-           <div>
-              <label className="block text-sm font-medium text-brand-gray-700 dark:text-brand-gray-300">Apelido (URL)</label>
-              <div className="relative mt-1">
-                  <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                      <span className="text-brand-gray-500 sm:text-sm">matchplay.com/</span>
-                  </div>
-                  <input
-                      name="arenaSlug"
-                      value={formData.arenaSlug}
-                      onChange={handleChange}
-                      className="w-full form-input rounded-md border-brand-gray-300 dark:border-brand-gray-600 bg-white dark:bg-brand-gray-800 text-brand-gray-900 dark:text-white placeholder-brand-gray-400 dark:placeholder-brand-gray-500 focus:border-brand-blue-500 focus:ring-brand-blue-500 shadow-sm pl-[125px]"
-                      placeholder="arena-beira-rio"
-                  />
-              </div>
-          </div>
-          <Input 
             label="CNPJ / CPF" 
-            name="cnpjCpf" 
-            value={formData.cnpjCpf}
+            name="cnpj_cpf" 
+            value={formData.cnpj_cpf || ''}
             onChange={handleChange}
             placeholder="00.000.000/0001-00" 
             icon={<Hash className="h-4 w-4 text-brand-gray-400" />} 
           />
           <Input 
             label="Nome do Responsável" 
-            name="responsibleName" 
-            value={formData.responsibleName} 
+            name="responsible_name" 
+            value={formData.responsible_name || ''} 
             onChange={handleChange} 
             placeholder="Nome completo" 
             icon={<User className="h-4 w-4 text-brand-gray-400" />} 
           />
           <Input 
             label="Telefone de Contato" 
-            name="contactPhone" 
-            value={formData.contactPhone}
+            name="contact_phone" 
+            value={formData.contact_phone || ''}
             onChange={handleChange}
             placeholder="(00) 90000-0000" 
             icon={<Phone className="h-4 w-4 text-brand-gray-400" />} 
           />
           <Input 
             label="E-mail Público" 
-            name="publicEmail" 
+            name="public_email" 
             type="email" 
-            value={formData.publicEmail} 
+            value={formData.public_email || ''} 
             onChange={handleChange} 
             placeholder="contato@suaarena.com" 
             icon={<Mail className="h-4 w-4 text-brand-gray-400" />} 
@@ -197,7 +264,7 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
             <Input 
               label="CEP" 
               name="cep" 
-              value={formData.cep}
+              value={formData.cep || ''}
               onChange={handleChange}
               onBlur={handleCepBlur}
               placeholder="00000-000" 
@@ -209,7 +276,7 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
           <FormSelect 
             label="Estado" 
             name="state" 
-            value={formData.state} 
+            value={formData.state || ''} 
             onChange={handleChange}
             disabled={states.length === 0}
           >
@@ -221,7 +288,7 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
             <FormSelect 
               label="Cidade" 
               name="city" 
-              value={formData.city} 
+              value={formData.city || ''} 
               onChange={handleChange}
               disabled={!formData.state || isFetchingCities || cities.length === 0}
             >
@@ -233,15 +300,15 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6">
           <div className="md:col-span-2">
-            <Input label="Endereço" name="address" value={formData.address} onChange={handleChange} placeholder="Rua, Avenida..." />
+            <Input label="Endereço" name="address" value={formData.address || ''} onChange={handleChange} placeholder="Rua, Avenida..." />
           </div>
-          <Input label="Número" name="number" value={formData.number} onChange={handleChange} placeholder="123" />
+          <Input label="Número" name="number" value={formData.number || ''} onChange={handleChange} placeholder="123" />
         </div>
         <div className="mt-6">
-          <Input label="Bairro" name="neighborhood" value={formData.neighborhood} onChange={handleChange} placeholder="Seu Bairro" />
+          <Input label="Bairro" name="neighborhood" value={formData.neighborhood || ''} onChange={handleChange} placeholder="Seu Bairro" />
         </div>
         <div className="mt-6">
-          <Input label="Link do Google Maps" name="googleMapsLink" value={formData.googleMapsLink} onChange={handleChange} placeholder="https://maps.app.goo.gl/..." icon={<LinkIcon className="h-4 w-4 text-brand-gray-400" />} />
+          <Input label="Link do Google Maps" name="google_maps_link" value={formData.google_maps_link || ''} onChange={handleChange} placeholder="https://maps.app.goo.gl/..." icon={<LinkIcon className="h-4 w-4 text-brand-gray-400" />} />
         </div>
       </Section>
     </div>

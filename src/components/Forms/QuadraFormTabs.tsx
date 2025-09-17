@@ -83,7 +83,7 @@ const QuadraFormTabs: React.FC<QuadraFormTabsProps> = ({ onSubmit, onCancel, ini
 
   const handleComodidadeChange = (key: keyof QuadraComodidades) => setFormData(p => ({ ...p, comodidades: { ...p.comodidades, [key]: !p.comodidades[key] } }));
   const handleDiaChange = (dia: keyof QuadraHorarios['diasFuncionamento']) => setFormData(p => ({ ...p, horarios: { ...p.horarios, diasFuncionamento: { ...p.horarios.diasFuncionamento, [dia]: !p.horarios.diasFuncionamento[dia] } } }));
-  const handlePhotoUpload = () => setFormData(p => ({ ...p, photos: [...p.photos, `https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://placehold.co/400x300/${Math.floor(Math.random()*16777215).toString(16)}/FFFFFF?text=Quadra+${p.photos.length + 1}`] }));
+  const handlePhotoUpload = () => setFormData(p => ({ ...p, photos: [...p.photos, `https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://placehold.co/400x300/${Math.floor(Math.random()*16777215).toString(16)}/FFFFFF?text=Quadra+${p.photos.length + 1}`] }));
   const removePhoto = (index: number) => setFormData(p => ({ ...p, photos: p.photos.filter((_, i) => i !== index) }));
 
   const setMainPhoto = (index: number) => {

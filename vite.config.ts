@@ -16,7 +16,11 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 5000,
-    hmr: false,
+    // A opção hmr: false foi removida.
+    // Adicionado 'watch' com 'usePolling' para maior estabilidade em ambientes containerizados.
+    watch: {
+      usePolling: true,
+    },
     allowedHosts
   }
 });

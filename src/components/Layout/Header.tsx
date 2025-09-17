@@ -1,20 +1,17 @@
 import React from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { LogOut, Sun, Moon, Settings, Bookmark, LayoutGrid, User as UserIcon, LayoutDashboard, Building, Replace } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { 
+  LogOut, Sun, Moon, Settings, Bookmark, LayoutGrid, 
+  User as UserIcon, LayoutDashboard, GraduationCap, Trophy, 
+  PartyPopper, Calendar 
+} from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { motion } from 'framer-motion';
-import Button from '../Forms/Button';
 
 const Header: React.FC = () => {
-  const { user, arena, profile, signOut, selectedArenaContext, switchArenaContext } = useAuth();
+  const { user, arena, profile, signOut } = useAuth();
   const { theme, toggleTheme } = useTheme();
-  const navigate = useNavigate();
-
-  const handleSwitchArena = () => {
-    switchArenaContext(null);
-    navigate('/dashboard');
-  }
 
   return (
     <header className="bg-white dark:bg-brand-gray-800 shadow-sm border-b border-brand-gray-200 dark:border-brand-gray-700 sticky top-0 z-40">
@@ -22,7 +19,7 @@ const Header: React.FC = () => {
         <div className="flex justify-between items-center h-16">
           <div className="flex items-center">
             <Link to="/dashboard" className="flex items-center">
-              <img src="/logo.svg" alt="MatchPlay Logo" className="h-8 w-8"/>
+              <Calendar className="h-8 w-8 text-brand-blue-500" />
               <span className="ml-2 text-xl font-bold text-brand-gray-900 dark:text-white">
                 MatchPlay
               </span>
@@ -32,22 +29,9 @@ const Header: React.FC = () => {
                 {arena.name}
               </span>
             )}
-            {profile?.role === 'cliente' && selectedArenaContext && (
-               <div className="ml-4 text-sm text-brand-gray-500 dark:text-brand-gray-400 hidden sm:flex items-center border-l border-brand-gray-300 dark:border-brand-gray-600 pl-4">
-                <Building className="h-4 w-4 mr-2"/>
-                <span>{selectedArenaContext.name}</span>
-                <Button variant="ghost" size="sm" className="ml-2" onClick={handleSwitchArena} title="Trocar de Arena">
-                  <Replace className="h-4 w-4"/>
-                </Button>
-              </div>
-            )}
           </div>
 
-          <div className="flex items-center space-x-2 md:space-x-4">
-            {user && (
-              <span className="text-sm text-brand-gray-700 dark:text-brand-gray-300 hidden md:block">{profile?.name || user.email}</span>
-            )}
-            
+          <div className="flex items-center space-x-2 md:space-x-3">
             {profile?.role === 'admin_arena' ? (
               <>
                 <Link to="/quadras" title="Minhas Quadras" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
@@ -55,6 +39,15 @@ const Header: React.FC = () => {
                 </Link>
                 <Link to="/reservas" title="Reservas" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
                   <Bookmark className="h-5 w-5" />
+                </Link>
+                <Link to="/alunos" title="Alunos e Turmas" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
+                  <GraduationCap className="h-5 w-5" />
+                </Link>
+                <Link to="/torneios" title="Torneios" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
+                  <Trophy className="h-5 w-5" />
+                </Link>
+                <Link to="/eventos" title="Eventos" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
+                  <PartyPopper className="h-5 w-5" />
                 </Link>
                 <Link to="/settings" title="Configurações" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
                   <Settings className="h-5 w-5" />
@@ -64,9 +57,6 @@ const Header: React.FC = () => {
                <>
                 <Link to="/dashboard" title="Meu Dashboard" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
                   <LayoutDashboard className="h-5 w-5" />
-                </Link>
-                <Link to="/perfil" title="Meu Perfil" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
-                  <UserIcon className="h-5 w-5" />
                 </Link>
                </>
             )}
@@ -79,6 +69,24 @@ const Header: React.FC = () => {
             >
               {theme === 'light' ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
             </motion.button>
+            
+            {user && profile && (
+              <Link 
+                to={profile.role === 'admin_arena' ? '/settings' : '/perfil'} 
+                className="flex items-center gap-2 rounded-full p-1 pr-3 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700 transition-colors"
+                title="Meu Perfil"
+              >
+                <img 
+                  src={profile.avatar_url || `https://avatar.vercel.sh/${user.id}.svg?text=${profile.name?.charAt(0)}`}
+                  alt="Avatar"
+                  className="h-8 w-8 rounded-full object-cover border-2 border-brand-gray-200 dark:border-brand-gray-600"
+                />
+                <span className="font-semibold text-sm hidden sm:block text-brand-gray-800 dark:text-brand-gray-200">
+                  {profile.name}
+                </span>
+              </Link>
+            )}
+
             {user && (
               <button
                 onClick={signOut}

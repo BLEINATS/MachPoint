@@ -1,5 +1,5 @@
 import { ReservationType, Reserva, Quadra } from '../types';
-import { User, GraduationCap, PartyPopper, Ban, Repeat } from 'lucide-react';
+import { User, GraduationCap, PartyPopper, Ban, Repeat, Trophy } from 'lucide-react';
 import { format, parse, isAfter, isBefore, isSameDay, getDay, addDays, startOfDay, addYears, endOfDay } from 'date-fns';
 import { parseDateStringAsLocal } from './dateUtils';
 
@@ -7,7 +7,8 @@ export const getReservationTypeDetails = (type: ReservationType, isRecurring?: b
   const baseDetails = {
     'normal': { label: 'Reserva de Cliente', icon: User, bgColor: 'bg-blue-500', borderColor: 'border-blue-600', publicBgColor: 'bg-blue-100 dark:bg-blue-900/50', publicTextColor: 'text-blue-700 dark:text-blue-400' },
     'aula': { label: 'Aula', icon: GraduationCap, bgColor: 'bg-purple-500', borderColor: 'border-purple-600', publicBgColor: 'bg-purple-100 dark:bg-purple-900/50', publicTextColor: 'text-purple-700 dark:text-purple-400' },
-    'evento': { label: 'Evento', icon: PartyPopper, bgColor: 'bg-orange-500', borderColor: 'border-orange-600', publicBgColor: 'bg-orange-100 dark:bg-orange-900/50', publicTextColor: 'text-orange-700 dark:text-orange-400' },
+    'torneio': { label: 'Torneio', icon: Trophy, bgColor: 'bg-orange-500', borderColor: 'border-orange-600', publicBgColor: 'bg-orange-100 dark:bg-orange-900/50', publicTextColor: 'text-orange-700 dark:text-orange-400' },
+    'evento': { label: 'Evento Privado', icon: PartyPopper, bgColor: 'bg-pink-500', borderColor: 'border-pink-600', publicBgColor: 'bg-pink-100 dark:bg-pink-900/50', publicTextColor: 'text-pink-700 dark:text-pink-400' },
     'bloqueio': { label: 'Bloqueio', icon: Ban, bgColor: 'bg-red-500', borderColor: 'border-red-600', publicBgColor: 'bg-red-100 dark:bg-red-900/50', publicTextColor: 'text-red-700 dark:text-red-400' },
   };
 
