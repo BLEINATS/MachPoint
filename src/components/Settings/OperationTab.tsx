@@ -20,23 +20,90 @@ const OperationTab: React.FC<OperationTabProps> = ({ formData, setFormData }) =>
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
+  // Políticas padrão como modelo
+  const defaultCancellationPolicy = `POLÍTICA DE CANCELAMENTO
+
+• Cancelamento com 24h ou mais de antecedência: reembolso de 100%
+• Cancelamento entre 12h e 24h: reembolso de 50%
+• Cancelamento com menos de 12h: sem reembolso
+• Em caso de chuva forte: reagendamento ou reembolso integral
+• Comprovante médico: reembolso integral independente do prazo
+
+Para cancelar, entre em contato pelo WhatsApp ou telefone informando o número da reserva.`;
+
+  const defaultTermsOfUse = `TERMOS DE USO DA ARENA
+
+EQUIPAMENTOS E VESTUÁRIO:
+• Obrigatório uso de calçado esportivo adequado (chuteira society, tênis)
+• Proibido uso de chuteira com travas de metal
+• Recomendado uso de roupas esportivas
+
+REGRAS GERAIS:
+• Proibido fumar nas dependências da arena
+• Proibido consumo de bebidas alcoólicas
+• Não é permitido levar animais de estimação
+• Música deve estar em volume moderado
+
+RESPONSABILIDADES:
+• A arena não se responsabiliza por objetos perdidos ou furtados
+• Praticantes jogam por sua conta e risco
+• Danos ao patrimônio serão cobrados do responsável pela reserva
+• Tolerância de 15 minutos para chegada
+
+COMPORTAMENTO:
+• Respeite outros usuários e a vizinhança
+• Mantenha a quadra limpa
+• Comunique imediatamente qualquer problema ou acidente`;
+
+  const fillDefaultPolicy = (field: 'cancellation_policy' | 'terms_of_use') => {
+    const defaultValue = field === 'cancellation_policy' ? defaultCancellationPolicy : defaultTermsOfUse;
+    setFormData(prev => ({ ...prev, [field]: defaultValue }));
+  };
+
   return (
     <div className="space-y-8">
       <Section title="Políticas da Arena" icon={FileText}>
-        <FormTextArea
-          label="Política de Cancelamento"
-          name="cancellation_policy"
-          value={formData.cancellation_policy || ''}
-          onChange={handleChange}
-          placeholder="Ex: Cancelamentos com até 24h de antecedência têm reembolso de 100%. Após esse período, não há reembolso."
-        />
-        <FormTextArea
-          label="Termos de Uso"
-          name="terms_of_use"
-          value={formData.terms_of_use || ''}
-          onChange={handleChange}
-          placeholder="Ex: É obrigatório o uso de calçado apropriado. Proibido fumar nas dependências da quadra."
-        />
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-sm font-medium text-brand-gray-700 dark:text-brand-gray-300">Política de Cancelamento</label>
+            <button
+              type="button"
+              onClick={() => fillDefaultPolicy('cancellation_policy')}
+              className="text-xs text-brand-blue-600 dark:text-brand-blue-400 hover:text-brand-blue-800 dark:hover:text-brand-blue-300 font-medium"
+            >
+              Usar modelo padrão
+            </button>
+          </div>
+          <textarea
+            rows={8}
+            name="cancellation_policy"
+            value={formData.cancellation_policy || ''}
+            onChange={handleChange}
+            className="w-full form-textarea rounded-md border-brand-gray-300 dark:border-brand-gray-600 bg-white dark:bg-brand-gray-800 text-brand-gray-900 dark:text-white focus:border-brand-blue-500 focus:ring-brand-blue-500"
+            placeholder="Ex: Cancelamentos com até 24h de antecedência têm reembolso de 100%. Após esse período, não há reembolso."
+          />
+        </div>
+        
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-sm font-medium text-brand-gray-700 dark:text-brand-gray-300">Termos de Uso</label>
+            <button
+              type="button"
+              onClick={() => fillDefaultPolicy('terms_of_use')}
+              className="text-xs text-brand-blue-600 dark:text-brand-blue-400 hover:text-brand-blue-800 dark:hover:text-brand-blue-300 font-medium"
+            >
+              Usar modelo padrão
+            </button>
+          </div>
+          <textarea
+            rows={10}
+            name="terms_of_use"
+            value={formData.terms_of_use || ''}
+            onChange={handleChange}
+            className="w-full form-textarea rounded-md border-brand-gray-300 dark:border-brand-gray-600 bg-white dark:bg-brand-gray-800 text-brand-gray-900 dark:text-white focus:border-brand-blue-500 focus:ring-brand-blue-500"
+            placeholder="Ex: É obrigatório o uso de calçado apropriado. Proibido fumar nas dependências da quadra."
+          />
+        </div>
       </Section>
       
       <div className="rounded-lg p-4 bg-blue-50 dark:bg-brand-blue-500/10 border border-blue-200 dark:border-brand-blue-500/20">
