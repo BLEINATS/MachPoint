@@ -62,6 +62,28 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
     }
   }, [formData.state, states]);
 
+  // Auto-generate Google Maps link when address fields change
+  useEffect(() => {
+    const { address, number, neighborhood, city, state } = formData;
+    if (address && city && state) {
+      const fullAddress = [
+        address,
+        number,
+        neighborhood,
+        city,
+        state,
+        'Brasil'
+      ].filter(Boolean).join(', ');
+      
+      const googleMapsLink = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddress)}`;
+      
+      // Only update if the link has changed
+      if (formData.google_maps_link !== googleMapsLink) {
+        setFormData(prev => ({ ...prev, google_maps_link: googleMapsLink }));
+      }
+    }
+  }, [formData.address, formData.number, formData.neighborhood, formData.city, formData.state]);
+
   const handleCepBlur = async () => {
     if (!formData.cep) return;
     const cep = formData.cep.replace(/\D/g, '');
@@ -131,6 +153,20 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
       }
 
       console.log('🔍 Upload iniciado - User ID:', session.user.id, 'Arena Owner:', arena.owner_id);
+      
+      // TESTE RLS: Verificar se conseguimos acessar nossa própria arena
+      try {
+        const { data: testArena, error: testError } = await supabase
+          .from('arenas')
+          .select('id, owner_id')
+          .eq('id', arena.id)
+          .single();
+        
+        console.log('🔍 Teste arena access:', testArena, testError);
+      } catch (e) {
+        console.log('❌ Erro no teste arena:', e);
+      }
+      
       // Proactively remove old logo if it exists
       if (formData.logo_url) {
         try {
@@ -144,11 +180,18 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
       }
 
       const filePath = `${arena.id}/${Date.now()}-${file.name}`;
+      console.log('🔍 Tentando upload do arquivo:', filePath);
       
       const { error: uploadError } = await supabase.storage
         .from('arena-logos')
         .upload(filePath, file);
-      if (uploadError) throw uploadError;
+      
+      if (uploadError) {
+        console.error('❌ Erro no upload:', uploadError);
+        throw uploadError;
+      }
+      
+      console.log('✅ Upload realizado com sucesso!');
 
       const { data: publicUrlData } = supabase.storage
         .from('arena-logos')
