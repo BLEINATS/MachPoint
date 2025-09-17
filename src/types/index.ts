@@ -24,7 +24,6 @@ export interface Arena {
   cancellation_policy?: string;
   terms_of_use?: string;
   created_at: string;
-  // Deprecated, kept for compatibility with mock data
   main_image?: string;
 }
 
@@ -67,33 +66,43 @@ export interface QuadraHorarios {
     sab: boolean;
     dom: boolean;
   };
-  horarioSemana: string; // ex: "08:00-22:00"
-  horarioFimSemana: string; // ex: "08:00-22:00"
+  horarioSemana: string;
+  horarioFimSemana: string;
+}
+
+export interface PricingRule {
+  id: string;
+  arena_id: string;
+  quadra_id: string;
+  sport_type: string;
+  start_time: string; // 'HH:mm'
+  end_time: string; // 'HH:mm'
+  days_of_week: number[]; // 0=Dom, 1=Seg, ..., 6=Sáb
+  price_single: number;
+  price_monthly: number;
+  is_active: boolean;
+  created_at: string;
 }
 
 export interface Quadra {
   id: string;
   arena_id: string;
-  // Básico
   name: string;
   sport_type: string;
   status: 'ativa' | 'inativa' | 'manutencao';
   capacity: number;
-  price_per_hour: number;
   location: string;
-  // Detalhes
   description: string;
   floor_type: string;
   is_covered: boolean;
   has_lighting: boolean;
   comodidades: QuadraComodidades;
   rules: string;
-  // Horários
   horarios: QuadraHorarios;
-  booking_interval_minutes: number; // Nova propriedade
-  // Fotos
-  photos: string[]; // URLs das fotos
+  booking_interval_minutes: number;
+  photos: string[];
   created_at: string;
+  pricing_rules: PricingRule[];
 }
 
 export type ReservationType = 'normal' | 'aula' | 'torneio' | 'bloqueio' | 'evento';
@@ -102,23 +111,22 @@ export type RecurringType = 'daily' | 'weekly';
 export interface Reserva {
   id: string;
   quadra_id: string;
-  profile_id: string; // ID do perfil do cliente, se cadastrado
+  profile_id: string;
   arena_id: string;
-  date: string; // 'yyyy-MM-dd'
-  start_time: string; // 'HH:mm'
-  end_time: string; // 'HH:mm'
+  date: string;
+  start_time: string;
+  end_time: string;
   status: 'pendente' | 'confirmada' | 'cancelada';
   type: ReservationType;
   created_at: string;
-  // Para reservas manuais
   clientName?: string;
   clientPhone?: string;
-  notes?: string; // Para bloqueios, eventos, etc.
-  // Recorrência
+  notes?: string;
+  total_price?: number;
+  sport_type?: string;
   isRecurring: boolean;
   recurringType?: RecurringType;
   recurringEndDate?: string | null;
-  // Para instâncias virtuais
   masterId?: string;
   turma_id?: string;
   torneio_id?: string;
@@ -128,17 +136,15 @@ export interface Reserva {
 export interface AuthState {
   user: User | null;
   profile: Profile | null;
-  arena: Arena | null; // Para admin
-  // Para clientes
+  arena: Arena | null;
   memberships: ArenaMembership[];
   selectedArenaContext: Arena | null;
   isLoading: boolean;
 }
 
-// MÓDULO DE ALUNOS E TURMAS
 export interface Aluno {
   id: string;
-  profile_id: string; // Link para o perfil de usuário
+  profile_id: string;
   arena_id: string;
   name: string;
   email: string;
@@ -146,9 +152,9 @@ export interface Aluno {
   avatar_url?: string;
   status: 'ativo' | 'inativo' | 'experimental';
   sport: string;
-  plan_name: string; // Ex: "Plano Mensal - 2x"
+  plan_name: string;
   monthly_fee: number;
-  join_date: string; // 'yyyy-MM-dd'
+  join_date: string;
   created_at: string;
 }
 
@@ -159,7 +165,7 @@ export interface Professor {
   email: string;
   phone?: string;
   avatar_url?: string;
-  specialties: string[]; // Ex: ['Beach Tennis', 'Funcional']
+  specialties: string[];
   created_at: string;
 }
 
@@ -170,17 +176,16 @@ export interface Turma {
   professor_id: string;
   quadra_id: string;
   sport: string;
-  daysOfWeek: number[]; // 0-6 (Sun-Sat)
+  daysOfWeek: number[];
   start_time: string;
   end_time: string;
-  start_date: string; // yyyy-MM-dd
-  end_date?: string | null; // yyyy-MM-dd
+  start_date: string;
+  end_date?: string | null;
   capacity: number;
-  student_ids: string[]; // Array de IDs de Alunos
+  student_ids: string[];
   created_at: string;
 }
 
-// MÓDULO DE TORNEIOS
 export type TorneioStatus = 'planejado' | 'inscricoes_abertas' | 'em_andamento' | 'concluido' | 'cancelado';
 export type TorneioTipo = 'torneio' | 'campeonato' | 'clinica' | 'evento_especial';
 
@@ -207,15 +212,14 @@ export interface Torneio {
   name: string;
   type: TorneioTipo;
   status: TorneioStatus;
-  start_date: string; // yyyy-MM-dd
-  end_date: string; // yyyy-MM-dd
+  start_date: string;
+  end_date: string;
   description: string;
   banner_url?: string;
   quadras_ids: string[];
-  start_time: string; // HH:mm
-  end_time: string; // HH:mm
+  start_time: string;
+  end_time: string;
   created_at: string;
-  // Novos campos
   categories: string[];
   max_participants: number;
   registration_fee: number;
@@ -223,7 +227,6 @@ export interface Torneio {
   matches: Match[];
 }
 
-// MÓDULO DE EVENTOS PRIVADOS
 export type EventoStatus = 'orcamento' | 'pendente' | 'confirmado' | 'realizado' | 'concluido' | 'cancelado';
 export type EventoTipoPrivado = 'festa' | 'corporativo' | 'aniversario' | 'show' | 'outro';
 
@@ -233,31 +236,21 @@ export interface Evento {
   name: string;
   type: EventoTipoPrivado;
   status: EventoStatus;
-  
-  // Cliente
   clientName: string;
   clientPhone: string;
   clientEmail: string;
-
-  // Datas e Horários
-  startDate: string; // yyyy-MM-dd
-  endDate: string; // yyyy-MM-dd
-  startTime: string; // HH:mm
-  endTime: string; // HH:mm
+  startDate: string;
+  endDate: string;
+  startTime: string;
+  endTime: string;
   expectedGuests: number;
-
-  // Espaços
   quadras_ids: string[];
-  additionalSpaces: string[]; // e.g., 'churrasqueira', 'salao'
-
-  // Financeiro
+  additionalSpaces: string[];
   services: { name: string; price: number; included: boolean }[];
   totalValue: number;
   depositValue: number;
   paymentConditions: string;
   payments: { id: string; date: string; amount: number; method: string }[];
-  
-  // Outros
   notes: string;
   created_at: string;
   checklist: { id: string; text: string; completed: boolean }[];

@@ -25,9 +25,18 @@ const Header: React.FC = () => {
               </span>
             </Link>
             {profile?.role === 'admin_arena' && arena && (
-              <span className="ml-4 text-sm text-brand-gray-500 dark:text-brand-gray-400 hidden sm:block border-l border-brand-gray-300 dark:border-brand-gray-600 pl-4">
-                {arena.name}
-              </span>
+              <div className="ml-4 pl-4 border-l border-brand-gray-300 dark:border-brand-gray-600 hidden sm:flex items-center gap-3">
+                {arena.logo_url ? (
+                  <img src={arena.logo_url} alt={`Logo de ${arena.name}`} className="h-8 w-8 rounded-full object-cover" />
+                ) : (
+                  <div className="h-8 w-8 rounded-full bg-brand-gray-200 dark:bg-brand-gray-700 flex items-center justify-center text-brand-gray-500 font-bold">
+                    {arena.name ? arena.name.charAt(0).toUpperCase() : '?'}
+                  </div>
+                )}
+                <span className="font-semibold text-sm text-brand-gray-800 dark:text-brand-gray-200">
+                  {arena.name}
+                </span>
+              </div>
             )}
           </div>
 
@@ -70,23 +79,6 @@ const Header: React.FC = () => {
               {theme === 'light' ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
             </motion.button>
             
-            {user && profile && (
-              <Link 
-                to={profile.role === 'admin_arena' ? '/settings' : '/perfil'} 
-                className="flex items-center gap-2 rounded-full p-1 pr-3 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700 transition-colors"
-                title="Meu Perfil"
-              >
-                <img 
-                  src={profile.avatar_url || `https://avatar.vercel.sh/${user.id}.svg?text=${profile.name?.charAt(0)}`}
-                  alt="Avatar"
-                  className="h-8 w-8 rounded-full object-cover border-2 border-brand-gray-200 dark:border-brand-gray-600"
-                />
-                <span className="font-semibold text-sm hidden sm:block text-brand-gray-800 dark:text-brand-gray-200">
-                  {profile.name}
-                </span>
-              </Link>
-            )}
-
             {user && (
               <button
                 onClick={signOut}

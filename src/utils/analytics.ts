@@ -1,5 +1,5 @@
 import { Quadra, Reserva } from '../types';
-import { getDay, parse, addMinutes, isSameDay, startOfMonth, endOfMonth, eachDayOfInterval } from 'date-fns';
+import { getDay, parse, addDays, isSameDay, startOfMonth, endOfMonth, eachDayOfInterval } from 'date-fns';
 import { parseDateStringAsLocal } from './dateUtils';
 
 /**
@@ -114,4 +114,76 @@ export const generateCalendarDays = (
   }
 
   return calendarDays;
+};
+
+/**
+ * Calcula a taxa de ocupação média para um determinado mês.
+ */
+export const calculateMonthlyOccupancy = (
+  month: Date,
+  allReservas: Reserva[],
+  quadras: Quadra[]
+): number => {
+  const activeQuadras = quadras.filter(q => q.status === 'ativa');
+  if (activeQuadras.length === 0) return 0;
+
+  const daysInMonth = eachDayOfInterval({
+    start: startOfMonth(month),
+    end: endOfMonth(month),
+  });
+
+  let totalBookedHours = 0;
+  let totalAvailableHours = 0;
+
+  const calculateHoursInDay = (horarioString: string): number => {
+    if (!horarioString) return 0;
+    let dailyHours = 0;
+    const ranges = horarioString.split(',');
+    for (const range of ranges) {
+        const [startStr, endStr] = range.trim().split('-');
+        if (!startStr || !endStr) continue;
+        try {
+            const start = parse(startStr, 'HH:mm', new Date());
+            let end = parse(endStr, 'HH:mm', new Date());
+            if (end <= start) {
+                end = addDays(end, 1);
+            }
+            dailyHours += (end.getTime() - start.getTime()) / (1000 * 60 * 60);
+        } catch (e) { /* ignore parse errors */ }
+    }
+    return dailyHours;
+  };
+
+  for (const day of daysInMonth) {
+    const dayOfWeek = getDay(day);
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
+    for (const quadra of activeQuadras) {
+        const diaStr = (['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'] as const)[dayOfWeek];
+        if (!quadra.horarios.diasFuncionamento[diaStr]) continue;
+
+        const horarioString = isWeekend ? quadra.horarios.horarioFimSemana : quadra.horarios.horarioSemana;
+        totalAvailableHours += calculateHoursInDay(horarioString);
+    }
+  }
+
+  const monthlyBookings = allReservas.filter(r => {
+    const rDate = parseDateStringAsLocal(r.date);
+    return r.status !== 'cancelada' && rDate >= startOfMonth(month) && rDate <= endOfMonth(month);
+  });
+
+  totalBookedHours = monthlyBookings.reduce((sum, r) => {
+    const startTime = parse(r.start_time, 'HH:mm', new Date());
+    const endTime = parse(r.end_time, 'HH:mm', new Date());
+    if (endTime > startTime) {
+        const diffHours = (endTime.getTime() - startTime.getTime()) / (1000 * 60 * 60);
+        return sum + diffHours;
+    }
+    return sum;
+  }, 0);
+
+  if (totalAvailableHours === 0) return 0;
+
+  const monthlyRate = (totalBookedHours / totalAvailableHours) * 100;
+  return Math.min(monthlyRate, 100);
 };

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Users, GraduationCap, BookOpen, Plus, Search, Edit2, Trash2, BadgeCheck, BadgeX, BadgeHelp, Phone, Calendar } from 'lucide-react';
 import Layout from '../components/Layout/Layout';
 import { useAuth } from '../context/AuthContext';
@@ -26,6 +26,8 @@ const getNextDateForDay = (startDate: Date, dayOfWeek: number): Date => {
 
 const Alunos: React.FC = () => {
   const { arena } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('alunos');
   
   const [alunos, setAlunos] = useState<Aluno[]>([]);
@@ -61,6 +63,14 @@ const Alunos: React.FC = () => {
     window.addEventListener('focus', loadData);
     return () => window.removeEventListener('focus', loadData);
   }, [loadData]);
+  
+  useEffect(() => {
+    if (location.state?.openModal) {
+      setIsAlunoModalOpen(true);
+      // Clear the state to prevent re-opening on refresh
+      navigate(location.pathname, { replace: true });
+    }
+  }, [location.state, navigate]);
 
   const handleSaveAluno = (alunoData: Omit<Aluno, 'id' | 'arena_id' | 'created_at' | 'profile_id'> | Aluno) => {
     if (!arena) return;
@@ -370,7 +380,17 @@ const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void, on
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm text-brand-gray-900 dark:text-white">{aluno.plan_name}</div>
-                    <div className="text-sm text-green-600 dark:text-green-400 font-semibold">{aluno.monthly_fee.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</div>
+                    <div className="text-sm font-semibold">
+                      {aluno.monthly_fee > 0 ? (
+                        <span className="text-green-600 dark:text-green-400">
+                          {aluno.monthly_fee.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                        </span>
+                      ) : (
+                        <span className="text-brand-gray-500 dark:text-brand-gray-400 font-normal">
+                          Paga por uso
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-brand-gray-500 dark:text-brand-gray-400">
                     {format(new Date(aluno.join_date), 'dd/MM/yyyy')}

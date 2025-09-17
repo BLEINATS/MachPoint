@@ -232,7 +232,7 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
       <Section title="Perfil da Arena" icon={Building}>
         <div className="flex flex-col sm:flex-row items-center gap-6 pb-6 border-b border-brand-gray-200 dark:border-brand-gray-700">
           <div className="relative group">
-            <div className="w-24 h-24 rounded-lg bg-brand-gray-100 dark:bg-brand-gray-700 flex items-center justify-center overflow-hidden border-2 border-brand-gray-200 dark:border-brand-gray-600">
+            <div className="w-24 h-24 rounded-full bg-brand-gray-100 dark:bg-brand-gray-700 flex items-center justify-center overflow-hidden border-2 border-brand-gray-200 dark:border-brand-gray-600">
                 {isUploading ? (
                     <Loader2 className="w-10 h-10 text-brand-gray-400 animate-spin" />
                 ) : formData.logo_url ? (
@@ -241,7 +241,7 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
                     <ImageIcon className="w-10 h-10 text-brand-gray-400" />
                 )}
             </div>
-            <div className="absolute inset-0 bg-black/50 rounded-lg flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="absolute inset-0 bg-black/50 rounded-full flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                 <Button type="button" size="sm" onClick={() => logoInputRef.current?.click()} className="mb-1">Alterar</Button>
                 {formData.logo_url && <Button type="button" variant="ghost" size="sm" onClick={removeLogo} className="!text-white hover:!bg-white/10"><Trash2 className="h-4 w-4" /></Button>}
             </div>
