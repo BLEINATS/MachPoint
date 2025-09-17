@@ -116,6 +116,21 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
 
     setIsUploading(true);
     try {
+      // Verificar se a sessão do usuário está válida
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        await supabase.auth.signOut();
+        alert('Sessão expirada, faça login novamente.');
+        return;
+      }
+      
+      // Verificar se o usuário é o dono da arena
+      if (session.user.id !== arena.owner_id) {
+        alert('Você não tem permissão para alterar esta arena.');
+        return;
+      }
+
+      console.log('🔍 Upload iniciado - User ID:', session.user.id, 'Arena Owner:', arena.owner_id);
       // Proactively remove old logo if it exists
       if (formData.logo_url) {
         try {
