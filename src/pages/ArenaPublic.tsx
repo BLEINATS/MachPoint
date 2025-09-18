@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Calendar, Clock, MapPin, DollarSign, User, X, Heart, Repeat, Check } from 'lucide-react';
 import { format, addDays, startOfDay, addMinutes, isSameDay, isPast, parse, getDay, endOfDay } from 'date-fns';
@@ -59,7 +59,6 @@ const ArenaPublic: React.FC = () => {
     if (arena) {
       switchArenaContext(arena);
     }
-    // A lógica de reserva real será tratada pelo clique no slot
     alert(`Agora você está seguindo ${arena?.name}! Escolha um horário para reservar.`);
   };
 
@@ -78,8 +77,7 @@ const ArenaPublic: React.FC = () => {
     if (arena) {
       switchArenaContext(arena);
     }
-    // Lógica para ir para a reserva
-    navigate('/dashboard'); // Simplificado: navega para o dashboard onde o contexto já está setado
+    navigate('/dashboard');
   };
 
   const toggleFavorite = (quadraId: string) => {
@@ -95,22 +93,18 @@ const ArenaPublic: React.FC = () => {
     const slots = [];
     const dayOfWeek = getDay(selectedDate);
     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-    const horarioString = isWeekend ? quadra.horarios.horarioFimSemana : quadra.horarios.horarioSemana;
+    const horario = isWeekend ? quadra.horarios.weekend : quadra.horarios.weekday;
 
-    if (!horarioString) return [];
+    if (!horario || !horario.start || !horario.end) return [];
 
-    const ranges = horarioString.split(',');
-    for (const range of ranges) {
-      const [startStr, endStr] = range.split('-');
-      if (!startStr || !endStr) continue;
-      
-      let currentTime = parse(startStr.trim(), 'HH:mm', selectedDate);
-      const endTime = parse(endStr.trim(), 'HH:mm', selectedDate);
+    let currentTime = parse(horario.start.trim(), 'HH:mm', selectedDate);
+    const endTime = parse(horario.end.trim(), 'HH:mm', selectedDate);
 
-      while (currentTime < endTime) {
+    const interval = quadra.booking_duration_minutes || 60;
+
+    while (currentTime < endTime) {
         slots.push(format(currentTime, 'HH:mm'));
-        currentTime = addMinutes(currentTime, quadra.booking_interval_minutes || 60);
-      }
+        currentTime = addMinutes(currentTime, interval);
     }
     return slots;
   };
@@ -132,6 +126,22 @@ const ArenaPublic: React.FC = () => {
     if (reserva) return { status: 'booked', data: reserva };
 
     return { status: 'available', data: null };
+  };
+
+  const getPriceRange = (quadra: Quadra) => {
+    if (!quadra.pricing_rules || quadra.pricing_rules.length === 0) {
+      return "A definir";
+    }
+    const activePrices = quadra.pricing_rules.filter(r => r.is_active).map(r => r.price_single);
+    if (activePrices.length === 0) return "A definir";
+
+    const minPrice = Math.min(...activePrices);
+    const maxPrice = Math.max(...activePrices);
+
+    if (minPrice === maxPrice) {
+      return minPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+    }
+    return `${minPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} - ${maxPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
   };
 
   if (!arena) return <Layout><div className="text-center p-8">Arena não encontrada</div></Layout>;
@@ -212,8 +222,8 @@ const ArenaPublic: React.FC = () => {
                 <div>
                   <h3 className="text-xl font-semibold">{quadra.name}</h3>
                   <div className="flex items-center justify-between mt-2 text-sm">
-                    <span className="text-blue-100">{quadra.sport_type}</span>
-                    <div className="flex items-center ml-4"><DollarSign className="h-4 w-4 mr-1" /><span className="font-semibold">R$ {quadra.price_per_hour.toFixed(2)}/hora</span></div>
+                    <span className="text-blue-100">{quadra.sports.join(', ')}</span>
+                    <div className="flex items-center ml-4"><DollarSign className="h-4 w-4 mr-1" /><span className="font-semibold">{getPriceRange(quadra)}</span></div>
                   </div>
                 </div>
                 {profile?.role === 'cliente' && (

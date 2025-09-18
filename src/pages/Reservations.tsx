@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LayoutGrid, Calendar, List, Plus, SlidersHorizontal, ArrowLeft } from 'lucide-react';
+import { LayoutGrid, Calendar, List, Plus, SlidersHorizontal, ArrowLeft, Loader2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { supabase } from '../lib/supabaseClient';
@@ -15,8 +15,8 @@ import CalendarView from '../components/Reservations/CalendarView';
 import ReservationModal from '../components/Reservations/ReservationModal';
 import ReservationLegend from '../components/Reservations/ReservationLegend';
 import FilterPanel from '../components/Reservations/FilterPanel';
-import { startOfDay, format, startOfMonth, endOfMonth, isBefore, parse } from 'date-fns';
-import { expandRecurringReservations, hasTimeConflict } from '../utils/reservationUtils';
+import { startOfDay, format, startOfMonth, endOfMonth, isBefore, parse, addYears } from 'date-fns';
+import { expandRecurringReservations } from '../utils/reservationUtils';
 import { parseDateStringAsLocal } from '../utils/dateUtils';
 
 type ViewMode = 'agenda' | 'calendar' | 'list';
@@ -96,15 +96,33 @@ const Reservations: React.FC = () => {
   }, [location.state, navigate]);
 
   const displayedReservations = useMemo(() => {
-    const viewStartDate = startOfMonth(selectedDate);
-    const viewEndDate = endOfMonth(selectedDate);
-    let allExpanded = expandRecurringReservations(reservas, viewStartDate, viewEndDate, quadras);
-    if (filters.quadraId !== 'all') allExpanded = allExpanded.filter(r => r.quadra_id === filters.quadraId);
-    if (filters.status !== 'all') allExpanded = allExpanded.filter(r => r.status === filters.status);
-    if (filters.type !== 'all') allExpanded = allExpanded.filter(r => r.type === filters.type);
-    if (filters.clientName.trim() !== '') allExpanded = allExpanded.filter(r => r.clientName?.toLowerCase().includes(filters.clientName.trim().toLowerCase()));
+    let allExpanded;
+
+    if (viewMode === 'list') {
+      const viewStartDate = new Date(2020, 0, 1);
+      const viewEndDate = addYears(new Date(), 5);
+      allExpanded = expandRecurringReservations(reservas, viewStartDate, viewEndDate, quadras);
+    } else {
+      const viewStartDate = startOfMonth(selectedDate);
+      const viewEndDate = endOfMonth(selectedDate);
+      allExpanded = expandRecurringReservations(reservas, viewStartDate, viewEndDate, quadras);
+    }
+
+    if (filters.quadraId !== 'all') {
+      allExpanded = allExpanded.filter(r => r.quadra_id === filters.quadraId);
+    }
+    if (filters.status !== 'all') {
+      allExpanded = allExpanded.filter(r => r.status === filters.status);
+    }
+    if (filters.type !== 'all') {
+      allExpanded = allExpanded.filter(r => r.type === filters.type);
+    }
+    if (filters.clientName.trim() !== '') {
+      allExpanded = allExpanded.filter(r => r.clientName?.toLowerCase().includes(filters.clientName.trim().toLowerCase()));
+    }
+    
     return allExpanded;
-  }, [reservas, selectedDate, quadras, filters]);
+  }, [reservas, selectedDate, quadras, filters, viewMode]);
 
   const filteredQuadras = useMemo(() => {
     if (filters.quadraId === 'all') return quadras;
@@ -118,22 +136,59 @@ const Reservations: React.FC = () => {
     setIsFilterPanelOpen(false);
   };
 
-  const handleSaveReservation = async (reserva: Omit<Reserva, 'id' | 'created_at'> | Reserva) => {
+  const handleSaveReservation = async (reservaData: Omit<Reserva, 'id' | 'created_at'> | Reserva) => {
     if (!arena) return;
-    const isEditing = 'id' in reserva;
-    const startTime = parse(reserva.start_time, 'HH:mm', new Date());
-    const endTime = parse(reserva.end_time, 'HH:mm', new Date());
-    if (isBefore(endTime, startTime) || startTime.getTime() === endTime.getTime()) {
-      addToast({ message: "O horário de fim não pode ser anterior ou igual ao horário de início.", type: 'error' });
-      return;
-    }
-    const { error } = await supabase.from('reservas').upsert({ ...reserva, arena_id: arena.id });
-    if (error) {
-      addToast({ message: `Erro ao salvar reserva: ${error.message}`, type: 'error' });
-    } else {
+    const isEditing = 'id' in reservaData;
+  
+    try {
+      const startTime = parse(reservaData.start_time, 'HH:mm', new Date());
+      const endTime = parse(reservaData.end_time, 'HH:mm', new Date());
+      if (isBefore(endTime, startTime) || startTime.getTime() === endTime.getTime()) {
+        addToast({ message: "O horário de fim não pode ser anterior ou igual ao horário de início.", type: 'error' });
+        return;
+      }
+  
+      let finalReservaData = { ...reservaData, arena_id: arena.id };
+  
+      if (!finalReservaData.profile_id && finalReservaData.clientName) {
+        const { data: existingAlunos, error: findError } = await supabase
+          .from('alunos')
+          .select('id')
+          .eq('arena_id', arena.id)
+          .eq('name', finalReservaData.clientName)
+          .limit(1);
+  
+        if (findError) throw findError;
+  
+        if (!existingAlunos || existingAlunos.length === 0) {
+          const { error: createError } = await supabase
+            .from('alunos')
+            .insert({
+              arena_id: arena.id,
+              name: finalReservaData.clientName,
+              phone: finalReservaData.clientPhone,
+              status: 'ativo',
+              join_date: new Date().toISOString().split('T')[0],
+              plan_name: 'Avulso',
+              monthly_fee: 0,
+            });
+          if (createError) throw createError;
+        }
+      }
+  
+      if (!finalReservaData.profile_id) {
+        (finalReservaData as Partial<Reserva>).profile_id = undefined;
+      }
+  
+      const { error } = await supabase.from('reservas').upsert(finalReservaData);
+      if (error) throw error;
+  
       addToast({ message: `Reserva ${isEditing ? 'atualizada' : 'criada'} com sucesso!`, type: 'success' });
       closeModal();
       await loadData();
+  
+    } catch (error: any) {
+      addToast({ message: `Erro ao salvar reserva: ${error.message}`, type: 'error' });
     }
   };
 
@@ -217,7 +272,7 @@ const Reservations: React.FC = () => {
         <ReservationLegend />
         <AnimatePresence mode="wait">
           <motion.div key={viewMode + filters.quadraId} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.3 }}>
-            {isLoading ? <div className="text-center py-16"><div className="w-8 h-8 border-4 border-brand-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div></div> : (() => {
+            {isLoading ? <div className="text-center py-16"><Loader2 className="w-8 h-8 border-4 border-brand-blue-500 border-t-transparent rounded-full animate-spin mx-auto" /></div> : (() => {
               switch (viewMode) {
                 case 'agenda': return <AgendaView quadras={filteredQuadras} reservas={displayedReservations} selectedDate={selectedDate} onSlotClick={openNewReservationModal} onReservationClick={openEditReservationModal} />;
                 case 'calendar': return <CalendarView quadras={quadras} reservas={displayedReservations} onReservationClick={openEditReservationModal} selectedDate={selectedDate} onDateChange={setSelectedDate} onDayDoubleClick={openNewReservationOnDay} onSlotClick={openNewReservationOnDay} />;

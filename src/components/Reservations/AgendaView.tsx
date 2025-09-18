@@ -1,6 +1,6 @@
 import React, { useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { format, parse, isSameDay } from 'date-fns';
+import { format, isSameDay } from 'date-fns';
 import { Quadra, Reserva } from '../../types';
 import { getReservationTypeDetails } from '../../utils/reservationUtils';
 import { Repeat, Plus } from 'lucide-react';
@@ -37,9 +37,7 @@ const AgendaView: React.FC<AgendaViewProps> = ({ quadras, reservas, selectedDate
   return (
     <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg border border-brand-gray-200 dark:border-brand-gray-700 overflow-hidden">
       <div ref={containerRef} className="max-h-[70vh] overflow-auto relative">
-        {/* Camada de Fundo: Grade e Células Clicáveis */}
         <div className="grid" style={{ gridTemplateColumns: `60px repeat(${quadras.length}, minmax(150px, 1fr))` }}>
-          {/* Header Fixo */}
           <div className="sticky top-0 z-20 bg-brand-gray-50 dark:bg-brand-gray-700 p-2 border-b border-r border-brand-gray-200 dark:border-brand-gray-600"></div>
           {quadras.map((quadra) => (
             <div key={`${quadra.id}-header`} className="sticky top-0 z-20 bg-brand-gray-50 dark:bg-brand-gray-700 p-3 text-center border-b border-r border-brand-gray-200 dark:border-brand-gray-600">
@@ -47,7 +45,6 @@ const AgendaView: React.FC<AgendaViewProps> = ({ quadras, reservas, selectedDate
             </div>
           ))}
 
-          {/* Coluna de Horários */}
           <div className="col-start-1 col-end-2 row-start-2">
             {timeSlots.map(time => (
               <div key={time} data-time-label={time} className="h-12 flex items-center justify-center border-r border-b border-brand-gray-200 dark:border-brand-gray-700">
@@ -56,7 +53,6 @@ const AgendaView: React.FC<AgendaViewProps> = ({ quadras, reservas, selectedDate
             ))}
           </div>
 
-          {/* Colunas das Quadras com Células Vazias Clicáveis */}
           {quadras.map((quadra, quadraIndex) => (
             <div key={`${quadra.id}-slots`} style={{ gridColumnStart: quadraIndex + 2, gridRowStart: 2 }}>
               {timeSlots.map(time => (
@@ -72,26 +68,26 @@ const AgendaView: React.FC<AgendaViewProps> = ({ quadras, reservas, selectedDate
           ))}
         </div>
 
-        {/* Camada de Overlay: Blocos de Reserva */}
         <div 
           className="absolute top-[49px] left-0 w-full h-full grid" 
           style={{ gridTemplateColumns: `60px repeat(${quadras.length}, minmax(150px, 1fr))`, pointerEvents: 'none' }}
         >
-          {/* Coluna vazia para alinhar com os horários */}
           <div /> 
 
-          {/* Colunas para renderizar os blocos */}
           {quadras.map((quadra, quadraIndex) => (
             <div key={`${quadra.id}-reservations`} className="relative" style={{ gridColumnStart: quadraIndex + 2 }}>
               {reservationsForDay
                 .filter(r => r.quadra_id === quadra.id)
                 .map(reservation => {
-                  const startTime = parse(reservation.start_time, 'HH:mm', new Date());
-                  const endTime = parse(reservation.end_time, 'HH:mm', new Date());
+                  const [startHours, startMins] = reservation.start_time.split(':').map(Number);
+                  const [endHours, endMins] = reservation.end_time.split(':').map(Number);
+
+                  let startMinutes = startHours * 60 + startMins;
+                  let endMinutes = endHours * 60 + endMins;
                   
-                  let startMinutes = startTime.getHours() * 60 + startTime.getMinutes();
-                  let endMinutes = endTime.getHours() * 60 + endTime.getMinutes();
-                  if (endMinutes <= startMinutes) endMinutes += 24 * 60;
+                  if (endMinutes <= startMinutes) {
+                    endMinutes += 24 * 60;
+                  }
                   
                   const topOffsetMinutes = startMinutes - (6 * 60);
                   const durationMinutes = endMinutes - startMinutes;
@@ -112,7 +108,7 @@ const AgendaView: React.FC<AgendaViewProps> = ({ quadras, reservas, selectedDate
                       style={{
                           top: `${top}rem`,
                           height: `calc(${height}rem - 4px)`,
-                          pointerEvents: 'auto', // Re-abilita eventos de clique para este bloco
+                          pointerEvents: 'auto',
                       }}
                       initial={{ opacity: 0, scale: 0.9 }}
                       animate={{ opacity: 1, scale: 1 }}
@@ -123,7 +119,7 @@ const AgendaView: React.FC<AgendaViewProps> = ({ quadras, reservas, selectedDate
                         {reservation.isRecurring && <Repeat className="h-3 w-3 mr-1 flex-shrink-0" />}
                         <span className="truncate">{reservation.clientName || 'Cliente'}</span>
                       </p>
-                      <p className="flex-shrink-0">{reservation.start_time} - {reservation.end_time}</p>
+                      <p className="flex-shrink-0">{reservation.start_time.slice(0, 5)} - {reservation.end_time.slice(0, 5)}</p>
                       {reservation.notes && <p className="text-xs opacity-80 mt-1 italic truncate">{reservation.notes}</p>}
                     </motion.div>
                   );

@@ -1,311 +1,345 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, MapPin, DollarSign, BarChart2, Users, Clock } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
-import { useToast } from '../context/ToastContext';
-import { supabase } from '../lib/supabaseClient';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Plus, Loader2, LayoutGrid, Percent } from 'lucide-react';
 import Layout from '../components/Layout/Layout';
 import Button from '../components/Forms/Button';
-import QuadraFormTabs from '../components/Forms/QuadraFormTabs';
 import QuadraCard from '../components/Dashboard/QuadraCard';
-import { Quadra, Reserva, PricingRule } from '../types';
-import { startOfMonth, endOfMonth, getDay, parse, isSameDay, eachDayOfInterval, addDays } from 'date-fns';
-import { expandRecurringReservations } from '../utils/reservationUtils';
-import { parseDateStringAsLocal } from '../utils/dateUtils';
-
-const StatCard: React.FC<{ icon: React.ElementType, label: string, value: string | number, color: string, index: number }> = ({ icon: Icon, label, value, color, index }) => (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: index * 0.05 }}
-      className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-4 border border-brand-gray-200 dark:border-brand-gray-700"
-    >
-      <div className="flex items-start justify-between">
-        <div className="space-y-1">
-          <p className="text-sm font-medium text-brand-gray-600 dark:text-brand-gray-400">{label}</p>
-          <p className="text-2xl font-bold text-brand-gray-900 dark:text-white truncate">{value}</p>
-        </div>
-        <div className="p-2 bg-brand-gray-100 dark:bg-brand-gray-900 rounded-lg">
-          <Icon className={`h-5 w-5 ${color}`} />
-        </div>
-      </div>
-    </motion.div>
-);
+import QuadraFormTabs from '../components/Forms/QuadraFormTabs';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Quadra, PricingRule } from '../types';
+import { useAuth } from '../context/AuthContext';
+import { supabase } from '../lib/supabaseClient';
+import { useToast } from '../context/ToastContext';
+import { v4 as uuidv4 } from 'uuid';
+import { parse, addDays, eachDayOfInterval, startOfMonth, endOfMonth, getDay } from 'date-fns';
+import DiscountsTab from '../components/Settings/DiscountsTab';
 
 const Quadras: React.FC = () => {
-  const { arena } = useAuth();
+  const { user, arena } = useAuth();
   const { addToast } = useToast();
   const [quadras, setQuadras] = useState<Quadra[]>([]);
-  const [reservas, setReservas] = useState<Reserva[]>([]);
-  const [isFormOpen, setIsFormOpen] = useState(false);
-  const [editingQuadra, setEditingQuadra] = useState<Quadra | null>(null);
-  const [isSaving, setIsSaving] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedQuadra, setSelectedQuadra] = useState<Quadra | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<'quadras' | 'promocoes'>('quadras');
 
-  const loadData = useCallback(async () => {
+  const fetchQuadras = useCallback(async () => {
     if (!arena) return;
     setIsLoading(true);
     try {
-      const { data: quadrasData, error: quadrasError } = await supabase
+      const { data, error } = await supabase
         .from('quadras')
         .select('*, pricing_rules(*)')
-        .eq('arena_id', arena.id);
-      if (quadrasError) throw quadrasError;
+        .eq('arena_id', arena.id)
+        .order('name', { ascending: true });
 
-      setQuadras(quadrasData || []);
-
-      const { data: reservasData, error: reservasError } = await supabase
-        .from('reservas')
-        .select('*')
-        .eq('arena_id', arena.id);
-      if (reservasError) throw reservasError;
-      setReservas(reservasData || []);
-
+      if (error) throw error;
+      setQuadras(data || []);
     } catch (error: any) {
-      addToast({ message: `Erro ao carregar dados: ${error.message}`, type: 'error' });
+      addToast({ message: `Erro ao carregar quadras: ${error.message}`, type: 'error' });
     } finally {
       setIsLoading(false);
     }
   }, [arena, addToast]);
 
   useEffect(() => {
-    loadData();
-  }, [loadData]);
+    fetchQuadras();
+  }, [fetchQuadras]);
 
-  const analyticsData = useMemo(() => {
-    const today = new Date();
-    const monthStart = startOfMonth(today);
-    const monthEnd = endOfMonth(today);
+  const handleOpenModal = (quadra: Quadra | null = null) => {
+    setSelectedQuadra(quadra);
+    setIsModalOpen(true);
+  };
 
-    const monthlyBookings = expandRecurringReservations(reservas, monthStart, monthEnd, quadras)
-        .filter(r => r.status !== 'cancelada');
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedQuadra(null);
+  };
+
+  const handleSaveQuadra = async (quadraData: Omit<Quadra, 'id' | 'created_at' | 'arena_id'>, photosToUpload: File[], photosToDelete: string[], pricingRules: PricingRule[]) => {
+    if (!user || !arena) return;
     
-    const todaysBookings = monthlyBookings.filter(r => isSameDay(parseDateStringAsLocal(r.date), today));
+    if (!quadraData.name?.trim()) {
+      addToast({ message: 'O nome da quadra é obrigatório.', type: 'error' });
+      return;
+    }
 
-    const receitaDoDia = todaysBookings.reduce((sum, r) => sum + (r.total_price || 0), 0);
-
-    const hourCounts: { [key: string]: number } = monthlyBookings.reduce((acc, r) => {
-        const hour = r.start_time.split(':')[0];
-        acc[hour] = (acc[hour] || 0) + 1;
-        return acc;
-    }, {});
-    const horarioPico = Object.keys(hourCounts).reduce((a, b) => (hourCounts[a] > hourCounts[b] ? a : b), 'N/A');
-
-    const revenueByQuadraMonth: { [key: string]: number } = monthlyBookings.reduce((acc, r) => {
-        acc[r.quadra_id] = (acc[r.quadra_id] || 0) + (r.total_price || 0);
-        return acc;
-    }, {});
-    const topQuadraId = Object.keys(revenueByQuadraMonth).reduce((a, b) => (revenueByQuadraMonth[a] > revenueByQuadraMonth[b] ? a : b), '');
-    const quadraMaisRentavel = quadras.find(q => q.id === topQuadraId)?.name || 'N/A';
-
-    const calculateEstimatedMonthlyRevenue = (quadra: Quadra, occupancyRate: number): number => {
-      if (quadra.status !== 'ativa' || !quadra.pricing_rules || quadra.pricing_rules.length === 0) return 0;
-      const activeRules = quadra.pricing_rules.filter(r => r.is_active);
-      if (activeRules.length === 0) return 0;
-
-      const avgPrice = activeRules.reduce((sum, rule) => sum + rule.price_single, 0) / activeRules.length;
-      
-      const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd });
-      let totalAvailableHours = 0;
-      
-      const calculateHoursInDay = (horarioString: string): number => {
-          if (!horarioString) return 0;
-          let dailyHours = 0;
-          const ranges = horarioString.split(',');
-          for (const range of ranges) {
-              const [startStr, endStr] = range.trim().split('-');
-              if (!startStr || !endStr) continue;
-              try {
-                  const start = parse(startStr, 'HH:mm', new Date());
-                  let end = parse(endStr, 'HH:mm', new Date());
-                  if (end <= start) end = addDays(end, 1);
-                  dailyHours += (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-              } catch (e) { /* ignore */ }
-          }
-          return dailyHours;
-      };
-      
-      for (const day of daysInMonth) {
-          const dayOfWeek = getDay(day);
-          const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-          const diaStr = (['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'] as const)[dayOfWeek];
-          if (!quadra.horarios.diasFuncionamento[diaStr]) continue;
-          const horarioString = isWeekend ? quadra.horarios.horarioFimSemana : quadra.horarios.horarioSemana;
-          totalAvailableHours += calculateHoursInDay(horarioString);
-      }
-      return totalAvailableHours * (occupancyRate / 100) * avgPrice;
-    };
-
-    const revenueByQuadraMonthlyEstimated: { [key: string]: number } = {};
-    quadras.forEach(quadra => {
-        revenueByQuadraMonthlyEstimated[quadra.id] = calculateEstimatedMonthlyRevenue(quadra, 70);
-    });
-
-    return {
-        receitaDoDia,
-        ocupacaoMedia: "N/A",
-        horarioPico: horarioPico !== 'N/A' ? `${horarioPico}:00` : 'N/A',
-        quadraMaisRentavel,
-        revenueByQuadraMonthlyEstimated,
-    };
-  }, [quadras, reservas]);
-
-  const handleSaveQuadra = async (quadraData: any) => {
-    if (!arena) return;
-    setIsSaving(true);
     try {
-      const { pricing_rules, photos, ...coreQuadraData } = quadraData;
-      const isEditing = !!coreQuadraData.id;
-      
-      // 1. Upsert core quadra data
-      const quadraToSave = { ...coreQuadraData, arena_id: arena.id };
-      if (!isEditing) delete quadraToSave.id;
+      setIsLoading(true);
+      const { id: quadraId, ...quadraPayload } = quadraData;
 
-      const { data: savedQuadra, error: quadraError } = await supabase
-        .from('quadras')
-        .upsert(quadraToSave)
-        .select()
-        .single();
-      if (quadraError) throw quadraError;
-      
-      const quadraId = savedQuadra.id;
+      const uploadedPhotoUrls: string[] = [...(quadraData.photos || [])];
+      for (const photo of photosToUpload) {
+        const cleanFileName = photo.name.replace(/[^a-zA-Z0-9.\-_]/g, '');
+        const fileName = `public/${uuidv4()}-${cleanFileName}`;
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('quadra-photos')
+          .upload(fileName, photo);
 
-      // 2. Photo management
-      const newFiles = photos.filter((p: any) => p instanceof File);
-      const existingUrls = photos.filter((p: any) => typeof p === 'string');
-      const uploadedUrls: string[] = [];
+        if (uploadError) throw uploadError;
+
+        const { data: urlData } = supabase.storage.from('quadra-photos').getPublicUrl(uploadData.path);
+        uploadedPhotoUrls.push(urlData.publicUrl);
+      }
+
+      const photosToRemoveFromStorage = photosToDelete.map(url => url.split('/').pop()!).filter(Boolean);
+      if (photosToRemoveFromStorage.length > 0) {
+        await supabase.storage.from('quadra-photos').remove(photosToRemoveFromStorage);
+      }
       
-      const sanitizeFileName = (fileName: string): string => {
-        return fileName.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9.\-_]/g, '_').replace(/_+/g, '_');
+      const finalPhotoUrls = uploadedPhotoUrls.filter(url => !photosToDelete.includes(url));
+
+      const finalQuadraPayload = {
+        ...quadraPayload,
+        photos: finalPhotoUrls,
+        cover_photo: finalPhotoUrls.includes(quadraData.cover_photo as string) ? quadraData.cover_photo : finalPhotoUrls[0] || null,
+        arena_id: arena.id,
       };
+      
+      delete (finalQuadraPayload as any).pricing_rules;
 
-      for (const file of newFiles) {
-        const sanitizedFileName = sanitizeFileName(file.name);
-        const filePath = `public/${arena.id}/${quadraId}/${Date.now()}-${sanitizedFileName}`;
-        const { error: uploadError } = await supabase.storage.from('quadra-photos').upload(filePath, file);
-        if (uploadError) throw new Error(`Falha no upload da foto: ${uploadError.message}`);
-        const { data: publicUrlData } = supabase.storage.from('quadra-photos').getPublicUrl(filePath);
-        uploadedUrls.push(publicUrlData.publicUrl);
+      let savedQuadra: Quadra;
+      if (quadraId) {
+        const { data, error } = await supabase
+          .from('quadras')
+          .update(finalQuadraPayload)
+          .eq('id', quadraId)
+          .select()
+          .single();
+        if (error) throw error;
+        savedQuadra = data;
+      } else {
+        const { data, error } = await supabase
+          .from('quadras')
+          .insert(finalQuadraPayload)
+          .select()
+          .single();
+        if (error) throw error;
+        savedQuadra = data;
+      }
+
+      const newRules = pricingRules.filter(rule => !rule.id);
+      const updatedRules = pricingRules.filter(rule => rule.id);
+      const initialRuleIds = selectedQuadra?.pricing_rules?.map(r => r.id) || [];
+      const currentRuleIds = updatedRules.map(r => r.id);
+      const deletedRuleIds = initialRuleIds.filter(id => !currentRuleIds.includes(id));
+
+      if (deletedRuleIds.length > 0) {
+          const { error: deleteError } = await supabase.from('pricing_rules').delete().in('id', deletedRuleIds);
+          if (deleteError) throw deleteError;
       }
       
-      const initialUrls = editingQuadra?.photos || [];
-      const urlsToDelete = initialUrls.filter(url => !existingUrls.includes(url));
-      if (urlsToDelete.length > 0) {
-        const pathsToDelete = urlsToDelete.map(url => url.split('/quadra-photos/')[1]).filter(Boolean);
-        if(pathsToDelete.length > 0) await supabase.storage.from('quadra-photos').remove(pathsToDelete);
+      if (newRules.length > 0) {
+        const newRulesPayload = newRules.map(({ client_id, id, ...rest }) => ({
+          ...rest,
+          quadra_id: savedQuadra.id,
+          arena_id: arena.id,
+        }));
+        const { error: insertError } = await supabase.from('pricing_rules').insert(newRulesPayload);
+        if (insertError) throw insertError;
       }
 
-      const finalPhotoUrls = [...existingUrls, ...uploadedUrls];
-      
-      const { error: photoUpdateError } = await supabase.from('quadras').update({ photos: finalPhotoUrls }).eq('id', quadraId);
-      if (photoUpdateError) throw photoUpdateError;
-
-      // 3. Handle pricing rules
-      const originalRules = editingQuadra?.pricing_rules || [];
-      const newRulesData = pricing_rules as PricingRule[];
-
-      const originalRuleIds = originalRules.map(r => r.id);
-      const newRuleIds = newRulesData.map(r => r.id);
-      const ruleIdsToDelete = originalRuleIds.filter(id => !newRuleIds.includes(id) && !id.startsWith('new_'));
-      if (ruleIdsToDelete.length > 0) {
-        const { error } = await supabase.from('pricing_rules').delete().in('id', ruleIdsToDelete);
-        if (error) throw error;
+      if (updatedRules.length > 0) {
+        const updatedRulesPayload = updatedRules.map(({ client_id, ...rest }) => ({
+          ...rest,
+          quadra_id: savedQuadra.id,
+          arena_id: arena.id,
+        }));
+        const { error: updateError } = await supabase.from('pricing_rules').upsert(updatedRulesPayload);
+        if (updateError) throw updateError;
       }
 
-      const rulesToInsert = newRulesData.filter(rule => rule.id.startsWith('new_')).map(({ id, ...rest }) => ({ ...rest, quadra_id: quadraId, arena_id: arena.id }));
-      if (rulesToInsert.length > 0) {
-        const { error } = await supabase.from('pricing_rules').insert(rulesToInsert);
-        if (error) throw error;
-      }
+      addToast({ message: `Quadra ${quadraId ? 'atualizada' : 'criada'} com sucesso!`, type: 'success' });
+      handleCloseModal();
+      fetchQuadras();
 
-      const rulesToUpdate = newRulesData.filter(rule => !rule.id.startsWith('new_')).map(rule => ({ ...rule, quadra_id: quadraId, arena_id: arena.id }));
-      if (rulesToUpdate.length > 0) {
-        const { error } = await supabase.from('pricing_rules').upsert(rulesToUpdate);
-        if (error) throw error;
-      }
-
-      addToast({ message: `Quadra ${isEditing ? 'atualizada' : 'criada'} com sucesso!`, type: 'success' });
-      setIsFormOpen(false);
-      setEditingQuadra(null);
-      await loadData();
     } catch (error: any) {
-      addToast({ message: `Erro ao salvar: ${error.message}`, type: 'error' });
+      console.error("Detailed error:", error);
+      addToast({ message: `Erro ao salvar quadra: ${error.message}`, type: 'error' });
     } finally {
-      setIsSaving(false);
+      setIsLoading(false);
     }
   };
 
-  const handleOpenCreateForm = () => { setEditingQuadra(null); setIsFormOpen(true); };
-  const handleOpenEditForm = (quadra: Quadra) => { setEditingQuadra(quadra); setIsFormOpen(true); };
-  const handleCancelForm = () => { setIsFormOpen(false); setEditingQuadra(null); };
-  
   const handleDeleteQuadra = async (id: string) => {
-    if (window.confirm('Tem certeza que deseja excluir esta quadra? Todas as regras de preço e fotos associadas serão removidas.')) {
+    if (window.confirm('Tem certeza que deseja excluir esta quadra? Esta ação não pode ser desfeita.')) {
       try {
+        setIsLoading(true);
         const { error } = await supabase.from('quadras').delete().eq('id', id);
         if (error) throw error;
         addToast({ message: 'Quadra excluída com sucesso.', type: 'success' });
-        await loadData();
+        fetchQuadras();
       } catch (error: any) {
-        addToast({ message: `Erro ao excluir: ${error.message}`, type: 'error' });
+        addToast({ message: `Erro ao excluir quadra: ${error.message}`, type: 'error' });
+      } finally {
+        setIsLoading(false);
       }
     }
+  };
+
+  const calculateEstimatedRevenue = (quadra: Quadra): number => {
+    if (quadra.status !== 'ativa' || !quadra.pricing_rules || quadra.pricing_rules.length === 0) {
+        return 0;
+    }
+
+    const defaultRule = quadra.pricing_rules.find(r => r.is_default && r.is_active);
+    let representativePrice = 0;
+    if (defaultRule) {
+        representativePrice = defaultRule.price_single;
+    } else {
+        const activePrices = quadra.pricing_rules.filter(r => r.is_active).map(r => r.price_single);
+        if (activePrices.length > 0) {
+            representativePrice = activePrices.reduce((sum, p) => sum + p, 0) / activePrices.length;
+        }
+    }
+
+    if (representativePrice === 0) return 0;
+
+    const calculateHours = (horario?: { start: string; end: string }): number => {
+        if (!horario || !horario.start || !horario.end) return 0;
+        try {
+            const start = parse(horario.start, 'HH:mm', new Date());
+            let end = parse(horario.end, 'HH:mm', new Date());
+            if (end <= start) {
+                end = addDays(end, 1);
+            }
+            return (end.getTime() - start.getTime()) / (1000 * 60 * 60);
+        } catch {
+            return 0;
+        }
+    };
+
+    const weekdayHours = calculateHours(quadra.horarios?.weekday);
+    const saturdayHours = calculateHours(quadra.horarios?.saturday);
+    const sundayHours = calculateHours(quadra.horarios?.sunday);
+
+    const today = new Date();
+    const daysInMonth = eachDayOfInterval({ start: startOfMonth(today), end: endOfMonth(today) });
+
+    let totalMonthlyHours = 0;
+    daysInMonth.forEach(day => {
+        const dayOfWeek = getDay(day);
+        if (dayOfWeek === 0) {
+            totalMonthlyHours += sundayHours;
+        } else if (dayOfWeek === 6) {
+            totalMonthlyHours += saturdayHours;
+        } else {
+            totalMonthlyHours += weekdayHours;
+        }
+    });
+    
+    const OCCUPANCY_RATE = 0.70;
+    return totalMonthlyHours * representativePrice * OCCUPANCY_RATE;
   };
 
   return (
     <Layout>
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <AnimatePresence mode="wait">
-          {isFormOpen ? (
-            <motion.div key="form" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-              <QuadraFormTabs onSubmit={handleSaveQuadra} onCancel={handleCancelForm} initialData={editingQuadra} isSaving={isSaving} />
-            </motion.div>
-          ) : (
-            <motion.div key="list" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-              <div className="flex justify-between items-center mb-8 flex-wrap gap-4">
-                <h1 className="text-3xl font-bold text-brand-gray-900 dark:text-white">Dashboard de Quadras</h1>
-                <Button onClick={handleOpenCreateForm}><Plus className="h-4 w-4 mr-2" /> Nova Quadra</Button>
-              </div>
-
-              {isLoading ? (
-                  <div className="text-center py-16"><div className="w-8 h-8 border-4 border-brand-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div></div>
-              ) : quadras.length === 0 ? (
-                <div className="text-center py-16 bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg border border-brand-gray-200 dark:border-brand-gray-700">
-                  <MapPin className="h-12 w-12 text-brand-gray-400 dark:text-brand-gray-500 mx-auto mb-4" />
-                  <h3 className="text-lg font-medium text-brand-gray-900 dark:text-white mb-2">Nenhuma quadra cadastrada</h3>
-                  <p className="text-brand-gray-600 dark:text-brand-gray-400 mb-6">Comece criando sua primeira quadra para receber reservas.</p>
-                  <Button onClick={handleOpenCreateForm}><Plus className="h-4 w-4 mr-2" /> Criar primeira quadra</Button>
-                </div>
-              ) : (
-                <div className="space-y-12">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                        <StatCard index={0} icon={DollarSign} label="Receita de Hoje" value={analyticsData.receitaDoDia.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} color="text-green-500" />
-                        <StatCard index={1} icon={BarChart2} label="Ocupação (Mês)" value={`${analyticsData.ocupacaoMedia}`} color="text-blue-500" />
-                        <StatCard index={2} icon={Clock} label="Horário de Pico (Mês)" value={analyticsData.horarioPico} color="text-yellow-500" />
-                        <StatCard index={3} icon={Users} label="Quadra Rentável (Mês)" value={analyticsData.quadraMaisRentavel} color="text-purple-500" />
-                    </div>
-                    
-                    <div>
-                        <h2 className="text-2xl font-bold text-brand-gray-900 dark:text-white mb-6">Lista de Quadras</h2>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                            {quadras.map((quadra, index) => (
-                                <QuadraCard 
-                                    key={quadra.id} 
-                                    quadra={quadra} 
-                                    onEdit={() => handleOpenEditForm(quadra)} 
-                                    onDelete={() => handleDeleteQuadra(quadra.id)} 
-                                    index={index}
-                                    monthlyEstimatedRevenue={analyticsData.revenueByQuadraMonthlyEstimated[quadra.id] || 0}
-                                />
-                            ))}
-                        </div>
-                    </div>
-                </div>
-              )}
-            </motion.div>
+      <main className="flex-1 p-4 sm:p-6 bg-brand-gray-50 dark:bg-brand-gray-950">
+        <div className="flex justify-between items-center mb-6">
+          <h1 className="text-2xl font-semibold text-brand-gray-800 dark:text-white">Gerenciamento de Quadras</h1>
+          {activeTab === 'quadras' && (
+            <Button onClick={() => handleOpenModal()}>
+              <Plus className="h-4 w-4 mr-2" />
+              Adicionar Quadra
+            </Button>
           )}
+        </div>
+
+        <div className="mb-8 border-b border-brand-gray-200 dark:border-brand-gray-700">
+          <nav className="-mb-px flex space-x-6" aria-label="Tabs">
+            <button
+              onClick={() => setActiveTab('quadras')}
+              className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center transition-colors ${
+                activeTab === 'quadras'
+                  ? 'border-brand-blue-500 text-brand-blue-600 dark:text-brand-blue-400'
+                  : 'border-transparent text-brand-gray-500 hover:text-brand-gray-700 hover:border-brand-gray-300 dark:text-brand-gray-400 dark:hover:text-brand-gray-200 dark:hover:border-brand-gray-600'
+              }`}
+            >
+              <LayoutGrid className="mr-2 h-5 w-5" />
+              Minhas Quadras
+            </button>
+            <button
+              onClick={() => setActiveTab('promocoes')}
+              className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center transition-colors ${
+                activeTab === 'promocoes'
+                  ? 'border-brand-blue-500 text-brand-blue-600 dark:text-brand-blue-400'
+                  : 'border-transparent text-brand-gray-500 hover:text-brand-gray-700 hover:border-brand-gray-300 dark:text-brand-gray-400 dark:hover:text-brand-gray-200 dark:hover:border-brand-gray-600'
+              }`}
+            >
+              <Percent className="mr-2 h-5 w-5" />
+              Promoções por Duração
+            </button>
+          </nav>
+        </div>
+
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={activeTab}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+          >
+            {activeTab === 'quadras' ? (
+              <>
+                {isLoading && quadras.length === 0 ? (
+                  <div className="flex justify-center items-center h-64">
+                    <Loader2 className="h-8 w-8 animate-spin text-brand-blue-500" />
+                  </div>
+                ) : quadras.length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                    {quadras.map((quadra, index) => {
+                      const revenue = calculateEstimatedRevenue(quadra);
+                      return (
+                        <QuadraCard
+                          key={quadra.id}
+                          index={index}
+                          quadra={quadra}
+                          onEdit={() => handleOpenModal(quadra)}
+                          onDelete={() => handleDeleteQuadra(quadra.id)}
+                          monthlyEstimatedRevenue={revenue}
+                        />
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="text-center py-12 px-6 bg-white dark:bg-brand-gray-900 rounded-lg shadow-sm">
+                    <h3 className="text-lg font-medium text-brand-gray-800 dark:text-white">Nenhuma quadra cadastrada</h3>
+                    <p className="mt-2 text-sm text-brand-gray-500 dark:text-brand-gray-400">Comece adicionando sua primeira quadra para gerenciar reservas e horários.</p>
+                    <Button className="mt-4" onClick={() => handleOpenModal()}>
+                      <Plus className="h-4 w-4 mr-2" />
+                      Adicionar Primeira Quadra
+                    </Button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-6 border border-brand-gray-200 dark:border-brand-gray-700">
+                <DiscountsTab />
+              </div>
+            )}
+          </motion.div>
         </AnimatePresence>
-      </div>
+      </main>
+
+      <AnimatePresence>
+        {isModalOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50" onClick={handleCloseModal}>
+            <motion.div
+              initial={{ opacity: 0, y: 50 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 50 }}
+              className="bg-white dark:bg-brand-gray-900 rounded-lg w-full max-w-4xl shadow-xl flex flex-col max-h-[95vh]"
+              onClick={e => e.stopPropagation()}
+            >
+              <QuadraFormTabs
+                initialData={selectedQuadra}
+                onSave={handleSaveQuadra}
+                onClose={handleCloseModal}
+                addToast={addToast}
+              />
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </Layout>
   );
 };

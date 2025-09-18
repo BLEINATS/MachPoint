@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Users, GraduationCap, BookOpen, Plus, Search, Edit2, Trash2, BadgeCheck, BadgeX, BadgeHelp, Phone, Calendar } from 'lucide-react';
+import { ArrowLeft, Users, GraduationCap, BookOpen, Plus, Search, Edit2, Trash2, BadgeCheck, BadgeX, BadgeHelp, Phone, Calendar, Loader2 } from 'lucide-react';
 import Layout from '../components/Layout/Layout';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
+import { supabase } from '../lib/supabaseClient';
 import { Aluno, Professor, Quadra, Turma, Reserva } from '../types';
 import Button from '../components/Forms/Button';
 import Input from '../components/Forms/Input';
@@ -26,6 +28,7 @@ const getNextDateForDay = (startDate: Date, dayOfWeek: number): Date => {
 
 const Alunos: React.FC = () => {
   const { arena } = useAuth();
+  const { addToast } = useToast();
   const location = useLocation();
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>('alunos');
@@ -35,6 +38,7 @@ const Alunos: React.FC = () => {
   const [turmas, setTurmas] = useState<Turma[]>([]);
   const [quadras, setQuadras] = useState<Quadra[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
 
   const [isAlunoModalOpen, setIsAlunoModalOpen] = useState(false);
   const [editingAluno, setEditingAluno] = useState<Aluno | null>(null);
@@ -45,141 +49,170 @@ const Alunos: React.FC = () => {
   const [isTurmaModalOpen, setIsTurmaModalOpen] = useState(false);
   const [editingTurma, setEditingTurma] = useState<Turma | null>(null);
 
-  const loadData = useCallback(() => {
-    if (arena) {
-      const savedAlunos = localStorage.getItem(`alunos_${arena.id}`);
-      setAlunos(savedAlunos ? JSON.parse(savedAlunos) : []);
-      const savedProfessores = localStorage.getItem(`professores_${arena.id}`);
-      setProfessores(savedProfessores ? JSON.parse(savedProfessores) : []);
-      const savedTurmas = localStorage.getItem(`turmas_${arena.id}`);
-      setTurmas(savedTurmas ? JSON.parse(savedTurmas) : []);
-      const savedQuadras = localStorage.getItem(`quadras_${arena.id}`);
-      setQuadras(savedQuadras ? JSON.parse(savedQuadras) : []);
+  const loadData = useCallback(async () => {
+    if (!arena) return;
+    setIsLoading(true);
+    try {
+      const { data: alunosData, error: alunosError } = await supabase.from('alunos').select('*').eq('arena_id', arena.id);
+      if (alunosError) throw alunosError;
+      setAlunos(alunosData || []);
+
+      const { data: professoresData, error: professoresError } = await supabase.from('professores').select('*').eq('arena_id', arena.id);
+      if (professoresError) throw professoresError;
+      setProfessores(professoresData || []);
+
+      const { data: turmasData, error: turmasError } = await supabase.from('turmas').select('*').eq('arena_id', arena.id);
+      if (turmasError) throw turmasError;
+      setTurmas(turmasData || []);
+      
+      const { data: quadrasData, error: quadrasError } = await supabase.from('quadras').select('*').eq('arena_id', arena.id);
+      if (quadrasError) throw quadrasError;
+      setQuadras(quadrasData || []);
+
+    } catch (error: any) {
+      addToast({ message: `Erro ao carregar dados: ${error.message}`, type: 'error' });
+    } finally {
+      setIsLoading(false);
     }
-  }, [arena]);
+  }, [arena, addToast]);
 
   useEffect(() => {
     loadData();
-    window.addEventListener('focus', loadData);
-    return () => window.removeEventListener('focus', loadData);
   }, [loadData]);
   
   useEffect(() => {
     if (location.state?.openModal) {
       setIsAlunoModalOpen(true);
-      // Clear the state to prevent re-opening on refresh
       navigate(location.pathname, { replace: true });
     }
   }, [location.state, navigate]);
 
-  const handleSaveAluno = (alunoData: Omit<Aluno, 'id' | 'arena_id' | 'created_at' | 'profile_id'> | Aluno) => {
+  const handleSaveAluno = async (alunoData: Omit<Aluno, 'id' | 'arena_id' | 'created_at'> | Aluno) => {
     if (!arena) return;
     const isEditing = 'id' in alunoData;
-    const updatedAlunos = isEditing
-      ? alunos.map(a => a.id === alunoData.id ? alunoData : a)
-      : [...alunos, { ...alunoData, id: `aluno_${Date.now()}`, profile_id: `profile_mock_${Date.now()}`, arena_id: arena.id, created_at: new Date().toISOString() } as Aluno];
-    setAlunos(updatedAlunos);
-    localStorage.setItem(`alunos_${arena.id}`, JSON.stringify(updatedAlunos));
-    setIsAlunoModalOpen(false);
-    setEditingAluno(null);
-  };
-
-  const handleDeleteAluno = (id: string) => {
-    if (window.confirm('Tem certeza que deseja excluir este aluno?')) {
-      const updatedAlunos = alunos.filter(a => a.id !== id);
-      setAlunos(updatedAlunos);
-      if (arena) localStorage.setItem(`alunos_${arena.id}`, JSON.stringify(updatedAlunos));
+    const dataToSave = { ...alunoData, arena_id: arena.id };
+    if (!isEditing) delete (dataToSave as any).id;
+    if (!dataToSave.profile_id) delete (dataToSave as any).profile_id;
+    
+    try {
+        const { error } = await supabase.from('alunos').upsert(dataToSave);
+        if (error) throw error;
+        addToast({ message: `Aluno ${isEditing ? 'atualizado' : 'criado'} com sucesso!`, type: 'success' });
+        await loadData();
+        setIsAlunoModalOpen(false);
+        setEditingAluno(null);
+    } catch (error: any) {
+        addToast({ message: `Erro ao salvar aluno: ${error.message}`, type: 'error' });
     }
   };
 
-  const handleSaveProfessor = (professorData: Omit<Professor, 'id' | 'arena_id' | 'created_at'> | Professor) => {
+  const handleDeleteAluno = async (id: string) => {
+    if (window.confirm('Tem certeza que deseja excluir este aluno?')) {
+        try {
+            const { error } = await supabase.from('alunos').delete().eq('id', id);
+            if (error) throw error;
+            addToast({ message: 'Aluno excluído com sucesso.', type: 'success' });
+            await loadData();
+        } catch (error: any) {
+            addToast({ message: `Erro ao excluir aluno: ${error.message}`, type: 'error' });
+        }
+    }
+  };
+
+  const handleSaveProfessor = async (professorData: Omit<Professor, 'id' | 'arena_id' | 'created_at'> | Professor) => {
     if (!arena) return;
     const isEditing = 'id' in professorData;
-    const updatedProfessores = isEditing
-      ? professores.map(p => p.id === professorData.id ? professorData : p)
-      : [...professores, { ...professorData, id: `prof_${Date.now()}`, arena_id: arena.id, created_at: new Date().toISOString() } as Professor];
-    setProfessores(updatedProfessores);
-    localStorage.setItem(`professores_${arena.id}`, JSON.stringify(updatedProfessores));
-    setIsProfessorModalOpen(false);
-    setEditingProfessor(null);
-  };
-
-  const handleDeleteProfessor = (id: string) => {
-    if (window.confirm('Tem certeza que deseja excluir este professor?')) {
-      const updatedProfessores = professores.filter(p => p.id !== id);
-      setProfessores(updatedProfessores);
-      if (arena) localStorage.setItem(`professores_${arena.id}`, JSON.stringify(updatedProfessores));
+    const dataToSave = { ...professorData, arena_id: arena.id };
+    if (!isEditing) delete (dataToSave as any).id;
+    
+    try {
+        const { error } = await supabase.from('professores').upsert(dataToSave);
+        if (error) throw error;
+        addToast({ message: `Professor ${isEditing ? 'atualizado' : 'criado'} com sucesso!`, type: 'success' });
+        await loadData();
+        setIsProfessorModalOpen(false);
+        setEditingProfessor(null);
+    } catch (error: any) {
+        addToast({ message: `Erro ao salvar professor: ${error.message}`, type: 'error' });
     }
   };
 
-  const handleSaveTurma = (turmaData: Omit<Turma, 'id' | 'arena_id' | 'created_at'> | Turma) => {
+  const handleDeleteProfessor = async (id: string) => {
+    if (window.confirm('Tem certeza que deseja excluir este professor?')) {
+        try {
+            const { error } = await supabase.from('professores').delete().eq('id', id);
+            if (error) throw error;
+            addToast({ message: 'Professor excluído com sucesso.', type: 'success' });
+            await loadData();
+        } catch (error: any) {
+            addToast({ message: `Erro ao excluir professor: ${error.message}`, type: 'error' });
+        }
+    }
+  };
+
+  const handleSaveTurma = async (turmaData: Omit<Turma, 'id' | 'arena_id' | 'created_at'> | Turma) => {
     if (!arena) return;
     const isEditing = 'id' in turmaData;
-    const turmaId = isEditing ? turmaData.id : `turma_${Date.now()}`;
-    const newTurma: Turma = isEditing 
-      ? turmaData as Turma
-      : { ...turmaData, id: turmaId, arena_id: arena.id, created_at: new Date().toISOString() } as Turma;
-
-    const updatedTurmas = isEditing
-      ? turmas.map(t => t.id === newTurma.id ? newTurma : t)
-      : [...turmas, newTurma];
     
-    setTurmas(updatedTurmas);
-    localStorage.setItem(`turmas_${arena.id}`, JSON.stringify(updatedTurmas));
+    try {
+        const turmaToSave = { ...turmaData, arena_id: arena.id };
+        if (!isEditing) delete (turmaToSave as any).id;
+        const { data: savedTurma, error: turmaError } = await supabase.from('turmas').upsert(turmaToSave).select().single();
+        if (turmaError || !savedTurma) throw turmaError || new Error("Falha ao salvar a turma.");
+        
+        const turmaId = savedTurma.id;
 
-    // --- Lógica de criação de reserva ---
-    const savedReservas = localStorage.getItem(`reservas_${arena.id}`);
-    const currentReservas: Reserva[] = savedReservas ? JSON.parse(savedReservas) : [];
-    
-    // Remove old reservations for this turma if editing
-    const otherReservas = currentReservas.filter(r => r.turma_id !== turmaId);
-    
-    const newMasterReservations: Reserva[] = [];
-    const startDate = parseDateStringAsLocal(newTurma.start_date);
+        const { error: deleteError } = await supabase.from('reservas').delete().eq('turma_id', turmaId);
+        if (deleteError) throw deleteError;
 
-    newTurma.daysOfWeek.forEach(day => {
-      const firstOccurrenceDate = getNextDateForDay(startDate, day);
-      const newMasterReserva: Reserva = {
-        id: `reserva_turma_${turmaId}_${day}`,
-        arena_id: arena.id,
-        quadra_id: newTurma.quadra_id,
-        turma_id: turmaId,
-        date: format(firstOccurrenceDate, 'yyyy-MM-dd'),
-        start_time: newTurma.start_time,
-        end_time: newTurma.end_time,
-        type: 'aula',
-        status: 'confirmada',
-        clientName: newTurma.name,
-        isRecurring: true,
-        recurringType: 'weekly',
-        recurringEndDate: newTurma.end_date,
-        profile_id: '', // Not tied to a single client profile
-        created_at: new Date().toISOString(),
-      };
-      newMasterReservations.push(newMasterReserva);
-    });
+        const newMasterReservations: Omit<Reserva, 'id' | 'created_at'>[] = [];
+        const startDate = parseDateStringAsLocal(savedTurma.start_date);
 
-    const finalReservas = [...otherReservas, ...newMasterReservations];
-    localStorage.setItem(`reservas_${arena.id}`, JSON.stringify(finalReservas));
-    // --- Fim da lógica de reserva ---
+        savedTurma.daysOfWeek.forEach(day => {
+            const firstOccurrenceDate = getNextDateForDay(startDate, day);
+            newMasterReservations.push({
+                arena_id: arena.id,
+                quadra_id: savedTurma.quadra_id,
+                turma_id: turmaId,
+                date: format(firstOccurrenceDate, 'yyyy-MM-dd'),
+                start_time: savedTurma.start_time,
+                end_time: savedTurma.end_time,
+                type: 'aula',
+                status: 'confirmada',
+                clientName: savedTurma.name,
+                isRecurring: true,
+                recurringType: 'weekly',
+                recurringEndDate: savedTurma.end_date,
+            });
+        });
 
-    setIsTurmaModalOpen(false);
-    setEditingTurma(null);
+        if (newMasterReservations.length > 0) {
+            const { error: insertError } = await supabase.from('reservas').insert(newMasterReservations);
+            if (insertError) throw insertError;
+        }
+
+        addToast({ message: `Turma ${isEditing ? 'atualizada' : 'criada'} com sucesso!`, type: 'success' });
+        await loadData();
+        setIsTurmaModalOpen(false);
+        setEditingTurma(null);
+
+    } catch (error: any) {
+        addToast({ message: `Erro ao salvar turma: ${error.message}`, type: 'error' });
+    }
   };
 
-  const handleDeleteTurma = (id: string) => {
+  const handleDeleteTurma = async (id: string) => {
     if (!arena || !window.confirm('Tem certeza que deseja excluir esta turma? As reservas recorrentes associadas também serão removidas.')) return;
     
-    const updatedTurmas = turmas.filter(t => t.id !== id);
-    setTurmas(updatedTurmas);
-    localStorage.setItem(`turmas_${arena.id}`, JSON.stringify(updatedTurmas));
-
-    const savedReservas = localStorage.getItem(`reservas_${arena.id}`);
-    const currentReservas: Reserva[] = savedReservas ? JSON.parse(savedReservas) : [];
-    const finalReservas = currentReservas.filter(r => r.turma_id !== id);
-    localStorage.setItem(`reservas_${arena.id}`, JSON.stringify(finalReservas));
+    try {
+        await supabase.from('reservas').delete().eq('turma_id', id);
+        await supabase.from('turmas').delete().eq('id', id);
+        addToast({ message: 'Turma excluída com sucesso.', type: 'success' });
+        await loadData();
+    } catch (error: any) {
+        addToast({ message: `Erro ao excluir turma: ${error.message}`, type: 'error' });
+    }
   };
-
 
   const filteredAlunos = useMemo(() => 
     alunos.filter(a => a.name.toLowerCase().includes(searchTerm.toLowerCase()) || a.email.toLowerCase().includes(searchTerm.toLowerCase())),
@@ -207,6 +240,13 @@ const Alunos: React.FC = () => {
   ];
 
   const renderContent = () => {
+    if (isLoading) {
+        return (
+            <div className="flex justify-center items-center h-64">
+                <Loader2 className="w-8 h-8 text-brand-blue-500 animate-spin" />
+            </div>
+        );
+    }
     switch (activeTab) {
       case 'alunos':
         return <AlunosList alunos={filteredAlunos} onEdit={setEditingAluno} onDelete={handleDeleteAluno} />;

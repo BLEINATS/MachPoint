@@ -122,7 +122,7 @@ const Settings: React.FC = () => {
             </div>
             
             {/* Footer */}
-            {activeTab !== 'plan' && (
+            {(activeTab === 'profile' || activeTab === 'operation') && (
               <div className="mt-8 pt-6 border-t border-brand-gray-200 dark:border-brand-gray-700 flex justify-end">
                 <Button onClick={handleSave} isLoading={isSaving} disabled={isSaving}>
                   <AnimatePresence mode="wait" initial={false}>

@@ -33,21 +33,20 @@ const DayDetailView: React.FC<DayDetailViewProps> = ({ date, reservas, quadras, 
       <h3 className="text-lg font-semibold text-brand-gray-900 dark:text-white mb-1">
         {format(date, "eeee, dd 'de' MMMM", { locale: ptBR })}
       </h3>
-      <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400 mb-6">Horários Vagos do Dia</p>
+      <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400 mb-6">Horários do Dia</p>
 
       <div className="space-y-2 max-h-[60vh] overflow-y-auto pr-2">
         {timeSlots.map((slot, index) => {
           const reserva = getReservationForSlot(slot);
           if (reserva) {
-            // Se já existe uma reserva, e não é o início dela, não renderiza nada para evitar duplicatas
-            if (format(slot, 'HH:mm') !== reserva.start_time) {
+            if (format(slot, 'HH:mm') !== reserva.start_time.slice(0, 5)) {
               return null;
             }
             
             const typeDetails = getReservationTypeDetails(reserva.type);
             const startTime = parse(reserva.start_time, 'HH:mm', date);
             const endTime = parse(reserva.end_time, 'HH:mm', date);
-            const duration = (endTime.getTime() - startTime.getTime()) / (1000 * 60 * 30); // in 30-min blocks
+            const duration = (endTime.getTime() - startTime.getTime()) / (1000 * 60 * 30);
 
             return (
               <div key={reserva.id} className={`p-3 rounded-lg text-white ${typeDetails.bgColor}`} style={{ minHeight: `${duration * 2.5}rem` }}>
@@ -56,7 +55,7 @@ const DayDetailView: React.FC<DayDetailViewProps> = ({ date, reservas, quadras, 
                     <p className="font-bold text-sm">{reserva.clientName || typeDetails.label}</p>
                     <p className="text-xs opacity-90">{getQuadraName(reserva.quadra_id)}</p>
                   </div>
-                  <p className="text-xs font-medium bg-black/20 px-1.5 py-0.5 rounded-full">{reserva.start_time} - {reserva.end_time}</p>
+                  <p className="text-xs font-medium bg-black/20 px-1.5 py-0.5 rounded-full">{reserva.start_time.slice(0, 5)} - {reserva.end_time.slice(0, 5)}</p>
                 </div>
               </div>
             );

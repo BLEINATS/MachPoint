@@ -72,7 +72,6 @@ const CalendarView: React.FC<CalendarViewProps> = ({ reservas, quadras, onReserv
               return `${base} bg-brand-gray-50 dark:bg-brand-gray-900/50 text-brand-gray-400 opacity-50 border-transparent`;
             }
             if (isSelected) {
-              // Changed to orange border without a different background fill, as requested.
               return `${base} bg-white dark:bg-brand-gray-800 border-2 border-orange-500 shadow-lg`;
             }
             if (isToday) {
@@ -84,7 +83,6 @@ const CalendarView: React.FC<CalendarViewProps> = ({ reservas, quadras, onReserv
           const getDayNumberClasses = () => {
             const base = 'font-semibold w-6 h-6 flex items-center justify-center rounded-full transition-colors';
             if (isSelected) {
-              // Changed to orange to match the new border color.
               return `${base} bg-orange-500 text-white`;
             }
             if (isToday) {
@@ -115,7 +113,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ reservas, quadras, onReserv
                       className={`text-xs p-1 rounded truncate cursor-pointer flex items-center ${typeDetails.publicBgColor} ${typeDetails.publicTextColor}`}
                       title={`${r.start_time} - ${r.clientName || typeDetails.label}`}
                     >
-                      <span className="font-bold mr-1">{r.start_time}</span>
+                      <span className="font-bold mr-1">{r.start_time.slice(0, 5)}</span>
                       <span className="truncate flex items-center">
                         {r.clientName || typeDetails.label}
                         {r.isRecurring && <Repeat className="h-3 w-3 ml-1 flex-shrink-0" />}

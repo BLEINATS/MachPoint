@@ -71,6 +71,16 @@ const QuadraCard: React.FC<QuadraCardProps> = ({ quadra, onEdit, onDelete, index
       } 
     });
   };
+  
+  const weekdayHours = quadra.horarios?.weekday
+    ? `${quadra.horarios.weekday.start} - ${quadra.horarios.weekday.end}`
+    : 'N/A';
+  const saturdayHours = quadra.horarios?.saturday
+    ? `${quadra.horarios.saturday.start} - ${quadra.horarios.saturday.end}`
+    : 'N/A';
+  const sundayHours = quadra.horarios?.sunday
+    ? `${quadra.horarios.sunday.start} - ${quadra.horarios.sunday.end}`
+    : 'N/A';
 
   return (
     <motion.div
@@ -107,7 +117,7 @@ const QuadraCard: React.FC<QuadraCardProps> = ({ quadra, onEdit, onDelete, index
         <div className="flex justify-between items-start mb-4">
           <div>
             <h3 className="text-lg font-bold text-brand-gray-900 dark:text-white">{quadra.name}</h3>
-            <p className="text-sm text-brand-gray-600 dark:text-brand-gray-400">{quadra.sport_type}</p>
+            <p className="text-sm text-brand-gray-600 dark:text-brand-gray-400">{quadra.sports && quadra.sports.length > 0 ? quadra.sports.join(', ') : 'Esporte não definido'}</p>
           </div>
           <div className="flex space-x-1">
             <Button variant="ghost" size="sm" onClick={onEdit} className="p-2"><Edit2 className="h-4 w-4" /></Button>
@@ -125,11 +135,12 @@ const QuadraCard: React.FC<QuadraCardProps> = ({ quadra, onEdit, onDelete, index
             </p>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-3 mb-4">
-          <InfoItem icon={Layers} label="Piso" value={quadra.floor_type || 'N/A'} />
-          <InfoItem icon={Users} label="Capacidade" value={`${quadra.capacity} pessoas`} />
-          <InfoItem icon={Clock} label="Horário Semana" value={quadra.horarios.horarioSemana || 'N/A'} />
-          <InfoItem icon={Clock} label="Horário FDS" value={quadra.horarios.horarioFimSemana || 'N/A'} />
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-3 mb-4">
+          <InfoItem icon={Layers} label="Piso" value={quadra.court_type || 'N/A'} />
+          <InfoItem icon={Users} label="Capacidade" value={`${quadra.capacity || 'N/A'} pessoas`} />
+          <InfoItem icon={Clock} label="Seg-Sex" value={weekdayHours} />
+          <InfoItem icon={Clock} label="Sábado" value={saturdayHours} />
+          <InfoItem icon={Clock} label="Domingo" value={sundayHours} />
         </div>
         <div className="mt-auto pt-4 border-t border-brand-gray-200 dark:border-brand-gray-700">
           <div className="flex justify-between items-center">

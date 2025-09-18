@@ -241,8 +241,8 @@ const TodaysAgenda: React.FC<{ reservations: Reserva[], quadras: Quadra[], allRe
         return (
           <div key={r.id} className="flex items-start gap-4 p-3 bg-brand-gray-50 dark:bg-brand-gray-700/50 rounded-lg">
             <div className="flex flex-col items-center justify-center bg-brand-blue-100 dark:bg-brand-blue-900/50 text-brand-blue-600 dark:text-brand-blue-300 rounded-lg p-2 w-20 text-center">
-              <span className="font-bold text-lg">{r.start_time}</span>
-              <span className="text-xs">às {r.end_time}</span>
+              <span className="font-bold text-lg">{r.start_time.slice(0, 5)}</span>
+              <span className="text-xs">às {r.end_time.slice(0, 5)}</span>
             </div>
             <div className="flex-1 min-w-0">
               <p className="font-semibold text-brand-gray-800 dark:text-brand-gray-200 truncate">{r.clientName}</p>
@@ -262,7 +262,7 @@ const TodaysAgenda: React.FC<{ reservations: Reserva[], quadras: Quadra[], allRe
             </div>
              {r.clientPhone && (
                 <a
-                    href={`https://wa.me/55${r.clientPhone.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${r.clientName}! Lembrete da sua reserva na ${arenaName}, quadra ${quadra?.name}, hoje das ${r.start_time} às ${r.end_time}.`)}`}
+                    href={`https://wa.me/55${r.clientPhone.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${r.clientName}! Lembrete da sua reserva na ${arenaName}, quadra ${quadra?.name}, hoje das ${r.start_time.slice(0, 5)} às ${r.end_time.slice(0, 5)}.`)}`}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="p-2 rounded-full text-green-500 bg-green-100 dark:bg-green-900/50 hover:bg-green-200 dark:hover:bg-green-900 self-center"

@@ -30,7 +30,7 @@ const ListView: React.FC<ListViewProps> = ({ reservas, quadras, onReservationCli
     <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg border border-brand-gray-200 dark:border-brand-gray-700 overflow-hidden">
       <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-brand-gray-200 dark:divide-brand-gray-700">
-          <thead className="bg-brand-gray-50 dark:bg-brand-gray-700">
+          <thead className="bg-brand-gray-50 dark:bg-brand-gray-700/50">
             <tr>
               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Cliente / Tipo</th>
               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Data & Hora</th>
@@ -62,7 +62,7 @@ const ListView: React.FC<ListViewProps> = ({ reservas, quadras, onReservationCli
                     </div>
                     <div className="text-sm text-brand-gray-500 dark:text-brand-gray-400 flex items-center">
                       <Clock className="h-4 w-4 mr-2" />
-                      {reserva.start_time} - {reserva.end_time}
+                      {reserva.start_time.slice(0, 5)} - {reserva.end_time.slice(0, 5)}
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-brand-gray-500 dark:text-brand-gray-400">{getQuadraName(reserva.quadra_id)}</td>
@@ -74,6 +74,13 @@ const ListView: React.FC<ListViewProps> = ({ reservas, quadras, onReservationCli
                 </tr>
               )
             })}
+             {sortedReservas.length === 0 && (
+                <tr>
+                    <td colSpan={4} className="px-6 py-8 text-center text-sm text-brand-gray-500">
+                        Nenhuma reserva encontrada para os filtros selecionados.
+                    </td>
+                </tr>
+            )}
           </tbody>
         </table>
       </div>

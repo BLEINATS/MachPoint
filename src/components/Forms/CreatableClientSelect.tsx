@@ -11,7 +11,7 @@ interface ClientValue {
 interface CreatableClientSelectProps {
   alunos: Aluno[];
   value: ClientValue;
-  onChange: (selection: { id: string | null; name: string; phone?: string }) => void;
+  onChange: (selection: { id: string | null; name: string; phone?: string | null }) => void;
   placeholder?: string;
 }
 
@@ -43,7 +43,7 @@ const CreatableClientSelect: React.FC<CreatableClientSelectProps> = ({ alunos, v
   }, []);
 
   const handleSelect = (aluno: Aluno) => {
-    onChange({ id: aluno.profile_id, name: aluno.name, phone: aluno.phone });
+    onChange({ id: aluno.id, name: aluno.name, phone: aluno.phone });
     setIsOpen(false);
     setSearchTerm('');
   };
@@ -109,7 +109,7 @@ const CreatableClientSelect: React.FC<CreatableClientSelectProps> = ({ alunos, v
                   className="flex items-center justify-between p-3 rounded-md cursor-pointer hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700 text-sm"
                 >
                   <span className="font-medium text-brand-gray-800 dark:text-brand-gray-200">{aluno.name}</span>
-                  {value.id === aluno.profile_id && <Check className="h-5 w-5 text-brand-blue-500" />}
+                  {value.id === aluno.id && <Check className="h-5 w-5 text-brand-blue-500" />}
                 </li>
               ))}
               {filteredAlunos.length === 0 && !canCreate && (

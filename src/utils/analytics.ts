@@ -2,49 +2,30 @@ import { Quadra, Reserva } from '../types';
 import { getDay, parse, addDays, isSameDay, startOfMonth, endOfMonth, eachDayOfInterval } from 'date-fns';
 import { parseDateStringAsLocal } from './dateUtils';
 
-/**
- * Calcula o número total de slots de reserva disponíveis para uma quadra em um dia específico.
- */
 export const getAvailableSlotsForDay = (quadra: Quadra, date: Date): number => {
-  if (quadra.status !== 'ativa') return 0;
+  if (quadra.status !== 'ativa' || !quadra.horarios) return 0;
 
-  const dayOfWeek = getDay(date); // 0 = Dom, 1 = Seg, ...
+  const dayOfWeek = getDay(date);
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
   
-  const diasFuncionamento = quadra.horarios.diasFuncionamento;
-  const diaDaSemanaStr = (['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'] as const)[dayOfWeek];
-  if (!diasFuncionamento[diaDaSemanaStr]) {
+  const horario = isWeekend ? quadra.horarios.weekend : quadra.horarios.weekday;
+  if (!horario || !horario.start || !horario.end) return 0;
+
+  try {
+    const startTime = parse(horario.start, 'HH:mm', date);
+    let endTime = parse(horario.end, 'HH:mm', date);
+    if (endTime <= startTime) endTime = addDays(endTime, 1);
+    
+    const intervalMinutes = quadra.booking_duration_minutes || 60;
+    const diffMinutes = (endTime.getTime() - startTime.getTime()) / (1000 * 60);
+
+    return Math.floor(diffMinutes / intervalMinutes);
+  } catch (e) {
+    console.error("Erro ao parsear horário:", horario);
     return 0;
   }
-
-  const horarioString = isWeekend ? quadra.horarios.horarioFimSemana : quadra.horarios.horarioSemana;
-  if (!horarioString) return 0;
-
-  let totalSlots = 0;
-  const ranges = horarioString.split(',');
-  for (const range of ranges) {
-    const [startStr, endStr] = range.trim().split('-');
-    if (!startStr || !endStr) continue;
-
-    try {
-      const startTime = parse(startStr, 'HH:mm', date);
-      const endTime = parse(endStr, 'HH:mm', date);
-      const intervalMinutes = quadra.booking_interval_minutes || 60;
-      
-      if (endTime > startTime) {
-        const diffMinutes = (endTime.getTime() - startTime.getTime()) / (1000 * 60);
-        totalSlots += Math.floor(diffMinutes / intervalMinutes);
-      }
-    } catch (e) {
-      console.error("Erro ao parsear horário:", range);
-    }
-  }
-  return totalSlots;
 };
 
-/**
- * Calcula a taxa de ocupação para um dia específico, considerando um conjunto de quadras.
- */
 export const calculateDailyOccupancy = (
   date: Date,
   allReservas: Reserva[],
@@ -79,9 +60,6 @@ export const calculateDailyOccupancy = (
   return { rate: Math.min(occupancyRate, 100), booked: bookedSlotsForDay, total: totalSlotsForDay };
 };
 
-/**
- * Gera os dados para o calendário de ocupação.
- */
 export const generateCalendarDays = (
   currentMonth: Date,
   allReservas: Reserva[],
@@ -92,16 +70,14 @@ export const generateCalendarDays = (
   const monthEnd = endOfMonth(currentMonth);
   const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd });
 
-  const firstDayOfMonth = getDay(monthStart); // 0 (Sun) - 6 (Sat)
+  const firstDayOfMonth = getDay(monthStart);
   
   const calendarDays = [];
 
-  // Adiciona dias vazios para o início do mês
   for (let i = 0; i < firstDayOfMonth; i++) {
     calendarDays.push({ key: `empty-${i}`, isEmpty: true });
   }
 
-  // Adiciona os dias do mês
   for (const day of daysInMonth) {
     const occupancy = calculateDailyOccupancy(day, allReservas, quadras, selectedQuadraId);
     calendarDays.push({
@@ -116,9 +92,6 @@ export const generateCalendarDays = (
   return calendarDays;
 };
 
-/**
- * Calcula a taxa de ocupação média para um determinado mês.
- */
 export const calculateMonthlyOccupancy = (
   month: Date,
   allReservas: Reserva[],
@@ -135,23 +108,18 @@ export const calculateMonthlyOccupancy = (
   let totalBookedHours = 0;
   let totalAvailableHours = 0;
 
-  const calculateHoursInDay = (horarioString: string): number => {
-    if (!horarioString) return 0;
-    let dailyHours = 0;
-    const ranges = horarioString.split(',');
-    for (const range of ranges) {
-        const [startStr, endStr] = range.trim().split('-');
-        if (!startStr || !endStr) continue;
-        try {
-            const start = parse(startStr, 'HH:mm', new Date());
-            let end = parse(endStr, 'HH:mm', new Date());
-            if (end <= start) {
-                end = addDays(end, 1);
-            }
-            dailyHours += (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-        } catch (e) { /* ignore parse errors */ }
+  const calculateHoursInDay = (horario: { start: string; end: string }): number => {
+    if (!horario || !horario.start || !horario.end) return 0;
+    try {
+        const start = parse(horario.start, 'HH:mm', new Date());
+        let end = parse(horario.end, 'HH:mm', new Date());
+        if (end <= start) {
+            end = addDays(end, 1);
+        }
+        return (end.getTime() - start.getTime()) / (1000 * 60 * 60);
+    } catch (e) {
+        return 0;
     }
-    return dailyHours;
   };
 
   for (const day of daysInMonth) {
@@ -159,11 +127,10 @@ export const calculateMonthlyOccupancy = (
     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
     for (const quadra of activeQuadras) {
-        const diaStr = (['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'] as const)[dayOfWeek];
-        if (!quadra.horarios.diasFuncionamento[diaStr]) continue;
-
-        const horarioString = isWeekend ? quadra.horarios.horarioFimSemana : quadra.horarios.horarioSemana;
-        totalAvailableHours += calculateHoursInDay(horarioString);
+        if (quadra.horarios) {
+            const horario = isWeekend ? quadra.horarios.weekend : quadra.horarios.weekday;
+            totalAvailableHours += calculateHoursInDay(horario);
+        }
     }
   }
 
@@ -174,12 +141,11 @@ export const calculateMonthlyOccupancy = (
 
   totalBookedHours = monthlyBookings.reduce((sum, r) => {
     const startTime = parse(r.start_time, 'HH:mm', new Date());
-    const endTime = parse(r.end_time, 'HH:mm', new Date());
-    if (endTime > startTime) {
-        const diffHours = (endTime.getTime() - startTime.getTime()) / (1000 * 60 * 60);
-        return sum + diffHours;
-    }
-    return sum;
+    let endTime = parse(r.end_time, 'HH:mm', new Date());
+    if (endTime <= startTime) endTime = addDays(endTime, 1);
+    
+    const diffHours = (endTime.getTime() - startTime.getTime()) / (1000 * 60 * 60);
+    return sum + diffHours;
   }, 0);
 
   if (totalAvailableHours === 0) return 0;
