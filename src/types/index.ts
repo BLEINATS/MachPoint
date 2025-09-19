@@ -116,6 +116,7 @@ export interface Aluno {
   join_date: string;
   created_at: string;
   avatar_url?: string;
+  credit_balance?: number;
 }
 
 export interface Professor {
@@ -157,22 +158,35 @@ export interface Reservation {
   turma_id?: string | null;
   torneio_id?: string | null;
   evento_id?: string | null;
-  customer_name: string;
-  customer_phone?: string;
+  clientName: string;
+  clientPhone?: string;
   date: string;
   start_time: string;
   end_time: string;
   status: 'confirmada' | 'pendente' | 'cancelada';
   type: ReservationType;
   total_price?: number;
+  credit_used?: number;
   payment_status?: 'pago' | 'pendente';
   sport_type?: string;
   notes?: string;
-  is_recurring?: boolean;
-  recurring_type?: 'daily' | 'weekly';
-  recurring_end_date?: string | null;
-  masterId?: string; // For virtual instances of recurring reservations
+  isRecurring?: boolean;
+  recurringType?: 'daily' | 'weekly';
+  recurringEndDate?: string | null;
+  masterId?: string;
   created_at: string;
+}
+
+export interface CreditTransaction {
+  id?: string;
+  aluno_id: string;
+  arena_id: string;
+  amount: number;
+  type: 'cancellation_credit' | 'manual_adjustment' | 'reservation_payment' | 'goodwill_credit';
+  description?: string;
+  related_reservation_id?: string;
+  created_by?: string;
+  created_at?: string;
 }
 
 export type TorneioTipo = 'torneio' | 'campeonato' | 'clinica' | 'evento_especial';

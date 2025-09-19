@@ -73,16 +73,18 @@ export const expandRecurringReservations = (
 
     while (isBefore(runningDate, loopEndDate) || isSameDay(runningDate, loopEndDate)) {
       const dayOfWeek = getDay(runningDate);
-      const diaDaSemanaStr = (['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sab'] as const)[dayOfWeek];
 
       let shouldCreateInstance = false;
       if (reserva.recurringType === 'daily') {
-        // For daily recurrence, check if the court is open on this day of the week.
-        if (quadra.horarios.diasFuncionamento[diaDaSemanaStr]) {
+        let horario;
+        if (dayOfWeek === 0) horario = quadra.horarios.sunday;
+        else if (dayOfWeek === 6) horario = quadra.horarios.saturday;
+        else horario = quadra.horarios.weekday;
+        
+        if (horario && horario.start && horario.end) {
           shouldCreateInstance = true;
         }
       } else { // weekly or undefined (defaults to weekly)
-        // For weekly recurrence, check if it's the same day of the week as the master.
         if (dayOfWeek === getDay(masterDate)) {
           shouldCreateInstance = true;
         }
@@ -92,10 +94,8 @@ export const expandRecurringReservations = (
         const isOriginal = isSameDay(runningDate, masterDate);
         displayReservations.push({
           ...reserva,
-          // Create a unique ID for virtual instances, but keep the original ID for the master.
           id: isOriginal ? reserva.id : `${reserva.id}_${format(runningDate, 'yyyy-MM-dd')}`,
           date: format(runningDate, 'yyyy-MM-dd'),
-          // Link virtual instances back to their master reservation.
           masterId: isOriginal ? undefined : reserva.id,
         });
       }

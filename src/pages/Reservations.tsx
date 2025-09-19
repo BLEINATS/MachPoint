@@ -13,6 +13,8 @@ import AgendaView from '../components/Reservations/AgendaView';
 import ListView from '../components/Reservations/ListView';
 import CalendarView from '../components/Reservations/CalendarView';
 import ReservationModal from '../components/Reservations/ReservationModal';
+import CancellationModal from '../components/Reservations/CancellationModal';
+import ManualCancellationModal from '../components/Reservations/ManualCancellationModal';
 import ReservationLegend from '../components/Reservations/ReservationLegend';
 import FilterPanel from '../components/Reservations/FilterPanel';
 import { startOfDay, format, startOfMonth, endOfMonth, isBefore, parse, addYears } from 'date-fns';
@@ -44,6 +46,10 @@ const Reservations: React.FC = () => {
     quadraId: 'all' as 'all' | string,
   });
 
+  const [isCancellationModalOpen, setIsCancellationModalOpen] = useState(false);
+  const [isManualCancelModalOpen, setIsManualCancelModalOpen] = useState(false);
+  const [reservationToCancel, setReservationToCancel] = useState<Reserva | null>(null);
+
   const loadData = useCallback(async () => {
     if (!arena) return;
     setIsLoading(true);
@@ -56,9 +62,13 @@ const Reservations: React.FC = () => {
       if (reservasError) throw reservasError;
       setReservas(reservasData || []);
 
-      const { data: alunosData, error: alunosError } = await supabase.from('alunos').select('*').eq('arena_id', arena.id);
+      const { data: alunosData, error: alunosError } = await supabase
+        .from('alunos')
+        .select('id, arena_id, profile_id, name, email, phone, status, sport, plan_name, monthly_fee, join_date, created_at, avatar_url, credit_balance')
+        .eq('arena_id', arena.id);
       if (alunosError) throw alunosError;
       setAlunos(alunosData || []);
+
     } catch (error: any) {
       addToast({ message: `Erro ao carregar dados: ${error.message}`, type: 'error' });
     } finally {
@@ -147,41 +157,89 @@ const Reservations: React.FC = () => {
         addToast({ message: "O horário de fim não pode ser anterior ou igual ao horário de início.", type: 'error' });
         return;
       }
-  
-      let finalReservaData = { ...reservaData, arena_id: arena.id };
-  
-      if (!finalReservaData.profile_id && finalReservaData.clientName) {
-        const { data: existingAlunos, error: findError } = await supabase
+      
+      let alunoForReservation: { id: string; profile_id: string | null | undefined; } | null = null;
+      const isNewClientEntry = !(reservaData as any).aluno_id && reservaData.clientName;
+
+      if (isNewClientEntry) {
+        const { data: existingAluno, error: findError } = await supabase
           .from('alunos')
-          .select('id')
+          .select('id, profile_id')
           .eq('arena_id', arena.id)
-          .eq('name', finalReservaData.clientName)
-          .limit(1);
-  
-        if (findError) throw findError;
-  
-        if (!existingAlunos || existingAlunos.length === 0) {
-          const { error: createError } = await supabase
-            .from('alunos')
-            .insert({
-              arena_id: arena.id,
-              name: finalReservaData.clientName,
-              phone: finalReservaData.clientPhone,
-              status: 'ativo',
-              join_date: new Date().toISOString().split('T')[0],
-              plan_name: 'Avulso',
-              monthly_fee: 0,
-            });
-          if (createError) throw createError;
+          .or(`name.eq.${reservaData.clientName},phone.eq.${reservaData.clientPhone || 'INVALID_PHONE'}`)
+          .limit(1)
+          .single();
+
+        if (findError && findError.code !== 'PGRST116') throw findError;
+
+        if (existingAluno) {
+          alunoForReservation = existingAluno;
+        } else {
+          const { data: newAlunoData, error: newAlunoError } = await supabase.from('alunos').insert({
+            arena_id: arena.id,
+            name: reservaData.clientName,
+            phone: reservaData.clientPhone || null,
+            email: null,
+            status: 'ativo',
+            plan_name: 'Avulso',
+            join_date: format(new Date(), 'yyyy-MM-dd'),
+          }).select('id, profile_id').single();
+
+          if (newAlunoError) {
+            addToast({ message: `Reserva criada, mas falha ao adicionar '${reservaData.clientName}' à lista de clientes.`, type: 'error'});
+          } else if (newAlunoData) {
+            alunoForReservation = newAlunoData;
+          }
+        }
+      } else if ((reservaData as any).aluno_id) {
+        const selected = alunos.find(a => a.id === (reservaData as any).aluno_id);
+        if (selected) {
+          alunoForReservation = { id: selected.id, profile_id: selected.profile_id };
         }
       }
   
-      if (!finalReservaData.profile_id) {
-        (finalReservaData as Partial<Reserva>).profile_id = undefined;
+      const dataToUpsert: Partial<Reserva> = { 
+        ...reservaData, 
+        arena_id: arena.id,
+        profile_id: alunoForReservation?.profile_id || null,
+      };
+      
+      delete (dataToUpsert as any).originalCreditUsed;
+      delete (dataToUpsert as any).aluno_id;
+        
+      if (!dataToUpsert.profile_id) {
+        delete dataToUpsert.profile_id;
       }
-  
-      const { error } = await supabase.from('reservas').upsert(finalReservaData);
+      if (!isEditing) {
+        delete dataToUpsert.id;
+      }
+      
+      const { data: savedReserva, error } = await supabase.from('reservas').upsert(dataToUpsert).select().single();
       if (error) throw error;
+  
+      if (savedReserva && savedReserva.credit_used && savedReserva.credit_used > 0) {
+        const creditAmountUsed = savedReserva.credit_used;
+        const originalCreditUsed = (reservaData as any).originalCreditUsed || 0;
+        const newlyAppliedCredit = creditAmountUsed - originalCreditUsed;
+        
+        if (newlyAppliedCredit > 0 && alunoForReservation?.id) {
+          const { error: rpcError } = await supabase.rpc('add_credit_to_aluno', {
+            aluno_id_to_update: alunoForReservation.id,
+            arena_id_to_check: arena.id,
+            amount_to_add: -newlyAppliedCredit
+          });
+          if (rpcError) throw rpcError;
+  
+          await supabase.from('credit_transactions').insert({
+            aluno_id: alunoForReservation.id,
+            arena_id: arena.id,
+            amount: -newlyAppliedCredit,
+            type: 'reservation_payment',
+            description: `Pagamento da reserva #${savedReserva.id.substring(0, 8)}`,
+            related_reservation_id: savedReserva.id,
+          });
+        }
+      }
   
       addToast({ message: `Reserva ${isEditing ? 'atualizada' : 'criada'} com sucesso!`, type: 'success' });
       closeModal();
@@ -192,14 +250,105 @@ const Reservations: React.FC = () => {
     }
   };
 
-  const handleCancelReservation = async (reservaId: string) => {
-    const { error } = await supabase.from('reservas').update({ status: 'cancelada' }).eq('id', reservaId);
-    if (error) {
-      addToast({ message: `Erro ao cancelar reserva: ${error.message}`, type: 'error' });
+  const handleCancelReservation = async (reserva: Reserva) => {
+    const masterId = reserva.masterId || reserva.id;
+
+    const { data: masterReserva, error } = await supabase
+      .from('reservas')
+      .select('*')
+      .eq('id', masterId)
+      .single();
+
+    if (error || !masterReserva) {
+      addToast({ message: 'Erro ao encontrar a reserva original para cancelar.', type: 'error' });
+      return;
+    }
+  
+    if (masterReserva.total_price && masterReserva.total_price > 0) {
+      setReservationToCancel(masterReserva);
+      setIsCancellationModalOpen(true);
     } else {
-      addToast({ message: "Reserva cancelada.", type: 'success' });
-      closeModal();
-      await loadData();
+      setReservationToCancel(masterReserva);
+      setIsManualCancelModalOpen(true);
+    }
+    closeModal();
+  };
+
+  const handleConfirmManualCancel = async (reservaId: string) => {
+    try {
+        const { error } = await supabase.from('reservas').update({ status: 'cancelada' }).eq('id', reservaId);
+        if (error) throw error;
+        addToast({ message: 'Reserva cancelada com sucesso!', type: 'success' });
+        await loadData();
+    } catch (error: any) {
+        addToast({ message: `Erro ao cancelar reserva: ${error.message}`, type: 'error' });
+    } finally {
+        setIsManualCancelModalOpen(false);
+        setReservationToCancel(null);
+    }
+  };
+
+  const handleConfirmCancellation = async (reservaId: string, creditAmount: number, reason: string) => {
+    if (!arena) return;
+
+    try {
+        const { data: reserva, error: fetchError } = await supabase
+            .from('reservas')
+            .select('*')
+            .eq('id', reservaId)
+            .single();
+
+        if (fetchError || !reserva) {
+            throw fetchError || new Error('Reserva não encontrada para cancelamento.');
+        }
+
+        await supabase.from('reservas').update({ status: 'cancelada' }).eq('id', reservaId);
+
+        if (creditAmount > 0) {
+            let targetAluno: Aluno | undefined = undefined;
+
+            if (reserva.profile_id) {
+                targetAluno = alunos.find(a => a.profile_id === reserva.profile_id);
+            }
+
+            if (!targetAluno && reserva.clientName) {
+                targetAluno = alunos.find(a => a.name === reserva.clientName);
+            }
+
+            if (targetAluno) {
+                const { error: rpcError } = await supabase.rpc('add_credit_to_aluno', {
+                    aluno_id_to_update: targetAluno.id,
+                    arena_id_to_check: arena.id,
+                    amount_to_add: creditAmount
+                });
+                if (rpcError) throw rpcError;
+                
+                await supabase.from('credit_transactions').insert({
+                    aluno_id: targetAluno.id,
+                    arena_id: arena.id,
+                    amount: creditAmount,
+                    type: 'cancellation_credit',
+                    description: `Crédito (${reason}) da reserva #${reserva.id.substring(0, 8)}`,
+                    related_reservation_id: reserva.id,
+                });
+                
+                addToast({ message: 'Reserva cancelada e crédito aplicado com sucesso!', type: 'success' });
+            } else {
+                addToast({ 
+                    message: `Reserva cancelada. O crédito de ${creditAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} deve ser gerenciado manualmente, pois o cliente não foi encontrado.`, 
+                    type: 'info' 
+                });
+            }
+        } else {
+            addToast({ message: 'Reserva cancelada com sucesso!', type: 'success' });
+        }
+
+        setIsCancellationModalOpen(false);
+        setReservationToCancel(null);
+        await loadData();
+
+    } catch (error: any) {
+        addToast({ message: `Erro ao processar cancelamento: ${error.message}`, type: 'error' });
     }
   };
 
@@ -285,6 +434,32 @@ const Reservations: React.FC = () => {
       </div>
       <AnimatePresence>
         {isModalOpen && <ReservationModal isOpen={isModalOpen} onClose={closeModal} onSave={handleSaveReservation} onCancelReservation={handleCancelReservation} reservation={selectedReservation} newReservationSlot={newReservationSlot} quadras={quadras} alunos={alunos} arenaId={arena?.id || ''} selectedDate={selectedDate} />}
+      </AnimatePresence>
+      <AnimatePresence>
+        {isCancellationModalOpen && (
+            <CancellationModal
+                isOpen={isCancellationModalOpen}
+                onClose={() => {
+                    setIsCancellationModalOpen(false);
+                    setReservationToCancel(null);
+                }}
+                onConfirm={handleConfirmCancellation}
+                reserva={reservationToCancel}
+            />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {isManualCancelModalOpen && (
+            <ManualCancellationModal
+                isOpen={isManualCancelModalOpen}
+                onClose={() => {
+                    setIsManualCancelModalOpen(false);
+                    setReservationToCancel(null);
+                }}
+                onConfirm={() => reservationToCancel && handleConfirmManualCancel(reservationToCancel.id)}
+                reservaName={reservationToCancel?.clientName || 'Reserva'}
+            />
+        )}
       </AnimatePresence>
     </Layout>
   );

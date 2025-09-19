@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Save, User, Mail, Phone, Calendar, Award, Dribbble, DollarSign } from 'lucide-react';
+import { X, Save, User, Mail, Phone, Calendar, Award, Dribbble, DollarSign, Trash2 } from 'lucide-react';
 import { Aluno } from '../../types';
 import Button from '../Forms/Button';
 import Input from '../Forms/Input';
@@ -12,15 +12,17 @@ interface AlunoModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (aluno: Omit<Aluno, 'id' | 'arena_id' | 'created_at'> | Aluno) => void;
+  onDelete: (id: string) => void;
   initialData: Aluno | null;
   availableSports: string[];
   availablePlans: string[];
+  modalType: 'Cliente' | 'Aluno';
 }
 
 const DEFAULT_SPORTS = ['Beach Tennis', 'Futevôlei', 'Futebol Society', 'Vôlei', 'Tênis', 'Padel', 'Funcional'];
 const DEFAULT_PLANS = ['Aula Avulsa', 'Pacote 10 Aulas', 'Plano Mensal - 1x/semana', 'Plano Mensal - 2x/semana', 'Plano Mensal - 3x/semana', 'Plano Mensal - 4x/semana'];
 
-const AlunoModal: React.FC<AlunoModalProps> = ({ isOpen, onClose, onSave, initialData, availableSports, availablePlans }) => {
+const AlunoModal: React.FC<AlunoModalProps> = ({ isOpen, onClose, onSave, onDelete, initialData, availableSports, availablePlans, modalType }) => {
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -48,7 +50,7 @@ const AlunoModal: React.FC<AlunoModalProps> = ({ isOpen, onClose, onSave, initia
     if (initialData) {
       setFormData({
         name: initialData.name,
-        email: initialData.email,
+        email: initialData.email || '',
         phone: initialData.phone || '',
         status: initialData.status,
         sport: initialData.sport || '',
@@ -76,6 +78,12 @@ const AlunoModal: React.FC<AlunoModalProps> = ({ isOpen, onClose, onSave, initia
       onSave(dataToSave);
     }
   };
+  
+  const handleDelete = () => {
+    if (initialData) {
+      onDelete(initialData.id);
+    }
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -85,6 +93,8 @@ const AlunoModal: React.FC<AlunoModalProps> = ({ isOpen, onClose, onSave, initia
     }
     setFormData(prev => ({ ...prev, [name]: finalValue }));
   };
+
+  const modalTitle = isEditing ? `Editar ${modalType}` : `Adicionar Novo ${modalType}`;
 
   return (
     <AnimatePresence>
@@ -99,7 +109,7 @@ const AlunoModal: React.FC<AlunoModalProps> = ({ isOpen, onClose, onSave, initia
           >
             <div className="flex justify-between items-center p-6 border-b border-brand-gray-200 dark:border-brand-gray-700">
               <h3 className="text-xl font-semibold text-brand-gray-900 dark:text-white">
-                {isEditing ? 'Editar Aluno' : 'Adicionar Novo Aluno'}
+                {modalTitle}
               </h3>
               <button onClick={onClose} className="p-1 rounded-full hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
                 <X className="h-5 w-5 text-brand-gray-500" />
@@ -109,7 +119,7 @@ const AlunoModal: React.FC<AlunoModalProps> = ({ isOpen, onClose, onSave, initia
             <div className="p-6 space-y-4 overflow-y-auto">
               <Input label="Nome Completo" name="name" value={formData.name} onChange={handleChange} icon={<User className="h-4 w-4 text-brand-gray-400"/>} required />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Input label="E-mail" name="email" type="email" value={formData.email} onChange={handleChange} icon={<Mail className="h-4 w-4 text-brand-gray-400"/>} required />
+                <Input label="E-mail" name="email" type="email" value={formData.email || ''} onChange={handleChange} icon={<Mail className="h-4 w-4 text-brand-gray-400"/>} />
                 <Input label="Telefone" name="phone" value={formData.phone} onChange={handleChange} icon={<Phone className="h-4 w-4 text-brand-gray-400"/>} />
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -153,11 +163,21 @@ const AlunoModal: React.FC<AlunoModalProps> = ({ isOpen, onClose, onSave, initia
               />
             </div>
 
-            <div className="p-6 mt-auto border-t border-brand-gray-200 dark:border-brand-gray-700 flex justify-end gap-3">
-              <Button variant="outline" onClick={onClose}>Cancelar</Button>
-              <Button onClick={handleSave}>
-                <Save className="h-4 w-4 mr-2"/> {isEditing ? 'Salvar Alterações' : 'Adicionar Aluno'}
-              </Button>
+            <div className="p-6 mt-auto border-t border-brand-gray-200 dark:border-brand-gray-700 flex justify-between items-center">
+              <div>
+                {isEditing && (
+                  <Button variant="outline" onClick={handleDelete} className="text-red-500 border-red-300 dark:border-red-700 hover:bg-red-50 dark:hover:bg-red-900/30">
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Excluir
+                  </Button>
+                )}
+              </div>
+              <div className="flex justify-end gap-3">
+                <Button variant="outline" onClick={onClose}>Cancelar</Button>
+                <Button onClick={handleSave}>
+                  <Save className="h-4 w-4 mr-2"/> {isEditing ? 'Salvar Alterações' : 'Adicionar'}
+                </Button>
+              </div>
             </div>
           </motion.div>
         </div>

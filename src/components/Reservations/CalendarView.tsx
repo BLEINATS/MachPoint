@@ -132,10 +132,6 @@ const CalendarView: React.FC<CalendarViewProps> = ({ reservas, quadras, onReserv
     );
   };
   
-  const reservationsForSelectedDay = useMemo(() => {
-    return reservas.filter(r => isSameDay(parseDateStringAsLocal(r.date), selectedDate) && r.status !== 'cancelada');
-  }, [reservas, selectedDate]);
-
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
       <div className="lg:col-span-2 bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-6 border border-brand-gray-200 dark:border-brand-gray-700">
@@ -146,7 +142,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ reservas, quadras, onReserv
       <div className="lg:col-span-1">
         <DayDetailView 
           date={selectedDate} 
-          reservas={reservationsForSelectedDay} 
+          reservas={reservas}
           quadras={quadras}
           onSlotClick={(time) => onSlotClick(selectedDate, time)}
         />

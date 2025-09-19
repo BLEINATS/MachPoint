@@ -18,12 +18,12 @@ const CreatableSelect: React.FC<CreatableSelectProps> = ({ label, options, value
 
   const filteredOptions = useMemo(() => {
     return options.filter(option =>
-      option.toLowerCase().includes(searchTerm.toLowerCase())
+      option && typeof option === 'string' && option.toLowerCase().includes(searchTerm.toLowerCase())
     );
   }, [options, searchTerm]);
 
   const canCreate = useMemo(() => {
-    return searchTerm.length > 0 && !options.some(opt => opt.toLowerCase() === searchTerm.toLowerCase());
+    return searchTerm.length > 0 && !options.some(opt => opt && typeof opt === 'string' && opt.toLowerCase() === searchTerm.toLowerCase());
   }, [searchTerm, options]);
 
   useEffect(() => {

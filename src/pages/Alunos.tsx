@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Users, GraduationCap, BookOpen, Plus, Search, Edit2, Trash2, BadgeCheck, BadgeX, BadgeHelp, Phone, Calendar, Loader2 } from 'lucide-react';
+import { ArrowLeft, Users, GraduationCap, BookOpen, Plus, Search, Edit2, Trash2, BadgeCheck, BadgeX, BadgeHelp, Briefcase, Loader2, Phone } from 'lucide-react';
 import Layout from '../components/Layout/Layout';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -13,10 +13,11 @@ import AlunoModal from '../components/Alunos/AlunoModal';
 import ProfessorModal from '../components/Alunos/ProfessorModal';
 import TurmaModal from '../components/Alunos/TurmaModal';
 import TurmaCard from '../components/Alunos/TurmaCard';
+import ConfirmationModal from '../components/Shared/ConfirmationModal';
 import { format } from 'date-fns';
 import { parseDateStringAsLocal } from '../utils/dateUtils';
 
-type TabType = 'alunos' | 'professores' | 'turmas';
+type TabType = 'clientes' | 'alunos' | 'professores' | 'turmas';
 
 const getNextDateForDay = (startDate: Date, dayOfWeek: number): Date => {
   const date = new Date(startDate.getTime());
@@ -31,7 +32,7 @@ const Alunos: React.FC = () => {
   const { addToast } = useToast();
   const location = useLocation();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<TabType>('alunos');
+  const [activeTab, setActiveTab] = useState<TabType>('clientes');
   
   const [alunos, setAlunos] = useState<Aluno[]>([]);
   const [professores, setProfessores] = useState<Professor[]>([]);
@@ -49,11 +50,17 @@ const Alunos: React.FC = () => {
   const [isTurmaModalOpen, setIsTurmaModalOpen] = useState(false);
   const [editingTurma, setEditingTurma] = useState<Turma | null>(null);
 
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState<{ id: string; name: string; type: 'aluno' | 'professor' } | null>(null);
+
   const loadData = useCallback(async () => {
     if (!arena) return;
     setIsLoading(true);
     try {
-      const { data: alunosData, error: alunosError } = await supabase.from('alunos').select('*').eq('arena_id', arena.id);
+      const { data: alunosData, error: alunosError } = await supabase
+        .from('alunos')
+        .select('*')
+        .eq('arena_id', arena.id);
       if (alunosError) throw alunosError;
       setAlunos(alunosData || []);
 
@@ -97,25 +104,54 @@ const Alunos: React.FC = () => {
     try {
         const { error } = await supabase.from('alunos').upsert(dataToSave);
         if (error) throw error;
-        addToast({ message: `Aluno ${isEditing ? 'atualizado' : 'criado'} com sucesso!`, type: 'success' });
+        addToast({ message: `Cliente/Aluno ${isEditing ? 'atualizado' : 'criado'} com sucesso!`, type: 'success' });
         await loadData();
         setIsAlunoModalOpen(false);
         setEditingAluno(null);
     } catch (error: any) {
-        addToast({ message: `Erro ao salvar aluno: ${error.message}`, type: 'error' });
+        addToast({ message: `Erro ao salvar cliente/aluno: ${error.message}`, type: 'error' });
     }
   };
 
-  const handleDeleteAluno = async (id: string) => {
-    if (window.confirm('Tem certeza que deseja excluir este aluno?')) {
-        try {
-            const { error } = await supabase.from('alunos').delete().eq('id', id);
-            if (error) throw error;
-            addToast({ message: 'Aluno excluído com sucesso.', type: 'success' });
-            await loadData();
-        } catch (error: any) {
-            addToast({ message: `Erro ao excluir aluno: ${error.message}`, type: 'error' });
-        }
+  const handleDeleteRequest = (id: string, name: string, type: 'aluno' | 'professor') => {
+    setItemToDelete({ id, name, type });
+    setIsDeleteModalOpen(true);
+    setIsAlunoModalOpen(false);
+    setIsProfessorModalOpen(false);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!itemToDelete) return;
+
+    const { id, type } = itemToDelete;
+    const toastSuccessMessage = `${type === 'aluno' ? 'Cliente/Aluno' : 'Professor'} excluído com sucesso.`;
+    const toastErrorMessage = `Erro ao excluir ${type === 'aluno' ? 'cliente/aluno' : 'professor'}:`;
+    const tableName = type === 'aluno' ? 'alunos' : 'professores';
+
+    try {
+      const { error } = await supabase.from(tableName).delete().eq('id', id);
+      if (error) throw error;
+      addToast({ message: toastSuccessMessage, type: 'success' });
+      await loadData();
+    } catch (error: any) {
+      addToast({ message: `${toastErrorMessage} ${error.message}`, type: 'error' });
+    } finally {
+      setIsDeleteModalOpen(false);
+      setItemToDelete(null);
+    }
+  };
+
+  const handleDeleteAluno = (id: string) => {
+    const aluno = alunos.find(a => a.id === id);
+    if (aluno) {
+      handleDeleteRequest(aluno.id, aluno.name, 'aluno');
+    }
+  };
+
+  const handleDeleteProfessor = (id: string) => {
+    const professor = professores.find(p => p.id === id);
+    if (professor) {
+      handleDeleteRequest(professor.id, professor.name, 'professor');
     }
   };
 
@@ -134,19 +170,6 @@ const Alunos: React.FC = () => {
         setEditingProfessor(null);
     } catch (error: any) {
         addToast({ message: `Erro ao salvar professor: ${error.message}`, type: 'error' });
-    }
-  };
-
-  const handleDeleteProfessor = async (id: string) => {
-    if (window.confirm('Tem certeza que deseja excluir este professor?')) {
-        try {
-            const { error } = await supabase.from('professores').delete().eq('id', id);
-            if (error) throw error;
-            addToast({ message: 'Professor excluído com sucesso.', type: 'success' });
-            await loadData();
-        } catch (error: any) {
-            addToast({ message: `Erro ao excluir professor: ${error.message}`, type: 'error' });
-        }
     }
   };
 
@@ -214,8 +237,23 @@ const Alunos: React.FC = () => {
     }
   };
 
+  const isAluno = (aluno: Aluno): boolean => {
+    return !!(aluno.plan_name && aluno.plan_name.toLowerCase() !== 'avulso' && aluno.plan_name.toLowerCase() !== 'paga por uso');
+  }
+
+  const filteredClientes = useMemo(() => 
+    alunos.filter(a => 
+      !isAluno(a) &&
+      (a.name.toLowerCase().includes(searchTerm.toLowerCase()) || a.email?.toLowerCase().includes(searchTerm.toLowerCase()))
+    ),
+    [alunos, searchTerm]
+  );
+  
   const filteredAlunos = useMemo(() => 
-    alunos.filter(a => a.name.toLowerCase().includes(searchTerm.toLowerCase()) || a.email.toLowerCase().includes(searchTerm.toLowerCase())),
+    alunos.filter(a => 
+      isAluno(a) &&
+      (a.name.toLowerCase().includes(searchTerm.toLowerCase()) || a.email?.toLowerCase().includes(searchTerm.toLowerCase()))
+    ),
     [alunos, searchTerm]
   );
 
@@ -229,15 +267,33 @@ const Alunos: React.FC = () => {
     [turmas, searchTerm]
   );
   
-  const availableSports = useMemo(() => [...new Set(quadras.map(q => q.sport_type))], [quadras]);
+  const availableSports = useMemo(() => [...new Set(quadras.flatMap(q => q.sports || []).filter(Boolean))], [quadras]);
   const availablePlans = useMemo(() => [...new Set(alunos.map(a => a.plan_name).filter(Boolean))], [alunos]);
 
-
   const tabs: { id: TabType; label: string; icon: React.ElementType }[] = [
-    { id: 'alunos', label: 'Alunos', icon: Users },
-    { id: 'professores', label: 'Professores', icon: GraduationCap },
+    { id: 'clientes', label: 'Clientes', icon: Users },
+    { id: 'alunos', label: 'Alunos', icon: GraduationCap },
+    { id: 'professores', label: 'Professores', icon: Briefcase },
     { id: 'turmas', label: 'Turmas', icon: BookOpen },
   ];
+
+  const addButtonLabel = useMemo(() => {
+    switch (activeTab) {
+        case 'clientes': return 'Adicionar Cliente';
+        case 'alunos': return 'Adicionar Aluno';
+        case 'professores': return 'Adicionar Professor';
+        case 'turmas': return 'Adicionar Turma';
+    }
+  }, [activeTab]);
+
+  const searchPlaceholder = useMemo(() => {
+    switch (activeTab) {
+        case 'clientes': return 'Buscar por cliente...';
+        case 'alunos': return 'Buscar por aluno...';
+        case 'professores': return 'Buscar por professor...';
+        case 'turmas': return 'Buscar por turma...';
+    }
+  }, [activeTab]);
 
   const renderContent = () => {
     if (isLoading) {
@@ -248,8 +304,10 @@ const Alunos: React.FC = () => {
         );
     }
     switch (activeTab) {
+      case 'clientes':
+        return <AlunosList alunos={filteredClientes} onEdit={setEditingAluno} onDelete={handleDeleteAluno} type="Cliente" />;
       case 'alunos':
-        return <AlunosList alunos={filteredAlunos} onEdit={setEditingAluno} onDelete={handleDeleteAluno} />;
+        return <AlunosList alunos={filteredAlunos} onEdit={setEditingAluno} onDelete={handleDeleteAluno} type="Aluno" />;
       case 'professores':
         return <ProfessoresList professores={filteredProfessores} onEdit={setEditingProfessor} onDelete={handleDeleteProfessor} />;
       case 'turmas':
@@ -283,7 +341,6 @@ const Alunos: React.FC = () => {
     if (!isTurmaModalOpen) setEditingTurma(null);
   }, [isTurmaModalOpen]);
 
-
   return (
     <Layout>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -292,8 +349,8 @@ const Alunos: React.FC = () => {
             <ArrowLeft className="h-4 w-4 mr-2" />
             Voltar para o Dashboard
           </Link>
-          <h1 className="text-3xl font-bold text-brand-gray-900 dark:text-white">Alunos e Turmas</h1>
-          <p className="text-brand-gray-600 dark:text-brand-gray-400 mt-2">Gerencie sua comunidade de jogadores e aulas.</p>
+          <h1 className="text-3xl font-bold text-brand-gray-900 dark:text-white">Clientes e Alunos</h1>
+          <p className="text-brand-gray-600 dark:text-brand-gray-400 mt-2">Gerencie sua base de clientes, alunos matriculados e turmas de aulas.</p>
         </motion.div>
 
         <div className="mb-8">
@@ -321,19 +378,19 @@ const Alunos: React.FC = () => {
           <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
             <div className="w-full sm:w-auto sm:flex-1">
               <Input
-                placeholder={`Buscar por ${activeTab.slice(0, -1)}...`}
+                placeholder={searchPlaceholder}
                 icon={<Search className="h-4 w-4 text-brand-gray-400" />}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
             <Button onClick={() => {
-              if (activeTab === 'alunos') setIsAlunoModalOpen(true);
+              if (activeTab === 'clientes' || activeTab === 'alunos') setIsAlunoModalOpen(true);
               if (activeTab === 'professores') setIsProfessorModalOpen(true);
               if (activeTab === 'turmas') setIsTurmaModalOpen(true);
             }}>
               <Plus className="h-4 w-4 mr-2" />
-              Adicionar {activeTab.slice(0, -1)}
+              {addButtonLabel}
             </Button>
           </div>
         </div>
@@ -349,11 +406,19 @@ const Alunos: React.FC = () => {
         isOpen={isAlunoModalOpen} 
         onClose={() => setIsAlunoModalOpen(false)} 
         onSave={handleSaveAluno} 
+        onDelete={handleDeleteAluno}
         initialData={editingAluno}
         availableSports={availableSports}
         availablePlans={availablePlans}
+        modalType={activeTab === 'clientes' ? 'Cliente' : 'Aluno'}
       />
-      <ProfessorModal isOpen={isProfessorModalOpen} onClose={() => setIsProfessorModalOpen(false)} onSave={handleSaveProfessor} initialData={editingProfessor} />
+      <ProfessorModal 
+        isOpen={isProfessorModalOpen} 
+        onClose={() => setIsProfessorModalOpen(false)} 
+        onSave={handleSaveProfessor}
+        onDelete={handleDeleteProfessor}
+        initialData={editingProfessor} 
+      />
       <TurmaModal 
         isOpen={isTurmaModalOpen}
         onClose={() => setIsTurmaModalOpen(false)}
@@ -362,12 +427,29 @@ const Alunos: React.FC = () => {
         professores={professores}
         quadras={quadras}
       />
+      <ConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => setIsDeleteModalOpen(false)}
+        onConfirm={handleConfirmDelete}
+        title="Confirmar Exclusão"
+        message={
+            <>
+                <p>Você tem certeza que deseja excluir <strong>{itemToDelete?.name}</strong>?</p>
+                <p className="mt-2 text-xs text-red-500 dark:text-red-400">Esta ação é irreversível e todos os dados associados podem ser perdidos.</p>
+            </>
+        }
+        confirmText="Sim, Excluir"
+      />
     </Layout>
   );
 };
 
-const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void, onDelete: (id: string) => void }> = ({ alunos, onEdit, onDelete }) => {
-  if (alunos.length === 0) return <PlaceholderTab title="Nenhum aluno encontrado" description="Clique em 'Adicionar Aluno' para começar a montar sua base de clientes." />;
+const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void, onDelete: (id: string) => void, type: 'Cliente' | 'Aluno' }> = ({ alunos, onEdit, onDelete, type }) => {
+  if (alunos.length === 0) {
+    const title = type === 'Cliente' ? "Nenhum cliente encontrado" : "Nenhum aluno com plano encontrado";
+    const description = type === 'Cliente' ? "Clique em 'Adicionar Cliente' para começar a montar sua base de contatos." : "Cadastre alunos em planos para que eles apareçam aqui.";
+    return <PlaceholderTab title={title} description={description} />;
+  }
   
   const getStatusProps = (status: Aluno['status']) => {
     switch (status) {
@@ -383,8 +465,9 @@ const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void, on
         <table className="min-w-full divide-y divide-brand-gray-200 dark:divide-brand-gray-700">
           <thead className="bg-brand-gray-50 dark:bg-brand-gray-700/50">
             <tr>
-              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Aluno</th>
+              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">{type}</th>
               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Status</th>
+              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Crédito</th>
               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Plano / Mensalidade</th>
               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Membro Desde</th>
               <th scope="col" className="relative px-6 py-3"><span className="sr-only">Ações</span></th>
@@ -404,7 +487,13 @@ const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void, on
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center">
                       <div className="flex-shrink-0 h-10 w-10">
-                        <img className="h-10 w-10 rounded-full object-cover" src={aluno.avatar_url || `https://avatar.vercel.sh/${aluno.email}.svg?text=${aluno.name.charAt(0)}`} alt={aluno.name} />
+                        {aluno.avatar_url ? (
+                          <img className="h-10 w-10 rounded-full object-cover" src={aluno.avatar_url} alt={aluno.name} />
+                        ) : (
+                          <div className="h-10 w-10 rounded-full bg-brand-gray-200 dark:bg-brand-gray-700 flex items-center justify-center text-brand-gray-500 font-bold">
+                            {aluno.name ? aluno.name.charAt(0).toUpperCase() : '?'}
+                          </div>
+                        )}
                       </div>
                       <div className="ml-4">
                         <div className="text-sm font-medium text-brand-gray-900 dark:text-white">{aluno.name}</div>
@@ -419,9 +508,18 @@ const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void, on
                     </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
+                    {aluno.credit_balance && aluno.credit_balance > 0 ? (
+                      <span className="text-sm font-semibold text-blue-600 dark:text-blue-400">
+                        {aluno.credit_balance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                      </span>
+                    ) : (
+                      <span className="text-sm text-brand-gray-400 dark:text-brand-gray-500">-</span>
+                    )}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm text-brand-gray-900 dark:text-white">{aluno.plan_name}</div>
                     <div className="text-sm font-semibold">
-                      {aluno.monthly_fee > 0 ? (
+                      {aluno.monthly_fee && aluno.monthly_fee > 0 ? (
                         <span className="text-green-600 dark:text-green-400">
                           {aluno.monthly_fee.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                         </span>
@@ -433,12 +531,12 @@ const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void, on
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-brand-gray-500 dark:text-brand-gray-400">
-                    {format(new Date(aluno.join_date), 'dd/MM/yyyy')}
+                    {format(parseDateStringAsLocal(aluno.join_date), 'dd/MM/yyyy')}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                     <div className="flex items-center justify-end space-x-1">
-                        <Button variant="ghost" size="sm" onClick={() => onEdit(aluno)} className="p-2"><Edit2 className="h-4 w-4" /></Button>
-                        <Button variant="ghost" size="sm" onClick={() => onDelete(aluno.id)} className="p-2 hover:text-red-500"><Trash2 className="h-4 w-4" /></Button>
+                        <Button variant="ghost" size="sm" onClick={() => onEdit(aluno)} className="p-2" title="Editar"><Edit2 className="h-4 w-4" /></Button>
+                        <Button variant="ghost" size="sm" onClick={() => onDelete(aluno.id)} className="p-2 hover:text-red-500" title="Excluir"><Trash2 className="h-4 w-4" /></Button>
                     </div>
                   </td>
                 </motion.tr>
@@ -466,15 +564,25 @@ const ProfessoresList: React.FC<{ professores: Professor[], onEdit: (prof: Profe
           <div>
             <div className="flex justify-between items-start mb-4">
               <div className="flex items-center gap-4">
-                <img src={prof.avatar_url || `https://avatar.vercel.sh/${prof.email}.svg?text=${prof.name.charAt(0)}`} alt={prof.name} className="w-16 h-16 rounded-full object-cover border-2 border-brand-gray-200 dark:border-brand-gray-600" />
+                <div className="flex-shrink-0 h-16 w-16">
+                  {prof.avatar_url ? (
+                    <img src={prof.avatar_url} alt={prof.name} className="w-16 h-16 rounded-full object-cover border-2 border-brand-gray-200 dark:border-brand-gray-600" />
+                  ) : (
+                    <div className="w-16 h-16 rounded-full bg-brand-gray-200 dark:bg-brand-gray-700 flex items-center justify-center border-2 border-brand-gray-200 dark:border-brand-gray-600">
+                      <span className="text-2xl text-brand-gray-500 font-bold">
+                        {prof.name ? prof.name.charAt(0).toUpperCase() : '?'}
+                      </span>
+                    </div>
+                  )}
+                </div>
                 <div>
                   <h3 className="font-bold text-lg text-brand-gray-900 dark:text-white">{prof.name}</h3>
                   <p className="text-sm text-brand-gray-600 dark:text-brand-gray-400">{prof.email}</p>
                 </div>
               </div>
               <div className="flex space-x-1">
-                  <Button variant="ghost" size="sm" onClick={() => onEdit(prof)} className="p-2"><Edit2 className="h-4 w-4" /></Button>
-                  <Button variant="ghost" size="sm" onClick={() => onDelete(prof.id)} className="p-2 hover:text-red-500"><Trash2 className="h-4 w-4" /></Button>
+                  <Button variant="ghost" size="sm" onClick={() => onEdit(prof)} className="p-2" title="Editar"><Edit2 className="h-4 w-4" /></Button>
+                  <Button variant="ghost" size="sm" onClick={() => onDelete(prof.id)} className="p-2 hover:text-red-500" title="Excluir"><Trash2 className="h-4 w-4" /></Button>
               </div>
             </div>
 

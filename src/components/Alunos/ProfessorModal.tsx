@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Save, User, Mail, Phone, Sparkles } from 'lucide-react';
+import { X, Save, User, Mail, Phone, Sparkles, Trash2 } from 'lucide-react';
 import { Professor } from '../../types';
 import Button from '../Forms/Button';
 import Input from '../Forms/Input';
@@ -10,10 +10,11 @@ interface ProfessorModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSave: (professor: Omit<Professor, 'id' | 'arena_id' | 'created_at'> | Professor) => void;
+  onDelete: (id: string) => void;
   initialData: Professor | null;
 }
 
-const ProfessorModal: React.FC<ProfessorModalProps> = ({ isOpen, onClose, onSave, initialData }) => {
+const ProfessorModal: React.FC<ProfessorModalProps> = ({ isOpen, onClose, onSave, onDelete, initialData }) => {
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -43,6 +44,12 @@ const ProfessorModal: React.FC<ProfessorModalProps> = ({ isOpen, onClose, onSave
       onSave({ ...initialData, ...formData });
     } else {
       onSave(formData);
+    }
+  };
+  
+  const handleDelete = () => {
+    if (initialData) {
+      onDelete(initialData.id);
     }
   };
 
@@ -96,11 +103,21 @@ const ProfessorModal: React.FC<ProfessorModalProps> = ({ isOpen, onClose, onSave
                 />
             </div>
 
-            <div className="p-6 mt-auto border-t border-brand-gray-200 dark:border-brand-gray-700 flex justify-end gap-3">
-              <Button variant="outline" onClick={onClose}>Cancelar</Button>
-              <Button onClick={handleSave}>
-                <Save className="h-4 w-4 mr-2"/> {isEditing ? 'Salvar Alterações' : 'Adicionar Professor'}
-              </Button>
+            <div className="p-6 mt-auto border-t border-brand-gray-200 dark:border-brand-gray-700 flex justify-between items-center">
+              <div>
+                {isEditing && (
+                  <Button variant="outline" onClick={handleDelete} className="text-red-500 border-red-300 dark:border-red-700 hover:bg-red-50 dark:hover:bg-red-900/30">
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Excluir
+                  </Button>
+                )}
+              </div>
+              <div className="flex justify-end gap-3">
+                <Button variant="outline" onClick={onClose}>Cancelar</Button>
+                <Button onClick={handleSave}>
+                  <Save className="h-4 w-4 mr-2"/> {isEditing ? 'Salvar Alterações' : 'Adicionar Professor'}
+                </Button>
+              </div>
             </div>
           </motion.div>
         </div>

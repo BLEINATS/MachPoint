@@ -92,8 +92,15 @@ const ArenaPublic: React.FC = () => {
   const generateTimeSlots = (quadra: Quadra) => {
     const slots = [];
     const dayOfWeek = getDay(selectedDate);
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-    const horario = isWeekend ? quadra.horarios.weekend : quadra.horarios.weekday;
+    
+    let horario;
+    if (dayOfWeek === 0) {
+      horario = quadra.horarios.sunday;
+    } else if (dayOfWeek === 6) {
+      horario = quadra.horarios.saturday;
+    } else {
+      horario = quadra.horarios.weekday;
+    }
 
     if (!horario || !horario.start || !horario.end) return [];
 
