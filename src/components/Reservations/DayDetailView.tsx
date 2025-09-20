@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { format, isSameDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Quadra, Reserva } from '../../types';
-import { Plus } from 'lucide-react';
+import { Plus, DollarSign, AlertCircle, CheckCircle, CreditCard } from 'lucide-react';
 import { getReservationTypeDetails } from '../../utils/reservationUtils';
 import { parseDateStringAsLocal } from '../../utils/dateUtils';
 
@@ -40,13 +40,21 @@ const DayDetailView: React.FC<DayDetailViewProps> = ({ date, reservas, quadras, 
     return reservationsForDay.find(r => {
       const startMinutes = timeStringToMinutes(r.start_time);
       const endMinutes = timeStringToMinutes(r.end_time);
-      // Handle overnight reservations if end time is smaller than start time
       const duration = endMinutes > startMinutes ? endMinutes - startMinutes : (24 * 60 - startMinutes) + endMinutes;
       return slotMinutes >= startMinutes && slotMinutes < startMinutes + duration;
     });
   };
   
   const getQuadraName = (id: string) => quadras.find(q => q.id === id)?.name || 'N/A';
+
+  const getPaymentStatus = (status?: 'pago' | 'pendente' | 'parcialmente_pago') => {
+    switch (status) {
+      case 'pago': return { icon: CheckCircle, color: 'text-green-400', label: 'Pago' };
+      case 'parcialmente_pago': return { icon: DollarSign, color: 'text-blue-400', label: 'Parcial' };
+      case 'pendente': return { icon: AlertCircle, color: 'text-yellow-400', label: 'Pendente' };
+      default: return null;
+    }
+  };
 
   return (
     <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-6 border border-brand-gray-200 dark:border-brand-gray-700 h-full">
@@ -64,6 +72,7 @@ const DayDetailView: React.FC<DayDetailViewProps> = ({ date, reservas, quadras, 
             }
             
             const typeDetails = getReservationTypeDetails(reserva.type);
+            const paymentStatus = getPaymentStatus(reserva.payment_status);
             const startMinutes = timeStringToMinutes(reserva.start_time);
             const endMinutes = timeStringToMinutes(reserva.end_time);
             const durationInSlots = ((endMinutes > startMinutes ? endMinutes : endMinutes + 24 * 60) - startMinutes) / 30;
@@ -77,6 +86,20 @@ const DayDetailView: React.FC<DayDetailViewProps> = ({ date, reservas, quadras, 
                     <p className="text-xs opacity-90">{getQuadraName(reserva.quadra_id)}</p>
                   </div>
                   <p className="text-xs font-medium bg-black/20 px-1.5 py-0.5 rounded-full">{reserva.start_time.slice(0, 5)} - {reserva.end_time.slice(0, 5)}</p>
+                </div>
+                <div className="mt-2 flex items-center justify-between text-xs">
+                  <span className="font-semibold opacity-90 flex items-center gap-1">
+                    {(reserva.total_price || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    {reserva.credit_used && reserva.credit_used > 0 && (
+                      <CreditCard className="h-3 w-3 text-white/80" title={`Pago com ${reserva.credit_used.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de crédito`} />
+                    )}
+                  </span>
+                  {paymentStatus && (
+                    <span className={`inline-flex items-center font-medium ${paymentStatus.color}`}>
+                      <paymentStatus.icon className="h-3 w-3 mr-1" />
+                      {paymentStatus.label}
+                    </span>
+                  )}
                 </div>
               </div>
             );

@@ -2,18 +2,19 @@ import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { 
-    DollarSign, BarChart2, Users, Plus, Lock, Send, Calendar, Clock, 
-    User, Sparkles, Star, TrendingUp, TrendingDown, Phone, MessageCircle, Bookmark, Loader2 
+    DollarSign, Users, Plus, Lock, Send, Calendar, Clock, 
+    User, Sparkles, Star, TrendingUp, TrendingDown, Phone, MessageCircle, Bookmark, Loader2, GraduationCap,
+    CheckCircle, AlertCircle, CreditCard, ClipboardList, XCircle, Repeat, ShoppingBag, PieChart
 } from 'lucide-react';
 import StatCard from './StatCard';
 import { Quadra, Reserva, Aluno } from '../../types';
-import { expandRecurringReservations } from '../../utils/reservationUtils';
-import { calculateMonthlyOccupancy } from '../../utils/analytics';
+import { expandRecurringReservations, getReservationTypeDetails } from '../../utils/reservationUtils';
+import { getAvailableTimeRangesForDay } from '../../utils/analytics';
 import { parseDateStringAsLocal } from '../../utils/dateUtils';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { supabase } from '../../lib/supabaseClient';
-import { isSameDay, startOfMonth, endOfMonth, format, parse, startOfDay, formatDistanceToNow, getDay } from 'date-fns';
+import { isSameDay, startOfMonth, endOfMonth, format, parse, startOfDay, formatDistanceToNow, getDay, addDays, differenceInMinutes, endOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import Button from '../Forms/Button';
 
@@ -36,7 +37,7 @@ const AnalyticsDashboard: React.FC = () => {
       if (quadrasError) throw quadrasError;
       setQuadras(quadrasData || []);
 
-      const { data: reservasData, error: reservasError } = await supabase.from('reservas').select('*').eq('arena_id', arena.id);
+      const { data: reservasData, error: reservasError } = await supabase.from('reservas').select('id, arena_id, quadra_id, profile_id, turma_id, torneio_id, evento_id, clientName, clientPhone, date, start_time, end_time, status, type, total_price, credit_used, payment_status, sport_type, notes, isRecurring, recurringType, recurringEndDate, master_id, created_at, updated_at, rented_items').eq('arena_id', arena.id);
       if (reservasError) throw reservasError;
       setReservas(reservasData || []);
 
@@ -59,78 +60,109 @@ const AnalyticsDashboard: React.FC = () => {
     const monthStart = startOfMonth(today);
     const monthEnd = endOfMonth(today);
     
-    const monthlyBookings = expandRecurringReservations(reservas, monthStart, monthEnd, quadras)
-      .filter(r => r.status !== 'cancelada');
+    const allExpandedReservationsInMonth = expandRecurringReservations(reservas, monthStart, monthEnd, quadras);
 
-    const receitaDoMes = monthlyBookings.reduce((sum, r) => sum + (r.total_price || 0), 0);
+    const receitaDoMes = allExpandedReservationsInMonth
+      .filter(r => r.status === 'confirmada' || (r.status === 'cancelada' && r.payment_status === 'pago'))
+      .reduce((sum, r) => sum + (r.total_price || 0), 0);
+      
+    const isAlunoComPlano = (aluno: Aluno): boolean => {
+      return !!(aluno.plan_name && aluno.plan_name.toLowerCase() !== 'avulso' && aluno.plan_name.toLowerCase() !== 'paga por uso');
+    }
 
-    const ocupacaoMedia = calculateMonthlyOccupancy(today, reservas, quadras);
-    const novosAlunos = alunos.length;
-    const reservasHoje = monthlyBookings.filter(r => isSameDay(parseDateStringAsLocal(r.date), new Date())).length;
+    const newSignupsThisMonth = alunos.filter(a => {
+        try {
+            const joinDate = parseDateStringAsLocal(a.join_date);
+            return joinDate >= monthStart && joinDate <= monthEnd;
+        } catch {
+            return false;
+        }
+    });
+
+    const novosAlunos = newSignupsThisMonth.filter(isAlunoComPlano).length;
+    const novosClientes = newSignupsThisMonth.filter(a => !isAlunoComPlano(a)).length;
+
+    const canceledReservationsThisMonth = allExpandedReservationsInMonth.filter(r => r.status === 'cancelada').length;
     
-    const hourCounts: { [key: string]: number } = monthlyBookings.reduce((acc, r) => {
-        const hour = r.start_time.split(':')[0];
-        acc[hour] = (acc[hour] || 0) + 1;
-        return acc;
-    }, {});
-    const horarioPico = Object.keys(hourCounts).length > 0 ? Object.keys(hourCounts).reduce((a, b) => (hourCounts[a] > hourCounts[b] ? a : b)) : 'N/A';
+    const todayStart = startOfDay(today);
+    const todayEnd = endOfDay(today);
+    const todaysBookings = expandRecurringReservations(reservas, todayStart, todayEnd, quadras)
+        .filter(r => r.status !== 'cancelada');
 
-    const revenueByQuadraMonth: { [key: string]: number } = monthlyBookings.reduce((acc, r) => {
-        acc[r.quadra_id] = (acc[r.quadra_id] || 0) + (r.total_price || 0);
-        return acc;
-    }, {});
+    const reservasHoje = todaysBookings.length;
+    const receitaHoje = todaysBookings.reduce((sum, r) => sum + (r.total_price || 0), 0);
+    
+    const availableTimeRangesToday = getAvailableTimeRangesForDay(quadras, todaysBookings, today);
+
+    const activeQuadras = quadras.filter(q => q.status === 'ativa');
+    const dayOfWeek = getDay(today);
+
+    const totalAvailableHoursToday = activeQuadras.reduce((total, quadra) => {
+        let horario = quadra.horarios ? (
+            dayOfWeek === 0 ? quadra.horarios.sunday :
+            dayOfWeek === 6 ? quadra.horarios.saturday :
+            quadra.horarios.weekday
+        ) : null;
+
+        if (!horario || !horario.start || !horario.end) {
+            horario = { start: '08:00', end: '22:00' }; // Fallback robusto
+        }
+
+        try {
+            const start = parse(horario.start, 'HH:mm', new Date());
+            let end = parse(horario.end, 'HH:mm', new Date());
+
+            if (isNaN(start.getTime()) || isNaN(end.getTime())) return total;
+
+            if (horario.end === '00:00') {
+                end = addDays(startOfDay(end), 1);
+            } else if (end <= start) {
+                end = addDays(end, 1);
+            }
+            
+            const diff = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
+            return total + (isNaN(diff) || diff < 0 ? 0 : diff);
+        } catch {
+            return total;
+        }
+    }, 0);
+
+    const totalBookedHoursToday = todaysBookings.reduce((sum, r) => {
+        if (!r.start_time || !r.end_time) return sum;
+        try {
+            const startTime = parse(r.start_time, 'HH:mm', new Date());
+            let endTime = parse(r.end_time, 'HH:mm', new Date());
+
+            if (isNaN(startTime.getTime()) || isNaN(endTime.getTime())) return sum;
+
+            if (r.end_time === '00:00') {
+                endTime = addDays(startOfDay(endTime), 1);
+            } else if (endTime <= startTime) {
+                endTime = addDays(endTime, 1);
+            }
+            
+            const diffHours = (endTime.getTime() - startTime.getTime()) / (1000 * 60 * 60);
+            return sum + (isNaN(diffHours) || diffHours < 0 ? 0 : diffHours);
+        } catch {
+            return sum;
+        }
+    }, 0);
+
+    const ocupacaoHoje = totalAvailableHoursToday > 0 
+      ? (totalBookedHoursToday / totalAvailableHoursToday) * 100 
+      : 0;
 
     return { 
       receitaDoMes, 
-      ocupacaoMedia: Math.round(ocupacaoMedia), 
-      novosAlunos, 
+      novosAlunos,
+      novosClientes,
       reservasHoje,
-      horarioPico,
-      revenueByQuadraMonth,
-      monthlyBookings,
+      receitaHoje,
+      canceledReservationsThisMonth,
+      availableTimeRangesToday,
+      ocupacaoHoje: Math.min(ocupacaoHoje, 100),
     };
   }, [quadras, reservas, alunos]);
-
-  const insights = useMemo(() => {
-    const newInsights = [];
-    
-    if (analyticsData.horarioPico !== 'N/A') {
-        newInsights.push({ id: 1, icon: TrendingUp, text: `"${analyticsData.horarioPico}:00" é seu horário mais concorrido. Considere um ajuste de preço.`, color: "text-green-500" });
-    }
-
-    const dayOfWeekCounts: { [key: number]: number } = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 };
-    analyticsData.monthlyBookings.forEach(r => {
-        const day = getDay(parseDateStringAsLocal(r.date));
-        dayOfWeekCounts[day]++;
-    });
-    
-    const dayLabels = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
-    let minDay = -1;
-    let minCount = Infinity;
-    Object.entries(dayOfWeekCounts).forEach(([day, count]) => {
-        if (count > 0 && count < minCount) {
-            minCount = count;
-            minDay = parseInt(day);
-        }
-    });
-
-    if (minDay !== -1) {
-        newInsights.push({ id: 2, icon: TrendingDown, text: `${dayLabels[minDay]} tem baixa ocupação. Que tal criar uma promoção?`, color: "text-yellow-500" });
-    }
-
-    const topQuadraId = Object.keys(analyticsData.revenueByQuadraMonth).length > 0 ? Object.keys(analyticsData.revenueByQuadraMonth).reduce((a, b) => (analyticsData.revenueByQuadraMonth[a] > analyticsData.revenueByQuadraMonth[b] ? a : b)) : null;
-
-    if (topQuadraId && analyticsData.receitaDoMes > 0) {
-        const topQuadra = quadras.find(q => q.id === topQuadraId);
-        if (topQuadra) {
-            const percentage = (analyticsData.revenueByQuadraMonth[topQuadraId] / analyticsData.receitaDoMes) * 100;
-            newInsights.push({ id: 3, icon: Star, text: `A quadra "${topQuadra.name}" gerou ${percentage.toFixed(0)}% da sua receita este mês. Destaque-a!`, color: "text-blue-500" });
-        }
-    }
-
-    return newInsights.slice(0, 3);
-
-  }, [analyticsData, quadras]);
   
   const todaysReservations = useMemo(() => {
     const today = startOfDay(new Date());
@@ -140,19 +172,36 @@ const AnalyticsDashboard: React.FC = () => {
   }, [reservas, quadras]);
 
   const recentActivities = useMemo(() => {
-    const reservaActivities = reservas.map(r => ({
-      id: `res-${r.id}`,
-      text: r.status === 'cancelada'
-        ? `Reserva de ${r.clientName || 'Cliente'} foi cancelada.`
-        : `Nova reserva de ${r.clientName || 'Cliente'}.`,
-      time: r.created_at,
-      icon: r.status === 'cancelada' ? Clock : Calendar,
-      color: r.status === 'cancelada' ? 'text-red-500' : 'text-green-500',
-    }));
+    const isAlunoComPlano = (aluno: Aluno): boolean => {
+      return !!(aluno.plan_name && aluno.plan_name.toLowerCase() !== 'avulso' && aluno.plan_name.toLowerCase() !== 'paga por uso');
+    }
+
+    const reservaActivities = reservas.map(r => {
+      const quadraName = quadras.find(q => q.id === r.quadra_id)?.name || 'Quadra';
+      const typeDetails = getReservationTypeDetails(r.type, r.isRecurring);
+      let text = '';
+      let details = '';
+      if (r.status === 'cancelada') {
+        text = `Reserva cancelada`;
+        details = `${r.clientName || 'Cliente'} na ${quadraName}`;
+      } else {
+        text = `Nova reserva (${typeDetails.label})`;
+        details = `${r.clientName || 'Cliente'} na ${quadraName} - ${(r.total_price || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
+      }
+      return {
+        id: `res-${r.id}`,
+        text: text,
+        details: details,
+        time: r.updated_at || r.created_at,
+        icon: r.status === 'cancelada' ? Clock : typeDetails.icon,
+        color: 'text-red-500',
+      };
+    });
 
     const alunoActivities = alunos.map(a => ({
       id: `aluno-${a.id}`,
-      text: `${a.name} se tornou aluno.`,
+      text: `Novo cadastro`,
+      details: `${a.name} (${isAlunoComPlano(a) ? 'Aluno com plano' : 'Cliente'})`,
       time: a.created_at,
       icon: User,
       color: 'text-purple-500',
@@ -161,7 +210,7 @@ const AnalyticsDashboard: React.FC = () => {
     const allActivities = [...reservaActivities, ...alunoActivities];
     allActivities.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime());
     return allActivities.slice(0, 5);
-  }, [reservas, alunos]);
+  }, [reservas, alunos, quadras]);
 
   const handleActionClick = (action: string) => {
     switch (action) {
@@ -195,11 +244,63 @@ const AnalyticsDashboard: React.FC = () => {
         </p>
       </motion.div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard index={0} icon={DollarSign} label="Receita do Mês" value={`R$ ${analyticsData.receitaDoMes.toLocaleString('pt-BR')}`} color="green" trend="+12%" />
-        <StatCard index={1} icon={BarChart2} label="Ocupação Média" value={`${analyticsData.ocupacaoMedia}%`} color="blue" trend="+5%" />
-        <StatCard index={2} icon={Users} label="Novos Alunos" value={analyticsData.novosAlunos} color="purple" />
-        <StatCard index={3} icon={Calendar} label="Reservas Hoje" value={analyticsData.reservasHoje} color="yellow" />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <StatCard
+          icon={DollarSign}
+          label="Receita do Mês"
+          value={analyticsData.receitaDoMes.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+          color="green"
+          trend="+12%"
+          description="em relação ao mês passado"
+          index={0}
+        />
+        <StatCard
+          icon={XCircle}
+          label="Canceladas no Mês"
+          value={analyticsData.canceledReservationsThisMonth}
+          color="red"
+          index={1}
+        />
+        
+        <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-6 border border-brand-gray-200 dark:border-brand-gray-700">
+            <p className="text-sm font-medium text-brand-gray-600 dark:text-brand-gray-400 mb-2">Horários Livres Hoje</p>
+            {analyticsData.availableTimeRangesToday.length > 0 ? (
+                <div className="grid grid-flow-col auto-cols-fr gap-x-6 max-h-24 overflow-y-auto pr-2">
+                    {analyticsData.availableTimeRangesToday.map(courtData => (
+                        <div key={courtData.courtId}>
+                            <p className="text-sm font-semibold text-brand-gray-800 dark:text-white">{courtData.courtName}</p>
+                            <div className="mt-1 space-y-1">
+                                {courtData.ranges.map(range => (
+                                    <p key={range} className="text-sm font-semibold text-green-500">{range}</p>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                <p className="text-lg font-bold text-brand-gray-500 mt-1">Nenhum horário livre.</p>
+            )}
+        </div>
+
+        <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-6 border border-brand-gray-200 dark:border-brand-gray-700">
+            <p className="text-sm font-medium text-brand-gray-600 dark:text-brand-gray-400">Ocupação do Dia</p>
+            <p className="text-3xl font-bold text-brand-gray-900 dark:text-white mt-1">{analyticsData.ocupacaoHoje.toFixed(0)}%</p>
+            <div className="w-full bg-brand-gray-200 rounded-full h-2.5 dark:bg-brand-gray-700 mt-2">
+                <div className="bg-green-500 h-2.5 rounded-full" style={{ width: `${analyticsData.ocupacaoHoje}%` }}></div>
+            </div>
+        </div>
+
+        <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-6 border border-brand-gray-200 dark:border-brand-gray-700 flex justify-around items-center">
+            <MiniStat icon={Users} label="Novos Clientes" value={analyticsData.novosClientes} color="purple" />
+            <div className="h-16 w-px bg-brand-gray-200 dark:bg-brand-gray-700"></div>
+            <MiniStat icon={GraduationCap} label="Novos Alunos" value={analyticsData.novosAlunos} color="purple" />
+        </div>
+
+        <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-6 border border-brand-gray-200 dark:border-brand-gray-700 flex justify-around items-center">
+            <MiniStat icon={DollarSign} label="Receita Hoje" value={analyticsData.receitaHoje.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} color="yellow" />
+            <div className="h-16 w-px bg-brand-gray-200 dark:bg-brand-gray-700"></div>
+            <MiniStat icon={Calendar} label="Reservas Hoje" value={analyticsData.reservasHoje} color="yellow" />
+        </div>
       </div>
       
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -215,12 +316,29 @@ const AnalyticsDashboard: React.FC = () => {
           <RecentActivityFeed activities={recentActivities} />
         </div>
         <div className="space-y-8">
-          <InsightsWidget insights={insights} />
+          <InsightsWidget />
           <TopCourtsWidget quadras={quadras} />
         </div>
       </div>
     </div>
   );
+};
+
+const MiniStat: React.FC<{ icon: React.ElementType, label: string, value: string | number, color: 'blue' | 'green' | 'yellow' | 'red' | 'purple' }> = ({ icon: Icon, label, value, color }) => {
+    const colors = {
+      blue: 'text-blue-500',
+      green: 'text-green-500',
+      yellow: 'text-yellow-500',
+      red: 'text-red-500',
+      purple: 'text-purple-500',
+    };
+    return (
+      <div className="text-center flex-1">
+        <Icon className={`h-6 w-6 mx-auto mb-2 ${colors[color]}`} />
+        <p className="text-2xl font-bold text-brand-gray-900 dark:text-white">{value}</p>
+        <p className="text-sm font-medium text-brand-gray-600 dark:text-brand-gray-400">{label}</p>
+      </div>
+    );
 };
 
 const QuickActionButton: React.FC<{ icon: React.ElementType, label: string, onClick: () => void }> = ({ icon: Icon, label, onClick }) => (
@@ -230,58 +348,107 @@ const QuickActionButton: React.FC<{ icon: React.ElementType, label: string, onCl
   </Button>
 );
 
-const TodaysAgenda: React.FC<{ reservations: Reserva[], quadras: Quadra[], allReservas: Reserva[], arenaName: string }> = ({ reservations, quadras, allReservas, arenaName }) => (
-  <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-6 border border-brand-gray-200 dark:border-brand-gray-700">
-    <h3 className="font-bold text-xl text-brand-gray-900 dark:text-white mb-4">Agenda do Dia</h3>
-    <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
-      {reservations.length > 0 ? reservations.map(r => {
-        const quadra = quadras.find(q => q.id === r.quadra_id);
-        const clientReservations = allReservas.filter(res => res.clientName === r.clientName && res.status !== 'cancelada').length;
-        
-        return (
-          <div key={r.id} className="flex items-start gap-4 p-3 bg-brand-gray-50 dark:bg-brand-gray-700/50 rounded-lg">
-            <div className="flex flex-col items-center justify-center bg-brand-blue-100 dark:bg-brand-blue-900/50 text-brand-blue-600 dark:text-brand-blue-300 rounded-lg p-2 w-20 text-center">
-              <span className="font-bold text-lg">{r.start_time.slice(0, 5)}</span>
-              <span className="text-xs">às {r.end_time.slice(0, 5)}</span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-brand-gray-800 dark:text-brand-gray-200 truncate">{r.clientName}</p>
-              <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400 truncate">{quadra?.name || 'Quadra'}</p>
-              <div className="flex items-center flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-brand-gray-500 dark:text-brand-gray-400">
-                {r.clientPhone && (
-                    <span className="flex items-center">
-                        <Phone className="h-3 w-3 mr-1" />
-                        {r.clientPhone}
-                    </span>
-                )}
-                <span className="flex items-center">
-                    <Bookmark className="h-3 w-3 mr-1" />
-                    {clientReservations} reserva(s)
-                </span>
+const TodaysAgenda: React.FC<{ reservations: Reserva[], quadras: Quadra[], allReservas: Reserva[], arenaName: string }> = ({ reservations, quadras, allReservas, arenaName }) => {
+  return (
+    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-6 border border-brand-gray-200 dark:border-brand-gray-700">
+      <h3 className="font-bold text-xl text-brand-gray-900 dark:text-white mb-4">Agenda do Dia</h3>
+      <div className="space-y-4 max-h-96 overflow-y-auto pr-2">
+        {reservations.length > 0 ? reservations.map(r => {
+          const quadra = quadras.find(q => q.id === r.quadra_id);
+          const clientReservations = allReservas.filter(res => res.clientName === r.clientName && res.status !== 'cancelada').length;
+          const typeDetails = getReservationTypeDetails(r.type, r.isRecurring);
+          
+          let durationHours = 0;
+          if (r.start_time && r.end_time) {
+              try {
+                  const startTime = parse(r.start_time, 'HH:mm', new Date());
+                  let endTime = parse(r.end_time, 'HH:mm', new Date());
+                  if (!isNaN(startTime.getTime()) && !isNaN(endTime.getTime())) {
+                      if (endTime <= startTime) {
+                          endTime = addDays(endTime, 1);
+                      }
+                      const diffMinutes = differenceInMinutes(endTime, startTime);
+                      durationHours = diffMinutes / 60;
+                  }
+              } catch (e) { /* silent */ }
+          }
+
+          const rentedItemsTitle = r.rented_items && r.rented_items.length > 0 
+            ? `Itens: ${r.rented_items.map(i => `${i.quantity}x ${i.name}`).join(', ')}` 
+            : undefined;
+
+          return (
+            <div key={r.id} className="flex items-start gap-4 p-3 bg-brand-gray-50 dark:bg-brand-gray-700/50 rounded-lg">
+              <div className="flex flex-col items-center justify-center rounded-lg p-2 w-20 text-center bg-brand-blue-500 text-white flex-shrink-0">
+                <span className="font-bold text-lg">{r.start_time.slice(0, 5)}</span>
+                <span className="text-xs">às {r.end_time.slice(0, 5)}</span>
               </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-semibold text-brand-gray-800 dark:text-brand-gray-200 truncate">
+                  {r.clientName}
+                </p>
+                <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400 truncate">{quadra?.name || arenaName} ({typeDetails.label})</p>
+                
+                <div className="flex items-center flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-brand-gray-500 dark:text-brand-gray-400">
+                  {r.clientPhone && (
+                      <span className="flex items-center">
+                          <Phone className="h-3 w-3 mr-1" />
+                          {r.clientPhone}
+                      </span>
+                  )}
+                  <span className="flex items-center">
+                      <Bookmark className="h-3 w-3 mr-1" />
+                      {clientReservations} reserva(s)
+                  </span>
+                </div>
+
+                <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mt-2 text-sm">
+                  <span className="font-semibold text-brand-gray-700 dark:text-brand-gray-300 flex items-center">
+                      {(r.total_price || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  </span>
+                  
+                  {durationHours > 0 && (
+                    <>
+                      <span className="text-brand-gray-300 dark:text-brand-gray-600">|</span>
+                      <span className="flex items-center text-brand-gray-500 dark:text-brand-gray-400 text-xs">
+                          <Clock className="h-3 w-3 mr-1" />
+                          {durationHours.toFixed(1).replace('.', ',')}h
+                      </span>
+                    </>
+                  )}
+
+                  {r.credit_used && r.credit_used > 0 && (
+                    <CreditCard className="h-4 w-4 text-blue-500 ml-2" title={`Pago com ${r.credit_used.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de crédito`} />
+                  )}
+                  
+                  {rentedItemsTitle && (
+                    <ShoppingBag className="h-4 w-4 text-purple-500 ml-2" title={rentedItemsTitle} />
+                  )}
+                </div>
+              </div>
+               {r.clientPhone && (
+                  <a
+                      href={`https://wa.me/55${r.clientPhone.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${r.clientName}! Lembrete da sua reserva na ${arenaName}, quadra ${quadra?.name}, hoje das ${r.start_time.slice(0, 5)} às ${r.end_time.slice(0, 5)}.`)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-2 rounded-full text-green-500 bg-green-100 dark:bg-green-900/50 hover:bg-green-200 dark:hover:bg-green-900 self-center"
+                      title="Enviar lembrete no WhatsApp"
+                  >
+                      <MessageCircle className="h-5 w-5" />
+                  </a>
+              )}
             </div>
-             {r.clientPhone && (
-                <a
-                    href={`https://wa.me/55${r.clientPhone.replace(/\D/g, '')}?text=${encodeURIComponent(`Olá ${r.clientName}! Lembrete da sua reserva na ${arenaName}, quadra ${quadra?.name}, hoje das ${r.start_time.slice(0, 5)} às ${r.end_time.slice(0, 5)}.`)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="p-2 rounded-full text-green-500 bg-green-100 dark:bg-green-900/50 hover:bg-green-200 dark:hover:bg-green-900 self-center"
-                    title="Enviar lembrete no WhatsApp"
-                >
-                    <MessageCircle className="h-5 w-5" />
-                </a>
-            )}
+          );
+        }) : (
+          <div className="text-center py-10">
+            <Calendar className="h-10 w-10 mx-auto text-brand-gray-400 mb-2" />
+            <p className="text-brand-gray-500">Nenhuma reserva para hoje.</p>
           </div>
-        );
-      }) : (
-        <div className="text-center py-10">
-          <Calendar className="h-10 w-10 mx-auto text-brand-gray-400 mb-2" />
-          <p className="text-brand-gray-500">Nenhuma reserva para hoje.</p>
-        </div>
-      )}
-    </div>
-  </motion.div>
-);
+        )}
+      </div>
+    </motion.div>
+  );
+};
 
 const RecentActivityFeed: React.FC<{ activities: any[] }> = ({ activities }) => {
     return (
@@ -294,8 +461,9 @@ const RecentActivityFeed: React.FC<{ activities: any[] }> = ({ activities }) => 
                             <act.icon className="h-5 w-5" />
                         </div>
                         <div className="flex-1">
-                            <p className="text-sm text-brand-gray-800 dark:text-brand-gray-200">{act.text}</p>
-                            <p className="text-xs text-brand-gray-500 dark:text-brand-gray-400">
+                            <p className="text-sm font-semibold text-brand-gray-800 dark:text-brand-gray-200">{act.text}</p>
+                            <p className="text-sm text-brand-gray-600 dark:text-brand-gray-400">{act.details}</p>
+                            <p className="text-xs text-brand-gray-500 dark:text-brand-gray-500 mt-1">
                                 {formatDistanceToNow(new Date(act.time), { locale: ptBR, addSuffix: true })}
                             </p>
                         </div>
@@ -310,24 +478,11 @@ const RecentActivityFeed: React.FC<{ activities: any[] }> = ({ activities }) => 
     );
 };
 
-const InsightsWidget: React.FC<{ insights: any[] }> = ({ insights }) => {
+const InsightsWidget: React.FC = () => {
     return (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="bg-gradient-to-br from-brand-blue-500 to-brand-blue-700 dark:from-brand-blue-600 dark:to-brand-blue-800 rounded-xl shadow-lg p-6 text-white">
             <h3 className="font-bold text-xl mb-4 flex items-center"><Sparkles className="h-5 w-5 mr-2 text-yellow-300" /> Insights & Oportunidades</h3>
-            {insights.length > 0 ? (
-                <ul className="space-y-4">
-                    {insights.map(ins => (
-                        <li key={ins.id} className="flex items-start gap-3">
-                            <div className="p-1 rounded-full bg-white/20">
-                            <ins.icon className={`h-5 w-5 ${ins.color}`} />
-                            </div>
-                            <p className="text-sm text-blue-100">{ins.text}</p>
-                        </li>
-                    ))}
-                </ul>
-            ) : (
-                <p className="text-sm text-blue-100">Nenhum insight disponível no momento. Continue usando o sistema para gerar análises.</p>
-            )}
+            <p className="text-sm text-blue-100">Nenhum insight disponível no momento. Continue usando o sistema para gerar análises.</p>
         </motion.div>
     );
 };

@@ -167,7 +167,7 @@ export interface Reservation {
   type: ReservationType;
   total_price?: number;
   credit_used?: number;
-  payment_status?: 'pago' | 'pendente';
+  payment_status?: 'pago' | 'pendente' | 'parcialmente_pago';
   sport_type?: string;
   notes?: string;
   isRecurring?: boolean;
@@ -175,6 +175,13 @@ export interface Reservation {
   recurringEndDate?: string | null;
   masterId?: string;
   created_at: string;
+  updated_at?: string;
+  rented_items?: {
+    itemId: string;
+    name: string;
+    quantity: number;
+    price: number;
+  }[] | null;
 }
 
 export interface CreditTransaction {
@@ -187,6 +194,15 @@ export interface CreditTransaction {
   related_reservation_id?: string;
   created_by?: string;
   created_at?: string;
+}
+
+export interface RentalItem {
+  id: string;
+  arena_id: string;
+  name: string;
+  price: number;
+  stock: number;
+  created_at: string;
 }
 
 export type TorneioTipo = 'torneio' | 'campeonato' | 'clinica' | 'evento_especial';

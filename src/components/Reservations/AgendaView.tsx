@@ -3,7 +3,7 @@ import { motion } from 'framer-motion';
 import { format, isSameDay } from 'date-fns';
 import { Quadra, Reserva } from '../../types';
 import { getReservationTypeDetails } from '../../utils/reservationUtils';
-import { Repeat, Plus } from 'lucide-react';
+import { Plus, DollarSign, AlertCircle, CheckCircle, CreditCard, ShoppingBag } from 'lucide-react';
 import { parseDateStringAsLocal } from '../../utils/dateUtils';
 
 interface AgendaViewProps {
@@ -33,6 +33,19 @@ const AgendaView: React.FC<AgendaViewProps> = ({ quadras, reservas, selectedDate
   }, []);
 
   const reservationsForDay = reservas.filter(r => isSameDay(parseDateStringAsLocal(r.date), selectedDate) && r.status !== 'cancelada');
+
+  const getPaymentStatusIcon = (status?: 'pago' | 'pendente' | 'parcialmente_pago') => {
+    switch (status) {
+      case 'pago':
+        return <CheckCircle className="h-3 w-3 text-white/80" title="Pago" />;
+      case 'parcialmente_pago':
+        return <DollarSign className="h-3 w-3 text-white/80" title="Parcialmente Pago" />;
+      case 'pendente':
+        return <AlertCircle className="h-3 w-3 text-white/80" title="Pendente" />;
+      default:
+        return null;
+    }
+  };
 
   return (
     <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg border border-brand-gray-200 dark:border-brand-gray-700 overflow-hidden">
@@ -97,14 +110,18 @@ const AgendaView: React.FC<AgendaViewProps> = ({ quadras, reservas, selectedDate
 
                   if (height <= 0) return null;
 
-                  const typeDetails = getReservationTypeDetails(reservation.type);
+                  const typeDetails = getReservationTypeDetails(reservation.type, reservation.isRecurring);
                   const Icon = typeDetails.icon;
+
+                  const rentedItemsTitle = reservation.rented_items && reservation.rented_items.length > 0 
+                    ? `Itens: ${reservation.rented_items.map(i => `${i.quantity}x ${i.name}`).join(', ')}` 
+                    : undefined;
 
                   return (
                     <motion.div
                       key={reservation.id}
                       onClick={(e) => { e.stopPropagation(); onReservationClick(reservation); }}
-                      className={`absolute w-[calc(100%-4px)] m-0.5 p-2 rounded-lg text-white text-xs cursor-pointer shadow-lg z-10 flex flex-col overflow-hidden ${typeDetails.bgColor} bg-opacity-90 border-l-4 ${typeDetails.borderColor}`}
+                      className={`absolute w-[calc(100%-4px)] m-0.5 p-2 rounded-lg text-white text-xs cursor-pointer shadow-lg z-10 flex flex-col justify-between overflow-hidden ${typeDetails.bgColor} bg-opacity-90 border-l-4 ${typeDetails.borderColor}`}
                       style={{
                           top: `${top}rem`,
                           height: `calc(${height}rem - 4px)`,
@@ -114,13 +131,25 @@ const AgendaView: React.FC<AgendaViewProps> = ({ quadras, reservas, selectedDate
                       animate={{ opacity: 1, scale: 1 }}
                       layout
                     >
-                      <p className="font-bold flex items-center flex-shrink-0">
-                        <Icon className="h-3 w-3 mr-1 flex-shrink-0" />
-                        {reservation.isRecurring && <Repeat className="h-3 w-3 mr-1 flex-shrink-0" />}
-                        <span className="truncate">{reservation.clientName || 'Cliente'}</span>
-                      </p>
-                      <p className="flex-shrink-0">{reservation.start_time.slice(0, 5)} - {reservation.end_time.slice(0, 5)}</p>
-                      {reservation.notes && <p className="text-xs opacity-80 mt-1 italic truncate">{reservation.notes}</p>}
+                      <div>
+                        <p className="font-bold flex items-center flex-shrink-0">
+                          <Icon className="h-3 w-3 mr-1 flex-shrink-0" />
+                          <span className="truncate">{reservation.clientName || 'Cliente'}</span>
+                        </p>
+                        <p className="text-xs opacity-80">{reservation.start_time.slice(0, 5)} - {reservation.end_time.slice(0, 5)}</p>
+                      </div>
+                      <div className="flex items-center justify-between mt-1">
+                        <span className="font-semibold opacity-90 flex items-center gap-1">
+                          {reservation.total_price ? reservation.total_price.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'}) : ''}
+                          {reservation.credit_used && reservation.credit_used > 0 && (
+                            <CreditCard className="h-3 w-3 text-white/80" title={`Pago com ${reservation.credit_used.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de crédito`} />
+                          )}
+                          {rentedItemsTitle && (
+                            <ShoppingBag className="h-3 w-3 text-white/80" title={rentedItemsTitle} />
+                          )}
+                        </span>
+                        {getPaymentStatusIcon(reservation.payment_status)}
+                      </div>
                     </motion.div>
                   );
                 })

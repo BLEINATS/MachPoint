@@ -232,11 +232,11 @@ const ProfileTab: React.FC<ProfileTabProps> = ({ formData, setFormData }) => {
       <Section title="Perfil da Arena" icon={Building}>
         <div className="flex flex-col sm:flex-row items-center gap-6 pb-6 border-b border-brand-gray-200 dark:border-brand-gray-700">
           <div className="relative group">
-            <div className="w-24 h-24 rounded-full bg-brand-gray-100 dark:bg-brand-gray-700 flex items-center justify-center overflow-hidden border-2 border-brand-gray-200 dark:border-brand-gray-600">
+            <div className="w-24 h-24 rounded-full bg-white flex items-center justify-center overflow-hidden shadow-md">
                 {isUploading ? (
                     <Loader2 className="w-10 h-10 text-brand-gray-400 animate-spin" />
                 ) : formData.logo_url ? (
-                    <img src={formData.logo_url} alt="Logo da Arena" className="w-full h-full object-cover" />
+                    <img src={formData.logo_url} alt="Logo da Arena" className="w-full h-full object-contain" />
                 ) : (
                     <ImageIcon className="w-10 h-10 text-brand-gray-400" />
                 )}

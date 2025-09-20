@@ -1,17 +1,29 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { 
   LogOut, Sun, Moon, Settings, Bookmark, LayoutGrid, 
   User as UserIcon, LayoutDashboard, GraduationCap, Trophy, 
-  PartyPopper, Calendar 
+  PartyPopper, Calendar, ChevronDown
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 
 const Header: React.FC = () => {
   const { user, arena, profile, signOut } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
+        setIsProfileMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   return (
     <header className="bg-white dark:bg-brand-gray-800 shadow-sm border-b border-brand-gray-200 dark:border-brand-gray-700 sticky top-0 z-40">
@@ -27,7 +39,9 @@ const Header: React.FC = () => {
             {profile?.role === 'admin_arena' && arena && (
               <div className="ml-4 pl-4 border-l border-brand-gray-300 dark:border-brand-gray-600 hidden sm:flex items-center gap-3">
                 {arena.logo_url ? (
-                  <img src={arena.logo_url} alt={`Logo de ${arena.name}`} className="h-8 w-8 rounded-full object-cover" />
+                  <div className="h-8 w-8 rounded-full bg-white flex items-center justify-center overflow-hidden border border-brand-gray-200 dark:border-brand-gray-700">
+                    <img src={arena.logo_url} alt={`Logo de ${arena.name}`} className="h-full w-full object-contain" />
+                  </div>
                 ) : (
                   <div className="h-8 w-8 rounded-full bg-brand-gray-200 dark:bg-brand-gray-700 flex items-center justify-center text-brand-gray-500 font-bold">
                     {arena.name ? arena.name.charAt(0).toUpperCase() : '?'}
@@ -49,7 +63,7 @@ const Header: React.FC = () => {
                 <Link to="/reservas" title="Reservas" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
                   <Bookmark className="h-5 w-5" />
                 </Link>
-                <Link to="/alunos" title="Alunos e Turmas" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
+                <Link to="/alunos" title="Clientes e Alunos" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
                   <GraduationCap className="h-5 w-5" />
                 </Link>
                 <Link to="/torneios" title="Torneios" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
@@ -63,11 +77,40 @@ const Header: React.FC = () => {
                 </Link>
               </>
             ) : (
-               <>
-                <Link to="/dashboard" title="Meu Dashboard" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
-                  <LayoutDashboard className="h-5 w-5" />
-                </Link>
-               </>
+               <div className="relative" ref={profileMenuRef}>
+                  <button onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)} className="flex items-center gap-2 p-2 rounded-full hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
+                    <div className="w-8 h-8 rounded-full bg-brand-gray-200 dark:bg-brand-gray-700 flex items-center justify-center overflow-hidden">
+                      {profile?.avatar_url ? (
+                        <img src={profile.avatar_url} alt="Avatar" className="w-full h-full object-cover" />
+                      ) : (
+                        <UserIcon className="h-5 w-5 text-brand-gray-500" />
+                      )}
+                    </div>
+                    <ChevronDown className="h-4 w-4 text-brand-gray-500" />
+                  </button>
+                  <AnimatePresence>
+                    {isProfileMenuOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -10 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -10 }}
+                        className="absolute right-0 mt-2 w-48 bg-white dark:bg-brand-gray-800 rounded-md shadow-lg ring-1 ring-black ring-opacity-5 z-50"
+                      >
+                        <div className="py-1">
+                          <Link to="/dashboard" className="flex items-center px-4 py-2 text-sm text-brand-gray-700 dark:text-brand-gray-200 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
+                            <LayoutDashboard className="h-4 w-4 mr-2" /> Meu Painel
+                          </Link>
+                          <Link to="/perfil" className="flex items-center px-4 py-2 text-sm text-brand-gray-700 dark:text-brand-gray-200 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
+                            <UserIcon className="h-4 w-4 mr-2" /> Editar Perfil
+                          </Link>
+                          <button onClick={signOut} className="w-full text-left flex items-center px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20">
+                            <LogOut className="h-4 w-4 mr-2" /> Sair
+                          </button>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+               </div>
             )}
 
             <motion.button
@@ -79,7 +122,7 @@ const Header: React.FC = () => {
               {theme === 'light' ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
             </motion.button>
             
-            {user && (
+            {user && profile?.role === 'admin_arena' && (
               <button
                 onClick={signOut}
                 className="flex items-center text-brand-gray-500 dark:text-brand-gray-400 hover:text-brand-gray-700 dark:hover:text-white transition-colors p-2 rounded-full hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700"

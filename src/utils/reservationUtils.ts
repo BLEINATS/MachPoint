@@ -17,8 +17,12 @@ export const getReservationTypeDetails = (type: ReservationType, isRecurring?: b
   if (isRecurring) {
     return {
       ...details,
-      label: details.label + ' (Fixo)',
+      label: `${details.label} (Fixo)`,
       icon: Repeat,
+      bgColor: 'bg-slate-500',
+      borderColor: 'border-slate-600',
+      publicBgColor: 'bg-slate-100 dark:bg-slate-900/50',
+      publicTextColor: 'text-slate-700 dark:text-slate-400',
     };
   }
 

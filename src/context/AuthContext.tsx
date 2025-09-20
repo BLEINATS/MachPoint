@@ -1,26 +1,21 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabaseClient';
-import { AuthState, User, Profile, Arena, ArenaMembership } from '../types';
+import { AuthState, User, Profile, Arena, ArenaMembership, Aluno } from '../types';
 import { useToast } from './ToastContext';
-
-// Mock de todas as arenas disponíveis no sistema
-const ALL_ARENAS_MOCK: Arena[] = [
-  { id: 'arena_1', owner_id: '', name: 'Arena Beira Rio', slug: 'arena-beira-rio', city: 'Porto Alegre', state: 'RS', main_image: 'https://img-wrapper.vercel.app/image?url=https://images.unsplash.com/photo-1589551290986-c5a89352c3e4?q=80&w=1974&auto=format&fit=crop', created_at: new Date().toISOString() },
-  { id: 'arena_2', owner_id: '', name: 'Arena Ipanema Sports', slug: 'arena-ipanema-sports', city: 'Rio de Janeiro', state: 'RJ', main_image: 'https://img-wrapper.vercel.app/image?url=https://images.unsplash.com/photo-1620952796191-3c82a2312c6c?q=80&w=2070&auto=format&fit=crop', created_at: new Date().toISOString() },
-  { id: 'arena_3', owner_id: '', name: 'SP Beach Club', slug: 'sp-beach-club', city: 'São Paulo', state: 'SP', main_image: 'https://img-wrapper.vercel.app/image?url=https://images.unsplash.com/photo-1594420314183-78d3c59a405d?q=80&w=2070&auto=format&fit=crop', created_at: new Date().toISOString() },
-];
 
 interface AuthContextType extends AuthState {
   allArenas: Arena[];
+  alunoProfileForSelectedArena: Aluno | null;
   signUp: (email: string, password: string, name?: string, role?: 'cliente' | 'admin_arena') => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => void;
   updateProfile: (updatedProfile: Partial<Profile>) => Promise<void>;
   updateArena: (updatedArena: Partial<Arena>) => Promise<void>;
-  followArena: (arenaId: string) => void;
-  unfollowArena: (arenaId: string) => void;
+  followArena: (arenaId: string) => Promise<void>;
+  unfollowArena: (arenaId: string) => Promise<void>;
   switchArenaContext: (arena: Arena | null) => void;
+  refreshAlunoProfile: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -36,13 +31,33 @@ export const useAuth = () => {
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [arena, setArena] = useState<Arena | null>(null);
+  const [arena, setArena] = useState<Arena | null>(null); // Arena do admin
   const [memberships, setMemberships] = useState<ArenaMembership[]>([]);
+  const [allArenas, setAllArenas] = useState<Arena[]>([]);
   const [selectedArenaContext, setSelectedArenaContext] = useState<Arena | null>(null);
+  const [alunoProfileForSelectedArena, setAlunoProfileForSelectedArena] = useState<Aluno | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const { addToast } = useToast();
 
-  // Efeito 1: Gerencia a sessão de autenticação
+  const fetchAlunoProfile = useCallback(async (profileId: string, arenaId: string) => {
+    const { data: alunoData, error: alunoError } = await supabase
+      .from('alunos')
+      .select('*')
+      .eq('profile_id', profileId)
+      .eq('arena_id', arenaId)
+      .single();
+    if (alunoError && alunoError.code !== 'PGRST116') {
+      console.error("Erro ao buscar perfil de aluno:", alunoError);
+    }
+    setAlunoProfileForSelectedArena(alunoData || null);
+  }, []);
+
+  const refreshAlunoProfile = useCallback(() => {
+    if (profile?.id && selectedArenaContext?.id) {
+      fetchAlunoProfile(profile.id, selectedArenaContext.id);
+    }
+  }, [profile, selectedArenaContext, fetchAlunoProfile]);
+
   useEffect(() => {
     supabase.auth.getSession()
       .then(({ data: { session } }) => {
@@ -51,8 +66,6 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       .catch((error) => {
         console.error("Erro ao recuperar a sessão:", error);
         setSession(null);
-      })
-      .finally(() => {
         setIsLoading(false);
       });
 
@@ -61,6 +74,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       if (!session) {
         setProfile(null);
         setArena(null);
+        setMemberships([]);
+        setSelectedArenaContext(null);
+        setAlunoProfileForSelectedArena(null);
         setIsLoading(false);
       }
     });
@@ -68,61 +84,83 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     return () => subscription.unsubscribe();
   }, []);
 
-  // Efeito 2: Busca dados do perfil e da arena quando a sessão muda
   useEffect(() => {
     if (!session?.user) {
       setIsLoading(false);
       return;
     }
 
-    const fetchUserData = async () => {
+    const fetchAllData = async () => {
       setIsLoading(true);
       try {
-        // Passo 1: Buscar o perfil do usuário
+        const { data: allArenasData, error: allArenasError } = await supabase
+          .from('arenas')
+          .select('*');
+        if (allArenasError) throw allArenasError;
+        setAllArenas(allArenasData || []);
+
         const { data: profileData, error: profileError } = await supabase
           .from('profiles')
           .select('*')
           .eq('id', session.user.id)
           .single();
-
-        if (profileError && profileError.code !== 'PGRST116') { // Ignora o erro "nenhuma linha encontrada"
-          throw profileError;
-        }
+        if (profileError && profileError.code !== 'PGRST116') throw profileError;
+        setProfile(profileData);
 
         if (profileData) {
-          setProfile(profileData);
-
-          // Passo 2: Se for um admin, buscar a arena correspondente
           if (profileData.role === 'admin_arena') {
-            const { data: arenaData, error: arenaError } = await supabase
+            const { data: adminArenaData, error: adminArenaError } = await supabase
               .from('arenas')
               .select('*')
               .eq('owner_id', session.user.id)
               .single();
-
-            if (arenaError && arenaError.code !== 'PGRST116') {
-              throw arenaError;
-            }
-            setArena(arenaData || null);
+            if (adminArenaError && adminArenaError.code !== 'PGRST116') throw adminArenaError;
+            setArena(adminArenaData || null);
+            setSelectedArenaContext(adminArenaData || null);
           } else {
-            setArena(null); // Garante que a arena seja nula para não-admins
+            setArena(null);
+            const { data: membershipsData, error: membershipsError } = await supabase
+              .from('arena_memberships')
+              .select('*')
+              .eq('profile_id', session.user.id);
+            if (membershipsError) throw membershipsError;
+            setMemberships(membershipsData || []);
+            
+            const lastSelectedArenaId = localStorage.getItem('selectedArenaId');
+            const lastSelectedArena = allArenasData.find(a => a.id === lastSelectedArenaId);
+            const firstMembershipArena = membershipsData && membershipsData.length > 0
+              ? allArenasData.find(a => a.id === membershipsData[0].arena_id)
+              : null;
+              
+            let currentArena: Arena | null = null;
+            if (lastSelectedArena && membershipsData?.some(m => m.arena_id === lastSelectedArena.id)) {
+              currentArena = lastSelectedArena;
+            } else if (firstMembershipArena) {
+              currentArena = firstMembershipArena;
+              localStorage.setItem('selectedArenaId', firstMembershipArena.id);
+            }
+            setSelectedArenaContext(currentArena);
+            if (currentArena) {
+              fetchAlunoProfile(profileData.id, currentArena.id);
+            }
           }
         } else {
           setProfile(null);
           setArena(null);
+          setMemberships([]);
+          setSelectedArenaContext(null);
+          setAlunoProfileForSelectedArena(null);
         }
       } catch (error) {
-        console.error("Erro ao buscar dados do usuário:", error);
-        setProfile(null);
-        setArena(null);
-        addToast({ message: 'Erro ao carregar dados do usuário.', type: 'error' });
+        console.error("Erro ao buscar dados do usuário e arenas:", error);
+        addToast({ message: 'Erro ao carregar seus dados.', type: 'error' });
       } finally {
         setIsLoading(false);
       }
     };
 
-    fetchUserData();
-  }, [session, addToast]);
+    fetchAllData();
+  }, [session, addToast, fetchAlunoProfile]);
 
   const user: User | null = session ? {
     id: session.user.id,
@@ -156,6 +194,10 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     setProfile(null);
     setSession(null);
     setArena(null);
+    setMemberships([]);
+    setSelectedArenaContext(null);
+    setAlunoProfileForSelectedArena(null);
+    localStorage.removeItem('selectedArenaId');
   };
 
   const updateProfile = async (updatedProfile: Partial<Profile>) => {
@@ -171,60 +213,83 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const updateArena = async (updatedArenaData: Partial<Arena>) => {
-    // 1. Get the current arena ID from the context. If it's not there, we can't update.
     if (!arena?.id) {
       addToast({ message: 'ID da arena não encontrado. Não é possível salvar.', type: 'error' });
       return;
     }
-  
-    // 2. Create a clean object for the update, starting from the form data.
     const updateData = { ...updatedArenaData };
-  
-    // 3. Remove fields that should never be updated manually.
-    //    This prevents errors and protects data integrity.
     delete (updateData as any).id;
     delete (updateData as any).owner_id;
     delete (updateData as any).created_at;
-    delete (updateData as any).main_image; // Deprecated field
-  
-    // 4. Perform the update operation.
+    delete (updateData as any).main_image;
     const { data, error } = await supabase
       .from('arenas')
       .update(updateData)
-      .eq('id', arena.id) // Target the correct arena using its ID.
+      .eq('id', arena.id)
       .select()
       .single();
-  
-    // 5. Handle the result.
     if (error) {
       console.error("Erro ao atualizar a arena:", error);
       addToast({ message: `Falha ao salvar: ${error.message}`, type: 'error' });
-      throw error; // Re-throw the error so the UI can know it failed.
+      throw error;
     }
-  
-    // 6. Update the local state and notify the user.
     setArena(data);
     addToast({ message: 'Perfil da arena salvo com sucesso!', type: 'success' });
   };
 
-  const followArena = (arenaId: string) => {
+  const followArena = async (arenaId: string) => {
     if (!profile) return;
-    const newMembership: ArenaMembership = { profile_id: profile.id, arena_id: arenaId };
-    setMemberships(prev => [...prev, newMembership]);
+    const { error } = await supabase
+      .from('arena_memberships')
+      .insert({ profile_id: profile.id, arena_id: arenaId });
+      
+    if (error && error.code !== '23505') { // Ignore duplicate key error
+      addToast({ message: `Erro ao seguir arena: ${error.message}`, type: 'error' });
+      return;
+    }
+    
+    setMemberships(prev => {
+      if (prev.some(m => m.arena_id === arenaId)) return prev;
+      return [...prev, { profile_id: profile.id, arena_id: arenaId }];
+    });
+    addToast({ message: 'Arena seguida com sucesso!', type: 'success' });
   };
 
-  const unfollowArena = (arenaId: string) => {
+  const unfollowArena = async (arenaId: string) => {
+    if (!profile) return;
+    const { error } = await supabase
+      .from('arena_memberships')
+      .delete()
+      .match({ profile_id: profile.id, arena_id: arenaId });
+    if (error) {
+      addToast({ message: `Erro ao deixar de seguir arena: ${error.message}`, type: 'error' });
+      return;
+    }
     setMemberships(prev => prev.filter(m => m.arena_id !== arenaId));
+    if (selectedArenaContext?.id === arenaId) {
+      setSelectedArenaContext(null);
+      localStorage.removeItem('selectedArenaId');
+    }
+    addToast({ message: 'Você deixou de seguir a arena.', type: 'info' });
   };
 
   const switchArenaContext = (arena: Arena | null) => {
     setSelectedArenaContext(arena);
+    if (arena) {
+      localStorage.setItem('selectedArenaId', arena.id);
+      if (profile) {
+        fetchAlunoProfile(profile.id, arena.id);
+      }
+    } else {
+      localStorage.removeItem('selectedArenaId');
+      setAlunoProfileForSelectedArena(null);
+    }
   };
   
   const authState: AuthState = { user, profile, arena, memberships, selectedArenaContext, isLoading };
 
   return (
-    <AuthContext.Provider value={{ ...authState, allArenas: ALL_ARENAS_MOCK, signUp, signIn, signOut, updateProfile, updateArena, followArena, unfollowArena, switchArenaContext }}>
+    <AuthContext.Provider value={{ ...authState, allArenas, alunoProfileForSelectedArena, signUp, signIn, signOut, updateProfile, updateArena, followArena, unfollowArena, switchArenaContext, refreshAlunoProfile }}>
       {children}
     </AuthContext.Provider>
   );

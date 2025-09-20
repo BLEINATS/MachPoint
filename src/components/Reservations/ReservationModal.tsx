@@ -1,14 +1,29 @@
+{/*
+  ====================================================================
+  || ATENÇÃO: CÓDIGO PROTEGIDO (BLINDADO) POR SOLICITAÇÃO DO USUÁRIO ||
+  ====================================================================
+  || Este arquivo contém a lógica crítica para o cálculo de preços, ||
+  || aplicação de descontos e utilização de créditos.              ||
+  ||                                                                ||
+  || NÃO FAÇA ALTERAÇÕES NESTA LÓGICA SEM CONFIRMAÇÃO EXPLÍCITA.    ||
+  || Antes de qualquer mudança, pergunte ao usuário:                ||
+  || "Você confirma que deseja alterar a lógica de crédito/preço?"  ||
+  ====================================================================
+*/}
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, Save, Calendar, Clock, User, Phone, Repeat, Tag, DollarSign, Info, AlertTriangle, CreditCard } from 'lucide-react';
-import { Aluno, Quadra, Reservation, PricingRule, DurationDiscount, ReservationType } from '../../types';
+import { X, Save, Calendar, Clock, User, Phone, Repeat, Tag, DollarSign, Info, AlertTriangle, CreditCard, ShoppingBag } from 'lucide-react';
+import { Aluno, Quadra, Reservation, PricingRule, DurationDiscount, ReservationType, RentalItem, Profile } from '../../types';
 import Button from '../Forms/Button';
 import Input from '../Forms/Input';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabaseClient';
 import { useToast } from '../../context/ToastContext';
-import { format, parse, getDay, addDays, addMinutes, isBefore } from 'date-fns';
+import { format, parse, getDay, addDays, addMinutes, isBefore, isAfter, startOfDay, endOfDay } from 'date-fns';
 import CreatableClientSelect from '../Forms/CreatableClientSelect';
+import { parseDateStringAsLocal } from '../../utils/dateUtils';
+import { maskPhone } from '../../utils/masks';
+import { expandRecurringReservations } from '../../utils/reservationUtils';
 
 interface ReservationModalProps {
   isOpen: boolean;
@@ -19,8 +34,12 @@ interface ReservationModalProps {
   newReservationSlot?: { quadraId: string, time: string, type?: ReservationType } | null;
   quadras: Quadra[];
   alunos: Aluno[];
+  allReservations: Reserva[];
   arenaId: string;
   selectedDate: Date;
+  isClientBooking?: boolean;
+  userProfile?: Profile | null;
+  clientProfile?: Aluno | null;
 }
 
 const ALL_SPORTS = ['Beach Tennis', 'Futevôlei', 'Vôlei de Praia', 'Tênis', 'Padel', 'Futebol Society', 'Outro'];
@@ -36,10 +55,11 @@ const timeToMinutes = (timeStr: string): number => {
   }
 };
 
-const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, onSave, onCancelReservation, reservation, newReservationSlot, quadras, alunos, arenaId, selectedDate }) => {
+const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, onSave, onCancelReservation, reservation, newReservationSlot, quadras, alunos, allReservations, arenaId, selectedDate, isClientBooking = false, userProfile, clientProfile }) => {
   const { addToast } = useToast();
   const [pricingRules, setPricingRules] = useState<PricingRule[]>([]);
   const [durationDiscounts, setDurationDiscounts] = useState<DurationDiscount[]>([]);
+  const [rentalItems, setRentalItems] = useState<RentalItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [customerType, setCustomerType] = useState<'Avulso' | 'Mensalista' | null>(null);
 
@@ -50,6 +70,8 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
   const [useCredit, setUseCredit] = useState(false);
   const [newlyAppliedCredit, setNewlyAppliedCredit] = useState(0);
   const [originalCreditUsed, setOriginalCreditUsed] = useState(0);
+  const [selectedItems, setSelectedItems] = useState<Record<string, number>>({});
+  const [operatingHoursWarning, setOperatingHoursWarning] = useState<string | null>(null);
 
   const [formData, setFormData] = useState({
     date: format(selectedDate, 'yyyy-MM-dd'),
@@ -66,35 +88,106 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
     credit_used: 0,
     isRecurring: false,
     recurringEndDate: format(addDays(new Date(), 30), 'yyyy-MM-dd'),
+    rented_items: [] as { itemId: string; name: string; quantity: number; price: number }[],
   });
 
   const isEditing = !!reservation;
 
   const selectedClient = useMemo(() => {
+    if (isClientBooking) return clientProfile;
     return alunos.find(a => a.id === formData.aluno_id || a.name === formData.clientName);
-  }, [formData.aluno_id, formData.clientName, alunos]);
+  }, [formData.aluno_id, formData.clientName, alunos, isClientBooking, clientProfile]);
 
   const availableCredit = useMemo(() => {
     return selectedClient?.credit_balance || 0;
   }, [selectedClient]);
+
+  const availableStock = useMemo(() => {
+    const stock: Record<string, number> = {};
+    rentalItems.forEach(item => { stock[item.id] = item.stock; });
+
+    if (!formData.date || !formData.start_time || !formData.end_time) {
+      return stock;
+    }
+
+    try {
+      const reservationBaseDate = parseDateStringAsLocal(formData.date);
+      
+      const reservationsOnDate = expandRecurringReservations(
+          allReservations, 
+          startOfDay(reservationBaseDate), 
+          endOfDay(reservationBaseDate), 
+          quadras
+      );
+
+      const currentReservationStart = parse(formData.start_time, 'HH:mm', reservationBaseDate);
+      let currentReservationEnd = parse(formData.end_time, 'HH:mm', reservationBaseDate);
+
+      if (formData.end_time === '00:00') {
+        currentReservationEnd = addDays(startOfDay(currentReservationStart), 1);
+      } else if (currentReservationEnd <= currentReservationStart) {
+        currentReservationEnd = addDays(currentReservationEnd, 1);
+      }
+      
+      if (isNaN(currentReservationStart.getTime()) || isNaN(currentReservationEnd.getTime())) {
+          return stock;
+      }
+
+      rentalItems.forEach(item => {
+        const bookedQuantity = reservationsOnDate
+          .filter(r => {
+            if (isEditing && (r.id === reservation?.id || (reservation?.id && r.masterId === reservation.id))) return false;
+            if (r.status !== 'confirmada') return false;
+
+            const existingStart = parse(r.start_time, 'HH:mm', reservationBaseDate);
+            let existingEnd = parse(r.end_time, 'HH:mm', reservationBaseDate);
+
+            if (r.end_time === '00:00') {
+                existingEnd = addDays(startOfDay(existingStart), 1);
+            } else if (existingEnd <= existingStart) {
+                existingEnd = addDays(existingEnd, 1);
+            }
+            
+            if (isNaN(existingStart.getTime()) || isNaN(existingEnd.getTime())) return false;
+
+            const overlaps = currentReservationStart < existingEnd && currentReservationEnd > existingStart;
+            return overlaps;
+          })
+          .flatMap(r => r.rented_items || [])
+          .filter(rented => rented.itemId === item.id)
+          .reduce((sum, rented) => sum + rented.quantity, 0);
+        
+        stock[item.id] = item.stock - bookedQuantity;
+      });
+
+      return stock;
+    } catch(e) {
+      console.error("Error calculating available stock:", e);
+      return stock;
+    }
+  }, [rentalItems, allReservations, quadras, reservation, isEditing, formData.date, formData.start_time, formData.end_time]);
+
 
   useEffect(() => {
     const fetchData = async () => {
       if (!isOpen || !arenaId) return;
       setIsLoading(true);
       try {
-        const [rulesRes, discountsRes] = await Promise.all([
+        const [rulesRes, discountsRes, itemsRes] = await Promise.all([
           supabase.from('pricing_rules').select('*').eq('arena_id', arenaId),
-          supabase.from('duration_discounts').select('*').eq('arena_id', arenaId)
+          supabase.from('duration_discounts').select('*').eq('arena_id', arenaId),
+          supabase.from('rental_items').select('*').eq('arena_id', arenaId)
         ]);
         if (rulesRes.error) throw rulesRes.error;
         if (discountsRes.error) throw discountsRes.error;
+        if (itemsRes.error) throw itemsRes.error;
 
         setPricingRules(rulesRes.data || []);
         setDurationDiscounts(discountsRes.data || []);
+        setRentalItems(itemsRes.data || []);
 
       } catch (error: any) {
-        addToast({ message: 'Erro ao carregar regras de preço e descontos.', type: 'error' });
+        addToast({ message: 'Erro ao carregar dados da reserva.', type: 'error' });
       } finally {
         setIsLoading(false);
       }
@@ -121,8 +214,16 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
           credit_used: creditAlreadyUsed,
           isRecurring: reservation.isRecurring || false,
           recurringEndDate: reservation.recurringEndDate || format(addDays(new Date(), 30), 'yyyy-MM-dd'),
+          rented_items: reservation.rented_items || [],
         });
         setOriginalCreditUsed(creditAlreadyUsed);
+        const initialSelectedItems: Record<string, number> = {};
+        if (reservation.rented_items) {
+          for (const item of reservation.rented_items) {
+            initialSelectedItems[item.itemId] = item.quantity;
+          }
+        }
+        setSelectedItems(initialSelectedItems);
       } else if (newReservationSlot) {
         const startTime = newReservationSlot.time || '09:00';
         const quadraId = newReservationSlot.quadraId || (quadras.length > 0 ? quadras[0].id : '');
@@ -131,6 +232,21 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
         const startTimeDate = parse(startTime, 'HH:mm', new Date());
         const endTimeDate = addMinutes(startTimeDate, duration);
         const endTime = format(endTimeDate, 'HH:mm');
+        
+        let clientData = {};
+        if (isClientBooking) {
+          if (clientProfile) {
+            clientData = {
+              clientName: clientProfile.name,
+              clientPhone: clientProfile.phone || '',
+            };
+          } else if (userProfile) {
+            clientData = {
+              clientName: userProfile.name,
+              clientPhone: '',
+            };
+          }
+        }
 
         setFormData(prev => ({
           ...prev,
@@ -140,8 +256,10 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
           end_time: endTime,
           type: newReservationSlot.type || 'avulsa',
           sport_type: selectedQuadra?.sports?.[0] || 'Beach Tennis',
+          ...clientData,
         }));
         setOriginalCreditUsed(0);
+        setSelectedItems({});
       } else {
          setFormData(prev => ({
           ...prev,
@@ -149,61 +267,114 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
           quadra_id: quadras.length > 0 ? quadras[0].id : '',
         }));
         setOriginalCreditUsed(0);
+        setSelectedItems({});
       }
     }
-  }, [reservation, newReservationSlot, isOpen, selectedDate, quadras, alunos]);
+  }, [reservation, newReservationSlot, isOpen, selectedDate, quadras, clientProfile, userProfile, isClientBooking]);
 
   const findMatchingRule = (
     rules: PricingRule[], quadraId: string, sport: string, date: string, startTime: string
   ): { rule: PricingRule | null, isMonthly: boolean } => {
-    const reservationDay = getDay(parse(date, 'yyyy-MM-dd', new Date()));
-    const selectedAluno = alunos.find(a => a.id === formData.aluno_id);
-    const isMonthlyCustomer = !!(selectedAluno && selectedAluno.monthly_fee && selectedAluno.monthly_fee > 0);
-
+    const reservationDay = getDay(parseDateStringAsLocal(date));
+    const isMonthlyCustomer = !!(selectedClient && selectedClient.monthly_fee && selectedClient.monthly_fee > 0);
     const reservationStartTimeMinutes = timeToMinutes(startTime);
-
+  
     const applicableRules = rules.filter(rule => {
       const ruleStartMinutes = timeToMinutes(rule.start_time);
-      const ruleEndMinutes = timeToMinutes(rule.end_time);
-
+      let ruleEndMinutes = timeToMinutes(rule.end_time);
+  
+      if (ruleEndMinutes === 0 && rule.end_time === '00:00') {
+        ruleEndMinutes = 24 * 60;
+      }
+  
+      let match = false;
+      if (ruleStartMinutes < ruleEndMinutes) {
+        match = reservationStartTimeMinutes >= ruleStartMinutes && reservationStartTimeMinutes < ruleEndMinutes;
+      } else {
+        match = reservationStartTimeMinutes >= ruleStartMinutes || reservationStartTimeMinutes < ruleEndMinutes;
+      }
+      
       return (rule.quadra_id === quadraId || !rule.quadra_id) &&
         rule.is_active &&
         rule.days_of_week.includes(reservationDay) &&
         (rule.sport_type === sport || rule.sport_type === 'Qualquer Esporte') &&
-        reservationStartTimeMinutes >= ruleStartMinutes && reservationStartTimeMinutes < ruleEndMinutes;
+        match;
     });
-
+  
     const specificSportRule = applicableRules.find(r => r.sport_type === sport && !r.is_default);
     const anySportRule = applicableRules.find(r => r.sport_type === 'Qualquer Esporte' && !r.is_default);
     const defaultSpecificSportRule = applicableRules.find(r => r.sport_type === sport && r.is_default);
     const defaultAnySportRule = applicableRules.find(r => r.sport_type === 'Qualquer Esporte' && r.is_default);
-
+  
     const targetRule = specificSportRule || anySportRule || defaultSpecificSportRule || defaultAnySportRule || null;
-
-    if (targetRule) {
-        return { rule: targetRule, isMonthly: isMonthlyCustomer };
-    }
-    return { rule: null, isMonthly: isMonthlyCustomer };
+  
+    return { rule: targetRule, isMonthly: isMonthlyCustomer };
   };
 
   useEffect(() => {
     const calculateSegmentedPrice = () => {
       const { quadra_id, sport_type, date, start_time, end_time } = formData;
-      if (!quadra_id || !date || !start_time || !end_time || pricingRules.length === 0) {
+      if (!quadra_id || !date || !start_time || !end_time) {
+        setOperatingHoursWarning(null);
+        return;
+      }
+      
+      const selectedQuadra = quadras.find(q => q.id === quadra_id);
+      if (!selectedQuadra || !selectedQuadra.horarios) {
+        setOperatingHoursWarning('Horário de funcionamento da quadra não definido.');
+        return;
+      }
+
+      const dayOfWeek = getDay(parseDateStringAsLocal(date));
+      const operatingHours = dayOfWeek === 0 ? selectedQuadra.horarios.sunday : dayOfWeek === 6 ? selectedQuadra.horarios.saturday : selectedQuadra.horarios.weekday;
+
+      if (!operatingHours || !operatingHours.start || !operatingHours.end) {
+        setOperatingHoursWarning('Horário de funcionamento não definido para este dia.');
+        return;
+      }
+
+      const reservationStartMinutes = timeToMinutes(start_time);
+      let reservationEndMinutes = timeToMinutes(end_time);
+      const openingMinutes = timeToMinutes(operatingHours.start);
+      let closingMinutes = timeToMinutes(operatingHours.end);
+
+      if (closingMinutes === 0 && operatingHours.end === '00:00') {
+        closingMinutes = 24 * 60;
+      }
+      
+      if (reservationEndMinutes === 0 && end_time === '00:00') {
+        reservationEndMinutes = 24 * 60;
+      }
+
+      const effectiveClosingMinutes = closingMinutes < openingMinutes ? closingMinutes + 24 * 60 : closingMinutes;
+      const effectiveReservationEndMinutes = reservationEndMinutes <= reservationStartMinutes ? reservationEndMinutes + 24 * 60 : reservationEndMinutes;
+
+      if (reservationStartMinutes < openingMinutes || effectiveReservationEndMinutes > effectiveClosingMinutes) {
+        setOperatingHoursWarning(`Atenção: O horário selecionado (${start_time} - ${end_time}) está fora do funcionamento da quadra (${operatingHours.start} - ${operatingHours.end}).`);
         setPriceBreakdown([]); setSubtotal(0); setDiscountAmount(0); setDiscountInfo(null);
-        setFormData(prev => ({ ...prev, total_price: 0, credit_used: 0 }));
+        return;
+      }
+      setOperatingHoursWarning(null);
+
+      if (pricingRules.length === 0) {
+        setPriceBreakdown([]); setSubtotal(0); setDiscountAmount(0); setDiscountInfo(null);
+        setFormData(prev => ({ ...prev, total_price: 0, credit_used: 0, rented_items: [] }));
         setNewlyAppliedCredit(0);
         return;
       }
 
-      const start = parse(start_time, 'HH:mm', new Date());
-      const end = parse(end_time, 'HH:mm', new Date());
+      const reservationBaseDate = parseDateStringAsLocal(date);
+      if (isNaN(reservationBaseDate.getTime())) return;
 
-      if (end <= start) {
-        setPriceBreakdown([]); setSubtotal(0); setDiscountAmount(0); setDiscountInfo(null);
-        setFormData(prev => ({ ...prev, total_price: 0, credit_used: 0 }));
-        setNewlyAppliedCredit(0);
-        return;
+      const start = parse(start_time, 'HH:mm', reservationBaseDate);
+      let end = parse(end_time, 'HH:mm', reservationBaseDate);
+
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) return;
+      
+      if (end_time === '00:00') {
+          end = addDays(startOfDay(start), 1);
+      } else if (end <= start) {
+        end = addDays(end, 1);
       }
 
       let totalCalculatedPrice = 0;
@@ -213,7 +384,9 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
       let currentTime = start;
       while (isBefore(currentTime, end)) {
         const segmentStartTimeStr = format(currentTime, 'HH:mm');
-        const { rule: segmentRule, isMonthly } = findMatchingRule(pricingRules, quadra_id, sport_type, date, segmentStartTimeStr);
+        const segmentDateStr = format(currentTime, 'yyyy-MM-dd');
+
+        const { rule: segmentRule, isMonthly } = findMatchingRule(pricingRules, quadra_id, sport_type, segmentDateStr, segmentStartTimeStr);
         const pricePerHour = segmentRule ? (isMonthly ? segmentRule.price_monthly : segmentRule.price_single) : 0;
         const segmentPrice = pricePerHour * (intervalMinutes / 60);
         totalCalculatedPrice += segmentPrice;
@@ -245,9 +418,29 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
 
       const priceAfterDiscount = totalCalculatedPrice - finalDiscountAmount;
       
+      let rentalCost = 0;
+      const rentedItemsDetails: { itemId: string; name: string; quantity: number; price: number }[] = [];
+      for (const itemId in selectedItems) {
+        const quantity = selectedItems[itemId];
+        if (quantity > 0) {
+          const item = rentalItems.find(i => i.id === itemId);
+          if (item) {
+            rentalCost += item.price * quantity;
+            rentedItemsDetails.push({
+              itemId: item.id,
+              name: item.name,
+              quantity: quantity,
+              price: item.price,
+            });
+          }
+        }
+      }
+
+      const priceWithItems = priceAfterDiscount + rentalCost;
+
       let creditToApplyNow = 0;
       if (useCredit && availableCredit > 0) {
-        const remainingCost = priceAfterDiscount - originalCreditUsed;
+        const remainingCost = priceWithItems - originalCreditUsed;
         if (remainingCost > 0) {
           creditToApplyNow = Math.min(remainingCost, availableCredit);
         }
@@ -258,12 +451,13 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
       
       setFormData(prev => ({ 
         ...prev, 
-        total_price: priceAfterDiscount - totalCreditOnReservation,
-        credit_used: totalCreditOnReservation 
+        total_price: priceWithItems - totalCreditOnReservation,
+        credit_used: totalCreditOnReservation,
+        rented_items: rentedItemsDetails,
       }));
     };
     calculateSegmentedPrice();
-  }, [formData.quadra_id, formData.sport_type, formData.date, formData.start_time, formData.end_time, formData.aluno_id, pricingRules, durationDiscounts, alunos, useCredit, availableCredit, isEditing, originalCreditUsed]);
+  }, [formData.quadra_id, formData.sport_type, formData.date, formData.start_time, formData.end_time, formData.aluno_id, pricingRules, durationDiscounts, alunos, useCredit, availableCredit, isEditing, originalCreditUsed, selectedItems, rentalItems, quadras, selectedClient]);
 
   const handleSaveClick = () => {
     const dataToSave = {
@@ -275,7 +469,29 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
   
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+    let finalValue = value;
+    if (name === 'clientPhone') {
+      finalValue = maskPhone(value);
+    }
+    setFormData(prev => ({ ...prev, [name]: finalValue }));
+  };
+
+  const handleItemQuantityChange = (itemId: string, quantity: number) => {
+    const item = rentalItems.find(i => i.id === itemId);
+    const stock = availableStock[itemId] ?? 0;
+    if (!item) return;
+
+    const newQuantity = Math.max(0, quantity);
+
+    if (newQuantity > stock) {
+        addToast({ message: `Estoque insuficiente para ${item.name}. Apenas ${stock} disponíveis.`, type: 'error' });
+        return;
+    }
+
+    setSelectedItems(prev => ({
+      ...prev,
+      [itemId]: newQuantity,
+    }));
   };
 
   const finalPriceLabel = useMemo(() => {
@@ -310,25 +526,38 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
                 </div>
               ) : (
                 <>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <CreatableClientSelect
-                      alunos={alunos}
-                      value={{ id: formData.aluno_id, name: formData.clientName }}
-                      onChange={(selection) => {
-                        setFormData(prev => ({
-                          ...prev,
-                          aluno_id: selection.id || '',
-                          clientName: selection.name,
-                          clientPhone: selection.phone || '',
-                        }));
-                        const selectedAluno = alunos.find(a => a.id === selection.id);
-                        setCustomerType(selectedAluno?.monthly_fee && selectedAluno.monthly_fee > 0 ? 'Mensalista' : 'Avulso');
-                      }}
-                      placeholder="Digite ou selecione o cliente"
-                    />
-                    <Input label="Telefone do Cliente" name="clientPhone" value={formData.clientPhone} onChange={handleChange} icon={<Phone className="h-4 w-4 text-brand-gray-400"/>} />
-                  </div>
-                  {customerType && <span className={`text-xs -mt-4 block font-semibold ${customerType === 'Mensalista' ? 'text-green-600' : 'text-blue-600'}`}>{customerType}</span>}
+                  {isClientBooking ? (
+                    <div className="p-4 rounded-lg bg-brand-gray-100 dark:bg-brand-gray-800">
+                      <div className="flex items-center">
+                        <User className="h-5 w-5 mr-3 text-brand-gray-500" />
+                        <div>
+                          <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400">Reserva em nome de:</p>
+                          <p className="font-semibold text-brand-gray-900 dark:text-white">{formData.clientName}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <CreatableClientSelect
+                        alunos={alunos}
+                        value={{ id: formData.aluno_id, name: formData.clientName }}
+                        onChange={(selection) => {
+                          setFormData(prev => ({
+                            ...prev,
+                            aluno_id: selection.id || '',
+                            clientName: selection.name,
+                            clientPhone: selection.phone || '',
+                          }));
+                          const selectedAluno = alunos.find(a => a.id === selection.id);
+                          setCustomerType(selectedAluno?.monthly_fee && selectedAluno.monthly_fee > 0 ? 'Mensalista' : 'Avulso');
+                        }}
+                        placeholder="Digite ou selecione o cliente"
+                      />
+                      <Input label="Telefone do Cliente" name="clientPhone" value={formData.clientPhone} onChange={handleChange} icon={<Phone className="h-4 w-4 text-brand-gray-400"/>} />
+                    </div>
+                  )}
+
+                  {customerType && !isClientBooking && <span className={`text-xs -mt-4 block font-semibold ${customerType === 'Mensalista' ? 'text-green-600' : 'text-blue-600'}`}>{customerType}</span>}
                   
                   {isEditing && originalCreditUsed > 0 && (
                     <div className="p-3 rounded-md bg-gray-100 dark:bg-gray-700/50 flex items-center gap-3">
@@ -385,6 +614,36 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
                     <Input label="Início" name="start_time" type="time" value={formData.start_time} onChange={handleChange} icon={<Clock className="h-4 w-4 text-brand-gray-400"/>} />
                     <Input label="Fim" name="end_time" type="time" value={formData.end_time} onChange={handleChange} icon={<Clock className="h-4 w-4 text-brand-gray-400"/>} />
                   </div>
+
+                  {rentalItems.length > 0 && (
+                    <div className="border-t border-brand-gray-200 dark:border-brand-gray-700 pt-4">
+                      <h4 className="font-semibold text-brand-gray-800 dark:text-white mb-3 flex items-center">
+                        <ShoppingBag className="h-5 w-5 mr-2 text-brand-blue-500" />
+                        Alugar Itens Adicionais
+                      </h4>
+                      <div className="space-y-3 max-h-40 overflow-y-auto pr-2">
+                        {rentalItems.map(item => {
+                          const stock = availableStock[item.id] ?? 0;
+                          const currentSelection = selectedItems[item.id] || 0;
+                          return (
+                            <div key={item.id} className="flex items-center justify-between">
+                              <div>
+                                <p className="font-medium text-sm">{item.name} <span className="text-xs text-brand-gray-500">({stock} disponíveis)</span></p>
+                                <p className="text-xs text-green-600 dark:text-green-400 font-semibold">
+                                  {item.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} / reserva
+                                </p>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <Button size="sm" variant="outline" onClick={() => handleItemQuantityChange(item.id, currentSelection - 1)}>-</Button>
+                                <span className="w-8 text-center font-semibold">{currentSelection}</span>
+                                <Button size="sm" variant="outline" onClick={() => handleItemQuantityChange(item.id, currentSelection + 1)} disabled={currentSelection >= stock}>+</Button>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
                   
                   <div className="p-4 rounded-lg bg-brand-gray-50 dark:bg-brand-gray-800 space-y-3 border border-brand-gray-200 dark:border-brand-gray-700">
                       <h4 className="font-semibold text-brand-gray-800 dark:text-white">Detalhamento do Preço</h4>
@@ -416,6 +675,23 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
                         </div>
                       )}
                       
+                      {formData.rented_items && formData.rented_items.length > 0 && (
+                        <div className="border-t border-brand-gray-200 dark:border-brand-gray-600 pt-2 mt-2">
+                          <div className="flex justify-between text-sm text-purple-600 dark:text-purple-400 font-semibold">
+                            <span>Itens Alugados</span>
+                            <span>+ {formData.rented_items.reduce((acc, item) => acc + item.price * item.quantity, 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                          </div>
+                          <div className="pl-4 mt-1 space-y-0.5">
+                            {formData.rented_items.map(item => (
+                              <div key={item.itemId} className="flex justify-between text-xs text-brand-gray-500 dark:text-brand-gray-400">
+                                <span>{item.quantity}x {item.name}</span>
+                                <span>{(item.price * item.quantity).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       {originalCreditUsed > 0 && (
                           <div className="flex justify-between text-sm text-blue-600 dark:text-blue-400">
                               <span>Crédito Já Utilizado</span>
@@ -435,7 +711,7 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
                           <span className="text-brand-blue-600 dark:text-brand-blue-300">{formData.total_price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                       </div>
                       
-                      {newlyAppliedCredit > 0 && (
+                      {useCredit && (
                         <div className="text-right text-sm text-green-600 dark:text-green-400 mt-2">
                             <span>Crédito Restante: </span>
                             <span className="font-bold">
@@ -445,7 +721,12 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
                       )}
                   </div>
 
-                  {(formData.total_price === 0 && subtotal === 0 && priceBreakdown.length === 0) && (
+                  {operatingHoursWarning ? (
+                    <div className="p-3 rounded-md bg-yellow-50 dark:bg-yellow-900/50 flex items-start text-yellow-700 dark:text-yellow-300">
+                        <AlertTriangle className="h-4 w-4 mr-2 mt-0.5 flex-shrink-0"/>
+                        <p className="text-xs">{operatingHoursWarning}</p>
+                    </div>
+                  ) : (formData.total_price === 0 && subtotal === 0 && priceBreakdown.length === 0) && (
                     <div className="p-3 rounded-md bg-yellow-50 dark:bg-yellow-900/50 flex items-start text-yellow-700 dark:text-yellow-300">
                         <AlertTriangle className="h-4 w-4 mr-2 mt-0.5 flex-shrink-0"/>
                         <p className="text-xs">O valor é R$ 0,00. Verifique se existe uma regra de preço (padrão ou promocional) para este esporte, dia e horário.</p>
@@ -469,7 +750,7 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
 
             <div className="p-6 mt-auto border-t border-brand-gray-200 dark:border-brand-gray-700 flex justify-between items-center">
               <div>
-                {isEditing && reservation && (
+                {isEditing && reservation && !isClientBooking && (
                   <Button variant="outline" className="text-red-500 border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20" onClick={() => onCancelReservation(reservation)}>
                     Cancelar Reserva
                   </Button>
@@ -477,7 +758,7 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
               </div>
               <div className="flex gap-3">
                 <Button variant="outline" onClick={onClose}>Fechar</Button>
-                <Button onClick={handleSaveClick} disabled={isLoading}>
+                <Button onClick={handleSaveClick} disabled={isLoading || !!operatingHoursWarning}>
                   <Save className="h-4 w-4 mr-2"/> {isEditing ? 'Salvar Alterações' : 'Criar Reserva'}
                 </Button>
               </div>

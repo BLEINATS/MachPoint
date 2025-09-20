@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Loader2, LayoutGrid, Percent } from 'lucide-react';
+import { Plus, Loader2, LayoutGrid, ShoppingBag, Percent } from 'lucide-react';
 import Layout from '../components/Layout/Layout';
 import Button from '../components/Forms/Button';
 import QuadraCard from '../components/Dashboard/QuadraCard';
@@ -11,7 +11,8 @@ import { supabase } from '../lib/supabaseClient';
 import { useToast } from '../context/ToastContext';
 import { v4 as uuidv4 } from 'uuid';
 import { parse, addDays, eachDayOfInterval, startOfMonth, endOfMonth, getDay } from 'date-fns';
-import DiscountsTab from '../components/Settings/DiscountsTab';
+import RentalItemsTab from '../components/Quadras/RentalItemsTab';
+import DiscountsTab from '../components/Quadras/DiscountsTab';
 
 const Quadras: React.FC = () => {
   const { user, arena } = useAuth();
@@ -20,7 +21,7 @@ const Quadras: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedQuadra, setSelectedQuadra] = useState<Quadra | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'quadras' | 'promocoes'>('quadras');
+  const [activeTab, setActiveTab] = useState<'quadras' | 'itens' | 'promocoes'>('quadras');
 
   const fetchQuadras = useCallback(async () => {
     if (!arena) return;
@@ -258,6 +259,17 @@ const Quadras: React.FC = () => {
               Minhas Quadras
             </button>
             <button
+              onClick={() => setActiveTab('itens')}
+              className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center transition-colors ${
+                activeTab === 'itens'
+                  ? 'border-brand-blue-500 text-brand-blue-600 dark:text-brand-blue-400'
+                  : 'border-transparent text-brand-gray-500 hover:text-brand-gray-700 hover:border-brand-gray-300 dark:text-brand-gray-400 dark:hover:text-brand-gray-200 dark:hover:border-brand-gray-600'
+              }`}
+            >
+              <ShoppingBag className="mr-2 h-5 w-5" />
+              Itens para Aluguel
+            </button>
+            <button
               onClick={() => setActiveTab('promocoes')}
               className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center transition-colors ${
                 activeTab === 'promocoes'
@@ -266,7 +278,7 @@ const Quadras: React.FC = () => {
               }`}
             >
               <Percent className="mr-2 h-5 w-5" />
-              Promoções por Duração
+              Promoções
             </button>
           </nav>
         </div>
@@ -311,6 +323,10 @@ const Quadras: React.FC = () => {
                   </div>
                 )}
               </>
+            ) : activeTab === 'itens' ? (
+              <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-6 border border-brand-gray-200 dark:border-brand-gray-700">
+                <RentalItemsTab />
+              </div>
             ) : (
               <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-6 border border-brand-gray-200 dark:border-brand-gray-700">
                 <DiscountsTab />

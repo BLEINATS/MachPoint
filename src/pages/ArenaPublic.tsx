@@ -1,46 +1,76 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { motion } from 'framer-motion';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Calendar, Clock, MapPin, DollarSign, User, X, Heart, Repeat, Check } from 'lucide-react';
+import { Calendar, Clock, MapPin, DollarSign, User, X, Heart, Repeat, Check, Loader2, ShoppingBag } from 'lucide-react';
 import { format, addDays, startOfDay, addMinutes, isSameDay, isPast, parse, getDay, endOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { useAuth } from '../context/AuthContext';
 import Layout from '../components/Layout/Layout';
 import Button from '../components/Forms/Button';
-import { Arena, Quadra, Reserva } from '../types';
+import { Arena, Quadra, Reserva, Aluno, Profile } from '../types';
 import { getReservationTypeDetails, expandRecurringReservations } from '../utils/reservationUtils';
 import { parseDateStringAsLocal } from '../utils/dateUtils';
+import ReservationModal from '../components/Reservations/ReservationModal';
+import { supabase } from '../lib/supabaseClient';
+import { useToast } from '../context/ToastContext';
 
 const ArenaPublic: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
   const navigate = useNavigate();
-  const { user, profile, memberships, followArena, switchArenaContext, allArenas } = useAuth();
+  const { user, profile, memberships, followArena, switchArenaContext, allArenas, alunoProfileForSelectedArena, refreshAlunoProfile } = useAuth();
+  const { addToast } = useToast();
   
   const [arena, setArena] = useState<Arena | null>(null);
   const [quadras, setQuadras] = useState<Quadra[]>([]);
   const [selectedDate, setSelectedDate] = useState(startOfDay(new Date()));
   const [reservas, setReservas] = useState<Reserva[]>([]);
+  const [alunos, setAlunos] = useState<Aluno[]>([]);
   const [favoriteQuadras, setFavoriteQuadras] = useState<string[]>([]);
-  
+  const [isLoading, setIsLoading] = useState(true);
+
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [modalSlot, setModalSlot] = useState<{ quadraId: string; time: string } | null>(null);
+
   const isMember = useMemo(() => {
     return arena ? memberships.some(m => m.arena_id === arena.id) : false;
   }, [memberships, arena]);
+
+  const loadArenaData = useCallback(async (currentArena: Arena) => {
+    setIsLoading(true);
+    try {
+      const [quadrasRes, reservasRes, alunosRes] = await Promise.all([
+        supabase.from('quadras').select('*, pricing_rules(*)').eq('arena_id', currentArena.id),
+        supabase.from('reservas').select('*').eq('arena_id', currentArena.id),
+        supabase.from('alunos').select('*').eq('arena_id', currentArena.id),
+      ]);
+      if (quadrasRes.error) throw quadrasRes.error;
+      setQuadras(quadrasRes.data || []);
+      if (reservasRes.error) throw reservasRes.error;
+      setReservas(reservasRes.data || []);
+      if (alunosRes.error) throw alunosRes.error;
+      setAlunos(alunosRes.data || []);
+    } catch (error: any) {
+      console.error("Erro ao carregar dados da arena:", error);
+      addToast({ message: 'Não foi possível carregar os dados da arena.', type: 'error' });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [addToast]);
 
   useEffect(() => {
     const currentArena = allArenas.find(a => a.slug === slug);
     if (currentArena) {
       setArena(currentArena);
-      const savedQuadras = localStorage.getItem(`quadras_${currentArena.id}`);
-      if (savedQuadras) setQuadras(JSON.parse(savedQuadras));
-      const savedReservas = localStorage.getItem(`reservas_${currentArena.id}`);
-      if (savedReservas) setReservas(JSON.parse(savedReservas));
+      loadArenaData(currentArena);
+    } else if (allArenas.length > 0) {
+      setIsLoading(false);
     }
     
     if (profile?.id) {
       const savedFavorites = localStorage.getItem(`favorite_quadras_${profile.id}`);
       if (savedFavorites) setFavoriteQuadras(JSON.parse(savedFavorites));
     }
-  }, [slug, profile?.id, allArenas]);
+  }, [slug, profile?.id, allArenas, loadArenaData]);
 
   const displayedReservations = useMemo(() => {
     const viewStartDate = startOfDay(new Date());
@@ -48,23 +78,23 @@ const ArenaPublic: React.FC = () => {
     return expandRecurringReservations(reservas, viewStartDate, viewEndDate, quadras);
   }, [reservas, quadras]);
 
-  const handleFollowAndBook = () => {
+  const handleFollowAndBook = async () => {
     if (!user) {
       navigate('/auth');
       return;
     }
-    if (arena && !isMember) {
-      followArena(arena.id);
-    }
     if (arena) {
+      if (!isMember) {
+        await followArena(arena.id);
+      }
       switchArenaContext(arena);
+      addToast({ message: `Agora você está seguindo ${arena.name}! Escolha um horário para reservar.`, type: 'info' });
     }
-    alert(`Agora você está seguindo ${arena?.name}! Escolha um horário para reservar.`);
   };
 
-  const handleSlotClick = (time: string, quadra: Quadra) => {
+  const handleSlotClick = async (time: string, quadraId: string) => {
     if (profile?.role === 'admin_arena') {
-      alert('Administradores devem gerenciar reservas pelo Hub de Reservas.');
+      addToast({ message: 'Administradores devem gerenciar reservas pelo Hub de Reservas.', type: 'info' });
       return;
     }
     if (!user) {
@@ -72,12 +102,94 @@ const ArenaPublic: React.FC = () => {
       return;
     }
     if (arena && !isMember) {
-      followArena(arena.id);
+      await followArena(arena.id);
     }
     if (arena) {
       switchArenaContext(arena);
     }
-    navigate('/dashboard');
+    setModalSlot({ quadraId, time });
+    setIsModalOpen(true);
+  };
+  
+  const handleSaveClientReservation = async (reservationData: Omit<Reserva, 'id' | 'created_at' | 'arena_id'> | Reserva) => {
+    if (!arena || !profile) {
+      addToast({ message: 'Erro: Contexto do usuário ou da arena não encontrado.', type: 'error' });
+      return;
+    }
+    
+    try {
+      let alunoRecord: Aluno | null = alunoProfileForSelectedArena;
+      if (!alunoRecord) {
+        const { data: alunoId, error: rpcError } = await supabase.rpc('get_or_create_my_aluno_profile', {
+          p_arena_id: arena.id
+        });
+
+        if (rpcError) throw rpcError;
+        if (!alunoId) throw new Error("Não foi possível criar o perfil de cliente na arena.");
+
+        const { data: newAlunoData, error: fetchError } = await supabase
+          .from('alunos')
+          .select('*')
+          .eq('id', alunoId)
+          .single();
+
+        if (fetchError) throw fetchError;
+        
+        alunoRecord = newAlunoData;
+        refreshAlunoProfile();
+      }
+      
+      if (!alunoRecord) {
+        addToast({ message: 'Erro ao obter ou criar perfil de cliente na arena.', type: 'error' });
+        return;
+      }
+
+      const dataToUpsert: Partial<Reserva> = {
+        ...reservationData,
+        arena_id: arena.id,
+        profile_id: profile.id,
+        clientName: profile.name,
+        clientPhone: reservationData.clientPhone || alunoRecord.phone || '',
+      };
+
+      delete (dataToUpsert as any).originalCreditUsed;
+      delete dataToUpsert.id;
+        
+      const { data: savedReservas, error } = await supabase.from('reservas').insert(dataToUpsert).select();
+      if (error) throw error;
+
+      const savedReserva = savedReservas?.[0];
+      if (!savedReserva) {
+        throw new Error("A reserva foi criada, mas não foi possível obter os dados de confirmação.");
+      }
+
+      if (savedReserva && savedReserva.credit_used && savedReserva.credit_used > 0) {
+        const { error: rpcError } = await supabase.rpc('add_credit_to_aluno', {
+          aluno_id_to_update: alunoRecord.id,
+          arena_id_to_check: arena.id,
+          amount_to_add: -savedReserva.credit_used
+        });
+        if (rpcError) throw rpcError;
+
+        await supabase.from('credit_transactions').insert({
+          aluno_id: alunoRecord.id,
+          arena_id: arena.id,
+          amount: -savedReserva.credit_used,
+          type: 'reservation_payment',
+          description: `Pagamento da reserva #${savedReserva.id.substring(0, 8)}`,
+          related_reservation_id: savedReserva.id,
+        });
+      }
+
+      addToast({ message: 'Reserva criada com sucesso!', type: 'success' });
+      setIsModalOpen(false);
+      setModalSlot(null);
+      refreshAlunoProfile();
+      await loadArenaData(arena);
+
+    } catch (error: any) {
+      addToast({ message: `Erro ao criar reserva: ${error.message}`, type: 'error' });
+    }
   };
 
   const toggleFavorite = (quadraId: string) => {
@@ -94,18 +206,15 @@ const ArenaPublic: React.FC = () => {
     const dayOfWeek = getDay(selectedDate);
     
     let horario;
-    if (dayOfWeek === 0) {
-      horario = quadra.horarios.sunday;
-    } else if (dayOfWeek === 6) {
-      horario = quadra.horarios.saturday;
-    } else {
-      horario = quadra.horarios.weekday;
-    }
+    if (dayOfWeek === 0) horario = quadra.horarios?.sunday;
+    else if (dayOfWeek === 6) horario = quadra.horarios?.saturday;
+    else horario = quadra.horarios?.weekday;
 
     if (!horario || !horario.start || !horario.end) return [];
 
     let currentTime = parse(horario.start.trim(), 'HH:mm', selectedDate);
-    const endTime = parse(horario.end.trim(), 'HH:mm', selectedDate);
+    let endTime = parse(horario.end.trim(), 'HH:mm', selectedDate);
+    if (endTime <= currentTime) endTime = addDays(endTime, 1);
 
     const interval = quadra.booking_duration_minutes || 60;
 
@@ -120,6 +229,7 @@ const ArenaPublic: React.FC = () => {
     const slotDateTime = parse(time, 'HH:mm', selectedDate);
 
     if (isPast(slotDateTime) && !isSameDay(selectedDate, startOfDay(new Date()))) {
+      return { status: 'past', data: null };
     } else if (isPast(slotDateTime)) {
       return { status: 'past', data: null };
     }
@@ -127,7 +237,7 @@ const ArenaPublic: React.FC = () => {
     const reserva = displayedReservations.find(r => 
       r.quadra_id === quadraId && 
       isSameDay(parseDateStringAsLocal(r.date), selectedDate) && 
-      r.start_time === time && 
+      r.start_time.slice(0, 5) === time && 
       r.status !== 'cancelada'
     );
     if (reserva) return { status: 'booked', data: reserva };
@@ -136,21 +246,16 @@ const ArenaPublic: React.FC = () => {
   };
 
   const getPriceRange = (quadra: Quadra) => {
-    if (!quadra.pricing_rules || quadra.pricing_rules.length === 0) {
-      return "A definir";
-    }
+    if (!quadra.pricing_rules || quadra.pricing_rules.length === 0) return "A definir";
     const activePrices = quadra.pricing_rules.filter(r => r.is_active).map(r => r.price_single);
     if (activePrices.length === 0) return "A definir";
-
     const minPrice = Math.min(...activePrices);
     const maxPrice = Math.max(...activePrices);
-
-    if (minPrice === maxPrice) {
-      return minPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
-    }
+    if (minPrice === maxPrice) return minPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
     return `${minPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} - ${maxPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
   };
 
+  if (isLoading) return <Layout><div className="flex justify-center items-center h-screen"><Loader2 className="h-8 w-8 animate-spin text-brand-blue-500"/></div></Layout>;
   if (!arena) return <Layout><div className="text-center p-8">Arena não encontrada</div></Layout>;
 
   const nextDays = Array.from({ length: 7 }, (_, i) => addDays(new Date(), i));
@@ -177,7 +282,7 @@ const ArenaPublic: React.FC = () => {
         key={time} 
         whileHover={{ scale: status === 'available' ? 1.05 : 1 }} 
         whileTap={{ scale: status === 'available' ? 0.95 : 1 }} 
-        onClick={() => handleSlotClick(time, quadra)} 
+        onClick={() => handleSlotClick(time, quadra.id)} 
         disabled={status !== 'available'}
         className={`p-3 rounded-lg text-sm font-medium transition-all text-center ${styles}`}
       >
@@ -248,6 +353,25 @@ const ArenaPublic: React.FC = () => {
           ))}
         </motion.div>
       </div>
+      <AnimatePresence>
+        {isModalOpen && modalSlot && arena && (
+          <ReservationModal
+            isOpen={isModalOpen}
+            onClose={() => setIsModalOpen(false)}
+            onSave={handleSaveClientReservation}
+            onCancelReservation={() => {}}
+            newReservationSlot={{ quadraId: modalSlot.quadraId, time: modalSlot.time, type: 'avulsa' }}
+            quadras={quadras}
+            alunos={alunoProfileForSelectedArena ? [alunoProfileForSelectedArena] : []}
+            allReservations={reservas}
+            arenaId={arena.id}
+            selectedDate={selectedDate}
+            isClientBooking={true}
+            userProfile={profile}
+            clientProfile={alunoProfileForSelectedArena}
+          />
+        )}
+      </AnimatePresence>
     </Layout>
   );
 };

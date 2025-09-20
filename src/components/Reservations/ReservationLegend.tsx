@@ -22,6 +22,10 @@ const ReservationLegend: React.FC = () => {
           </div>
         )
       })}
+      <div className="flex items-center text-xs text-brand-gray-600 dark:text-brand-gray-400">
+        <div className="w-3 h-3 rounded-sm mr-2 bg-slate-500"></div>
+        <span>Reserva Recorrente (Fixo)</span>
+      </div>
     </motion.div>
   );
 };

@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { format, addMonths, subMonths, startOfMonth, endOfMonth, eachDayOfInterval, getDay, isSameMonth, isSameDay, startOfDay, addDays, subDays, endOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { ChevronLeft, ChevronRight, Repeat } from 'lucide-react';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Reserva, Quadra } from '../../types';
 import { getReservationTypeDetails } from '../../utils/reservationUtils';
 import DayDetailView from './DayDetailView';
@@ -105,7 +105,7 @@ const CalendarView: React.FC<CalendarViewProps> = ({ reservas, quadras, onReserv
               </div>
               <div className="mt-1 space-y-1 flex-1 overflow-y-auto">
                 {dayReservas.slice(0, 2).map(r => {
-                  const typeDetails = getReservationTypeDetails(r.type);
+                  const typeDetails = getReservationTypeDetails(r.type, r.isRecurring);
                   return (
                     <div 
                       key={r.id} 
@@ -116,7 +116,6 @@ const CalendarView: React.FC<CalendarViewProps> = ({ reservas, quadras, onReserv
                       <span className="font-bold mr-1">{r.start_time.slice(0, 5)}</span>
                       <span className="truncate flex items-center">
                         {r.clientName || typeDetails.label}
-                        {r.isRecurring && <Repeat className="h-3 w-3 ml-1 flex-shrink-0" />}
                       </span>
                     </div>
                   )

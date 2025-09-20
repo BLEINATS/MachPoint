@@ -1,3 +1,15 @@
+{/*
+  ====================================================================
+  || ATENÇÃO: CÓDIGO PROTEGIDO (BLINDADO) POR SOLICITAÇÃO DO USUÁRIO ||
+  ====================================================================
+  || Este arquivo contém a lógica crítica para salvar e cancelar     ||
+  || reservas, incluindo a aplicação de créditos.                   ||
+  ||                                                                ||
+  || NÃO FAÇA ALTERAÇÕES NESTA LÓGICA SEM CONFIRMAÇÃO EXPLÍCITA.    ||
+  || Antes de qualquer mudança, pergunte ao usuário:                ||
+  || "Você confirma que deseja alterar a lógica de crédito/reserva?"  ||
+  ====================================================================
+*/}
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
@@ -17,7 +29,7 @@ import CancellationModal from '../components/Reservations/CancellationModal';
 import ManualCancellationModal from '../components/Reservations/ManualCancellationModal';
 import ReservationLegend from '../components/Reservations/ReservationLegend';
 import FilterPanel from '../components/Reservations/FilterPanel';
-import { startOfDay, format, startOfMonth, endOfMonth, isBefore, parse, addYears } from 'date-fns';
+import { startOfDay, format, startOfMonth, endOfMonth, isBefore, parse, addYears, subDays, getDay, addDays, endOfDay } from 'date-fns';
 import { expandRecurringReservations } from '../utils/reservationUtils';
 import { parseDateStringAsLocal } from '../utils/dateUtils';
 
@@ -58,7 +70,10 @@ const Reservations: React.FC = () => {
       if (quadrasError) throw quadrasError;
       setQuadras(quadrasData || []);
 
-      const { data: reservasData, error: reservasError } = await supabase.from('reservas').select('*').eq('arena_id', arena.id);
+      const { data: reservasData, error: reservasError } = await supabase
+        .from('reservas')
+        .select('id, arena_id, quadra_id, profile_id, turma_id, torneio_id, evento_id, clientName, clientPhone, date, start_time, end_time, status, type, total_price, credit_used, payment_status, sport_type, notes, isRecurring, recurringType, recurringEndDate, master_id, created_at, updated_at, rented_items')
+        .eq('arena_id', arena.id);
       if (reservasError) throw reservasError;
       setReservas(reservasData || []);
 
@@ -106,17 +121,22 @@ const Reservations: React.FC = () => {
   }, [location.state, navigate]);
 
   const displayedReservations = useMemo(() => {
-    let allExpanded;
+    let viewStartDate, viewEndDate;
 
     if (viewMode === 'list') {
-      const viewStartDate = new Date(2020, 0, 1);
-      const viewEndDate = addYears(new Date(), 5);
-      allExpanded = expandRecurringReservations(reservas, viewStartDate, viewEndDate, quadras);
-    } else {
-      const viewStartDate = startOfMonth(selectedDate);
-      const viewEndDate = endOfMonth(selectedDate);
-      allExpanded = expandRecurringReservations(reservas, viewStartDate, viewEndDate, quadras);
+      viewStartDate = new Date(2020, 0, 1);
+      viewEndDate = addYears(new Date(), 5);
+    } else if (viewMode === 'calendar') {
+      const monthStart = startOfMonth(selectedDate);
+      const monthEnd = endOfMonth(selectedDate);
+      viewStartDate = startOfDay(subDays(monthStart, getDay(monthStart)));
+      viewEndDate = endOfDay(addDays(monthEnd, 6 - getDay(monthEnd)));
+    } else { // 'agenda'
+      viewStartDate = startOfDay(selectedDate);
+      viewEndDate = endOfDay(selectedDate);
     }
+
+    let allExpanded = expandRecurringReservations(reservas, viewStartDate, viewEndDate, quadras);
 
     if (filters.quadraId !== 'all') {
       allExpanded = allExpanded.filter(r => r.quadra_id === filters.quadraId);
@@ -204,6 +224,32 @@ const Reservations: React.FC = () => {
         profile_id: alunoForReservation?.profile_id || null,
       };
       
+      // If we have an aluno record but no profile_id, try to find the profile via email
+      if (alunoForReservation && !alunoForReservation.profile_id) {
+        const alunoRecord = alunos.find(a => a.id === alunoForReservation!.id);
+        if (alunoRecord && alunoRecord.email) {
+          try {
+            const { data: profileData, error: profileError } = await supabase
+              .from('profiles')
+              .select('id')
+              .eq('email', alunoRecord.email)
+              .single();
+            
+            if (profileData && !profileError) {
+              dataToUpsert.profile_id = profileData.id;
+      
+              // Proactively update the aluno record for future use
+              await supabase
+                .from('alunos')
+                .update({ profile_id: profileData.id })
+                .eq('id', alunoRecord.id);
+            }
+          } catch (e) {
+            console.warn("Could not find or link profile for aluno:", e);
+          }
+        }
+      }
+
       delete (dataToUpsert as any).originalCreditUsed;
       delete (dataToUpsert as any).aluno_id;
         
@@ -276,7 +322,20 @@ const Reservations: React.FC = () => {
 
   const handleConfirmManualCancel = async (reservaId: string) => {
     try {
-        const { error } = await supabase.from('reservas').update({ status: 'cancelada' }).eq('id', reservaId);
+        const { data: reserva, error: fetchError } = await supabase
+            .from('reservas')
+            .select('total_price')
+            .eq('id', reservaId)
+            .single();
+        
+        if (fetchError) throw fetchError;
+
+        const updatePayload: { status: 'cancelada', payment_status?: 'pago' } = { status: 'cancelada' };
+        if (reserva && reserva.total_price && reserva.total_price > 0) {
+            updatePayload.payment_status = 'pago';
+        }
+
+        const { error } = await supabase.from('reservas').update(updatePayload).eq('id', reservaId);
         if (error) throw error;
         addToast({ message: 'Reserva cancelada com sucesso!', type: 'success' });
         await loadData();
@@ -302,7 +361,12 @@ const Reservations: React.FC = () => {
             throw fetchError || new Error('Reserva não encontrada para cancelamento.');
         }
 
-        await supabase.from('reservas').update({ status: 'cancelada' }).eq('id', reservaId);
+        const updatePayload: { status: 'cancelada', payment_status?: 'pago' } = { status: 'cancelada' };
+        if (creditAmount === 0 && reserva.total_price && reserva.total_price > 0) {
+            updatePayload.payment_status = 'pago';
+        }
+
+        await supabase.from('reservas').update(updatePayload).eq('id', reservaId);
 
         if (creditAmount > 0) {
             let targetAluno: Aluno | undefined = undefined;
@@ -433,7 +497,7 @@ const Reservations: React.FC = () => {
         </AnimatePresence>
       </div>
       <AnimatePresence>
-        {isModalOpen && <ReservationModal isOpen={isModalOpen} onClose={closeModal} onSave={handleSaveReservation} onCancelReservation={handleCancelReservation} reservation={selectedReservation} newReservationSlot={newReservationSlot} quadras={quadras} alunos={alunos} arenaId={arena?.id || ''} selectedDate={selectedDate} />}
+        {isModalOpen && <ReservationModal isOpen={isModalOpen} onClose={closeModal} onSave={handleSaveReservation} onCancelReservation={handleCancelReservation} reservation={selectedReservation} newReservationSlot={newReservationSlot} quadras={quadras} alunos={alunos} allReservations={reservas} arenaId={arena?.id || ''} selectedDate={selectedDate} />}
       </AnimatePresence>
       <AnimatePresence>
         {isCancellationModalOpen && (
