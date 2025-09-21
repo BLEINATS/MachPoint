@@ -7,12 +7,6 @@ interface OperationTabProps {
   setFormData: React.Dispatch<React.SetStateAction<Partial<Arena>>>;
 }
 
-const FormTextArea: React.FC<React.TextareaHTMLAttributes<HTMLTextAreaElement> & { label: string }> = ({ label, ...props }) => (
-  <div>
-    <label className="block text-sm font-medium text-brand-gray-700 dark:text-brand-gray-300 mb-1">{label}</label>
-    <textarea rows={5} className="w-full form-textarea rounded-md border-brand-gray-300 dark:border-brand-gray-600 bg-white dark:bg-brand-gray-800 text-brand-gray-900 dark:text-white focus:border-brand-blue-500 focus:ring-brand-blue-500" {...props} />
-  </div>
-);
 
 const OperationTab: React.FC<OperationTabProps> = ({ formData, setFormData }) => {
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
