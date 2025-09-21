@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { 
   LogOut, Sun, Moon, Settings, Bookmark, LayoutGrid, 
   User as UserIcon, LayoutDashboard, GraduationCap, Trophy, 
@@ -12,6 +12,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 const Header: React.FC = () => {
   const { user, arena, profile, signOut } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const navigate = useNavigate();
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const profileMenuRef = useRef<HTMLDivElement>(null);
 
@@ -25,12 +26,17 @@ const Header: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const handleSignOut = async () => {
+    await signOut();
+    navigate('/');
+  };
+
   return (
     <header className="bg-white dark:bg-brand-gray-800 shadow-sm border-b border-brand-gray-200 dark:border-brand-gray-700 sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           <div className="flex items-center">
-            <Link to="/dashboard" className="flex items-center">
+            <Link to={profile?.role === 'admin_arena' ? "/dashboard" : "/perfil"} className="flex items-center">
               <Calendar className="h-8 w-8 text-brand-blue-500" />
               <span className="ml-2 text-xl font-bold text-brand-gray-900 dark:text-white">
                 MatchPlay
@@ -86,7 +92,7 @@ const Header: React.FC = () => {
                         <UserIcon className="h-5 w-5 text-brand-gray-500" />
                       )}
                     </div>
-                    <ChevronDown className="h-4 w-4 text-brand-gray-500" />
+                    <ChevronDown className="h-4 w-4 text-brand-gray-500 hidden sm:block" />
                   </button>
                   <AnimatePresence>
                     {isProfileMenuOpen && (
@@ -97,13 +103,10 @@ const Header: React.FC = () => {
                         className="absolute right-0 mt-2 w-48 bg-white dark:bg-brand-gray-800 rounded-md shadow-lg ring-1 ring-black ring-opacity-5 z-50"
                       >
                         <div className="py-1">
-                          <Link to="/dashboard" className="flex items-center px-4 py-2 text-sm text-brand-gray-700 dark:text-brand-gray-200 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
+                          <Link to="/perfil" onClick={() => setIsProfileMenuOpen(false)} className="flex items-center px-4 py-2 text-sm text-brand-gray-700 dark:text-brand-gray-200 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
                             <LayoutDashboard className="h-4 w-4 mr-2" /> Meu Painel
                           </Link>
-                          <Link to="/perfil" className="flex items-center px-4 py-2 text-sm text-brand-gray-700 dark:text-brand-gray-200 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
-                            <UserIcon className="h-4 w-4 mr-2" /> Editar Perfil
-                          </Link>
-                          <button onClick={signOut} className="w-full text-left flex items-center px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20">
+                          <button onClick={handleSignOut} className="w-full text-left flex items-center px-4 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20">
                             <LogOut className="h-4 w-4 mr-2" /> Sair
                           </button>
                         </div>
@@ -124,7 +127,7 @@ const Header: React.FC = () => {
             
             {user && profile?.role === 'admin_arena' && (
               <button
-                onClick={signOut}
+                onClick={handleSignOut}
                 className="flex items-center text-brand-gray-500 dark:text-brand-gray-400 hover:text-brand-gray-700 dark:hover:text-white transition-colors p-2 rounded-full hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700"
                 aria-label="Sign out"
               >

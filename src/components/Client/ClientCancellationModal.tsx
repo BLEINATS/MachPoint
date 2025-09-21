@@ -1,25 +1,23 @@
-import React, { useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, AlertTriangle, Shield, Check } from 'lucide-react';
+import { X, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { Reserva } from '../../types';
 import Button from '../Forms/Button';
 import { format, differenceInHours } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { parseDateStringAsLocal } from '../../utils/dateUtils';
 
-interface CancellationModalProps {
+interface ClientCancellationModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: (reservaId: string, creditAmount: number, reason: string) => void;
-  reserva: Reserva | null;
+  onConfirm: (reservaId: string) => void;
+  reserva: Reserva;
+  policyText?: string | null;
 }
 
-const CancellationModal: React.FC<CancellationModalProps> = ({ isOpen, onClose, onConfirm, reserva }) => {
-  const [isBadWeather, setIsBadWeather] = useState(false);
+const ClientCancellationModal: React.FC<ClientCancellationModalProps> = ({ isOpen, onClose, onConfirm, reserva, policyText }) => {
 
   const cancellationInfo = useMemo(() => {
-    if (!reserva) return null;
-
     const reservaDate = parseDateStringAsLocal(reserva.date);
     const [hours, minutes] = reserva.start_time.split(':').map(Number);
     reservaDate.setHours(hours, minutes, 0, 0);
@@ -28,22 +26,12 @@ const CancellationModal: React.FC<CancellationModalProps> = ({ isOpen, onClose, 
     const hoursUntilReservation = differenceInHours(reservaStartDateTime, new Date());
     const originalPrice = reserva.total_price || 0;
 
-    if (isBadWeather) {
-      return {
-        policy: 'Mau tempo',
-        creditPercentage: 100,
-        creditAmount: originalPrice,
-        message: 'Reagendamento ou crédito integral será concedido devido ao mau tempo.',
-        color: 'text-blue-500',
-      };
-    }
-    
     if (hoursUntilReservation >= 24) {
       return {
-        policy: 'Cancelamento com +24h de antecedência',
+        policy: 'Cancelamento com +24h',
         creditPercentage: 100,
         creditAmount: originalPrice,
-        message: 'Você receberá 100% do valor pago como crédito para futuras reservas.',
+        message: 'Você receberá 100% do valor pago como crédito.',
         color: 'text-green-500',
       };
     }
@@ -59,20 +47,16 @@ const CancellationModal: React.FC<CancellationModalProps> = ({ isOpen, onClose, 
     }
 
     return {
-      policy: 'Cancelamento com -12h de antecedência',
+      policy: 'Cancelamento com -12h',
       creditPercentage: 0,
       creditAmount: 0,
       message: 'Nenhum crédito será concedido para cancelamentos com menos de 12 horas de antecedência.',
       color: 'text-red-500',
     };
-  }, [reserva, isBadWeather]);
-
-  if (!reserva) return null;
+  }, [reserva]);
 
   const handleConfirm = () => {
-    if (cancellationInfo) {
-      onConfirm(reserva.id, cancellationInfo.creditAmount, cancellationInfo.policy);
-    }
+    onConfirm(reserva.id);
   };
 
   return (
@@ -89,7 +73,7 @@ const CancellationModal: React.FC<CancellationModalProps> = ({ isOpen, onClose, 
             <div className="flex justify-between items-center p-6 border-b border-brand-gray-200 dark:border-brand-gray-700">
               <h3 className="text-xl font-semibold text-brand-gray-900 dark:text-white flex items-center">
                 <AlertTriangle className="h-5 w-5 mr-3 text-yellow-500" />
-                Confirmar Cancelamento
+                Cancelar Reserva
               </h3>
               <button onClick={onClose} className="p-1 rounded-full hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
                 <X className="h-5 w-5 text-brand-gray-500" />
@@ -98,30 +82,29 @@ const CancellationModal: React.FC<CancellationModalProps> = ({ isOpen, onClose, 
 
             <div className="p-6 space-y-4">
               <p className="text-brand-gray-600 dark:text-brand-gray-400">
-                Você está prestes a cancelar a reserva de <strong className="text-brand-gray-800 dark:text-white">{reserva.clientName}</strong> para o dia <strong className="text-brand-gray-800 dark:text-white">{format(parseDateStringAsLocal(reserva.date), 'dd/MM/yyyy', { locale: ptBR })}</strong> às <strong className="text-brand-gray-800 dark:text-white">{reserva.start_time}</strong>.
+                Você está cancelando sua reserva para o dia <strong className="text-brand-gray-800 dark:text-white">{format(parseDateStringAsLocal(reserva.date), 'dd/MM/yyyy', { locale: ptBR })}</strong> às <strong className="text-brand-gray-800 dark:text-white">{reserva.start_time.slice(0,5)}</strong>.
               </p>
               
-              <div className={`p-4 rounded-lg border-l-4 ${cancellationInfo?.color.replace('text-', 'border-')} ${cancellationInfo?.color.replace('text-', 'bg-').replace('-500', '-50')} dark:${cancellationInfo?.color.replace('text-', 'bg-').replace('-500', '-900/50')}`}>
-                <h4 className={`font-bold ${cancellationInfo?.color}`}>{cancellationInfo?.policy}</h4>
-                <p className="text-sm text-brand-gray-700 dark:text-brand-gray-300 mt-1">{cancellationInfo?.message}</p>
+              <div className={`p-4 rounded-lg border-l-4 ${cancellationInfo.color.replace('text-', 'border-')} ${cancellationInfo.color.replace('text-', 'bg-').replace('-500', '-50')} dark:${cancellationInfo.color.replace('text-', 'bg-').replace('-500', '-900/50')}`}>
+                <h4 className={`font-bold ${cancellationInfo.color}`}>{cancellationInfo.policy}</h4>
+                <p className="text-sm text-brand-gray-700 dark:text-brand-gray-300 mt-1">{cancellationInfo.message}</p>
               </div>
 
-              <div className="text-center">
-                <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400">Crédito a ser gerado:</p>
+              <div className="text-center py-4">
+                <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400">Crédito a ser gerado em sua conta:</p>
                 <p className="text-3xl font-bold text-green-600 dark:text-green-400">
-                  {(cancellationInfo?.creditAmount || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                  {cancellationInfo.creditAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                 </p>
               </div>
 
-              <div className="flex items-center justify-center pt-4 border-t border-brand-gray-200 dark:border-brand-gray-700">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <div className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-all ${isBadWeather ? 'bg-blue-500 border-blue-500' : 'border-brand-gray-300 dark:border-brand-gray-600'}`}>
-                    {isBadWeather && <Check className="h-3 w-3 text-white" />}
-                  </div>
-                  <input type="checkbox" checked={isBadWeather} onChange={e => setIsBadWeather(e.target.checked)} className="hidden" />
-                  <span className="text-sm font-medium text-brand-gray-700 dark:text-brand-gray-300 flex items-center"><Shield className="h-4 w-4 mr-1.5 text-blue-500" /> Cancelamento por mau tempo (crédito integral)</span>
-                </label>
-              </div>
+              {policyText && (
+                <div className="p-4 rounded-lg bg-brand-gray-50 dark:bg-brand-gray-800 border border-brand-gray-200 dark:border-brand-gray-700">
+                    <h5 className="font-semibold text-sm mb-2 flex items-center"><ShieldCheck className="h-4 w-4 mr-2 text-brand-gray-500" /> Política Completa da Arena</h5>
+                    <div className="text-xs text-brand-gray-500 dark:text-brand-gray-400 max-h-24 overflow-y-auto whitespace-pre-wrap">
+                        {policyText}
+                    </div>
+                </div>
+              )}
             </div>
 
             <div className="p-6 mt-auto border-t border-brand-gray-200 dark:border-brand-gray-700 flex justify-end gap-3">
@@ -137,4 +120,4 @@ const CancellationModal: React.FC<CancellationModalProps> = ({ isOpen, onClose, 
   );
 };
 
-export default CancellationModal;
+export default ClientCancellationModal;

@@ -1,5 +1,4 @@
 import React from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import Layout from '../components/Layout/Layout';
 import AnalyticsDashboard from '../components/Dashboard/AnalyticsDashboard';
@@ -8,12 +7,12 @@ import ClientDashboard from '../components/Client/ClientDashboard';
 const Dashboard: React.FC = () => {
   const { profile } = useAuth();
   
-  // Lógica para renderizar o dashboard correto
   const renderDashboard = () => {
     if (profile?.role === 'admin_arena') {
       return <AnalyticsDashboard />;
     }
     if (profile?.role === 'cliente') {
+      // Redirecionado para a página de perfil do cliente
       return <ClientDashboard />;
     }
     return (

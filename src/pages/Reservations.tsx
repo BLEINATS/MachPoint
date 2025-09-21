@@ -179,42 +179,28 @@ const Reservations: React.FC = () => {
       }
       
       let alunoForReservation: { id: string; profile_id: string | null | undefined; } | null = null;
-      const isNewClientEntry = !(reservaData as any).aluno_id && reservaData.clientName;
-
-      if (isNewClientEntry) {
-        const { data: existingAluno, error: findError } = await supabase
-          .from('alunos')
-          .select('id, profile_id')
-          .eq('arena_id', arena.id)
-          .or(`name.eq.${reservaData.clientName},phone.eq.${reservaData.clientPhone || 'INVALID_PHONE'}`)
-          .limit(1)
-          .single();
-
-        if (findError && findError.code !== 'PGRST116') throw findError;
+      
+      if (reservaData.clientName) {
+        const existingAluno = alunos.find(a => a.name.toLowerCase() === reservaData.clientName.toLowerCase());
 
         if (existingAluno) {
-          alunoForReservation = existingAluno;
+            alunoForReservation = existingAluno;
         } else {
-          const { data: newAlunoData, error: newAlunoError } = await supabase.from('alunos').insert({
-            arena_id: arena.id,
-            name: reservaData.clientName,
-            phone: reservaData.clientPhone || null,
-            email: null,
-            status: 'ativo',
-            plan_name: 'Avulso',
-            join_date: format(new Date(), 'yyyy-MM-dd'),
-          }).select('id, profile_id').single();
+            const { data: newAlunoData, error: newAlunoError } = await supabase.from('alunos').insert({
+                arena_id: arena.id,
+                name: reservaData.clientName,
+                phone: reservaData.clientPhone || null,
+                email: null,
+                status: 'ativo',
+                plan_name: 'Avulso',
+                join_date: format(new Date(), 'yyyy-MM-dd'),
+            }).select('id, profile_id').single();
 
-          if (newAlunoError) {
-            addToast({ message: `Reserva criada, mas falha ao adicionar '${reservaData.clientName}' à lista de clientes.`, type: 'error'});
-          } else if (newAlunoData) {
-            alunoForReservation = newAlunoData;
-          }
-        }
-      } else if ((reservaData as any).aluno_id) {
-        const selected = alunos.find(a => a.id === (reservaData as any).aluno_id);
-        if (selected) {
-          alunoForReservation = { id: selected.id, profile_id: selected.profile_id };
+            if (newAlunoError) {
+                addToast({ message: `Reserva salva, mas falha ao criar novo cliente: ${newAlunoError.message}`, type: 'info' });
+            } else if (newAlunoData) {
+                alunoForReservation = newAlunoData;
+            }
         }
       }
   
@@ -224,34 +210,7 @@ const Reservations: React.FC = () => {
         profile_id: alunoForReservation?.profile_id || null,
       };
       
-      // If we have an aluno record but no profile_id, try to find the profile via email
-      if (alunoForReservation && !alunoForReservation.profile_id) {
-        const alunoRecord = alunos.find(a => a.id === alunoForReservation!.id);
-        if (alunoRecord && alunoRecord.email) {
-          try {
-            const { data: profileData, error: profileError } = await supabase
-              .from('profiles')
-              .select('id')
-              .eq('email', alunoRecord.email)
-              .single();
-            
-            if (profileData && !profileError) {
-              dataToUpsert.profile_id = profileData.id;
-      
-              // Proactively update the aluno record for future use
-              await supabase
-                .from('alunos')
-                .update({ profile_id: profileData.id })
-                .eq('id', alunoRecord.id);
-            }
-          } catch (e) {
-            console.warn("Could not find or link profile for aluno:", e);
-          }
-        }
-      }
-
       delete (dataToUpsert as any).originalCreditUsed;
-      delete (dataToUpsert as any).aluno_id;
         
       if (!dataToUpsert.profile_id) {
         delete dataToUpsert.profile_id;

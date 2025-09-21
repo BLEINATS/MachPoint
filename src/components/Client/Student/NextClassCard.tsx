@@ -10,9 +10,10 @@ interface NextClassCardProps {
   quadraName?: string;
   professorName?: string;
   startTime: string;
+  arenaName?: string;
 }
 
-const NextClassCard: React.FC<NextClassCardProps> = ({ date, turmaName, quadraName, professorName, startTime }) => {
+const NextClassCard: React.FC<NextClassCardProps> = ({ date, turmaName, quadraName, professorName, startTime, arenaName }) => {
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -29,11 +30,11 @@ const NextClassCard: React.FC<NextClassCardProps> = ({ date, turmaName, quadraNa
           </div>
           <div className="flex items-center text-brand-gray-700 dark:text-brand-gray-300">
             <Clock className="h-4 w-4 mr-2 text-brand-blue-500" />
-            <span className="font-medium">às {startTime}</span>
+            <span className="font-medium">às {startTime.slice(0, 5)}</span>
           </div>
           <div className="flex items-center text-brand-gray-700 dark:text-brand-gray-300">
             <MapPin className="h-4 w-4 mr-2 text-brand-blue-500" />
-            <span className="font-medium">{quadraName || 'Quadra a definir'}</span>
+            <span className="font-medium">{quadraName ? `${quadraName} • ${arenaName}` : (arenaName || 'Local a definir')}</span>
           </div>
            <div className="flex items-center text-brand-gray-700 dark:text-brand-gray-300">
             <GraduationCap className="h-4 w-4 mr-2 text-brand-blue-500" />

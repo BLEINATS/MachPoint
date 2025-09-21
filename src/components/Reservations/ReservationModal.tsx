@@ -34,7 +34,7 @@ interface ReservationModalProps {
   newReservationSlot?: { quadraId: string, time: string, type?: ReservationType } | null;
   quadras: Quadra[];
   alunos: Aluno[];
-  allReservations: Reserva[];
+  allReservations: Reservation[];
   arenaId: string;
   selectedDate: Date;
   isClientBooking?: boolean;
@@ -78,7 +78,6 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
     start_time: '09:00',
     end_time: '10:00',
     quadra_id: '',
-    aluno_id: '',
     clientName: '',
     clientPhone: '',
     status: 'confirmada' as Reservation['status'],
@@ -87,16 +86,23 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
     total_price: 0,
     credit_used: 0,
     isRecurring: false,
+    recurringType: 'weekly' as Reservation['recurringType'],
     recurringEndDate: format(addDays(new Date(), 30), 'yyyy-MM-dd'),
     rented_items: [] as { itemId: string; name: string; quantity: number; price: number }[],
+    payment_status: 'pendente' as Reservation['payment_status'],
+    notes: '',
   });
 
   const isEditing = !!reservation;
 
   const selectedClient = useMemo(() => {
     if (isClientBooking) return clientProfile;
-    return alunos.find(a => a.id === formData.aluno_id || a.name === formData.clientName);
-  }, [formData.aluno_id, formData.clientName, alunos, isClientBooking, clientProfile]);
+    return alunos.find(a => a.name === formData.clientName);
+  }, [formData.clientName, alunos, isClientBooking, clientProfile]);
+
+  const selectedClientId = useMemo(() => {
+    return selectedClient ? selectedClient.id : null;
+  }, [selectedClient]);
 
   const availableCredit = useMemo(() => {
     return selectedClient?.credit_balance || 0;
@@ -204,7 +210,6 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
           start_time: reservation.start_time.slice(0, 5),
           end_time: reservation.end_time.slice(0, 5),
           quadra_id: reservation.quadra_id,
-          aluno_id: '',
           clientName: reservation.clientName || '',
           clientPhone: reservation.clientPhone || '',
           status: reservation.status,
@@ -213,8 +218,11 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
           total_price: reservation.total_price || 0,
           credit_used: creditAlreadyUsed,
           isRecurring: reservation.isRecurring || false,
+          recurringType: reservation.recurringType || 'weekly',
           recurringEndDate: reservation.recurringEndDate || format(addDays(new Date(), 30), 'yyyy-MM-dd'),
           rented_items: reservation.rented_items || [],
+          payment_status: reservation.payment_status || 'pendente',
+          notes: reservation.notes || '',
         });
         setOriginalCreditUsed(creditAlreadyUsed);
         const initialSelectedItems: Record<string, number> = {};
@@ -448,22 +456,30 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
       setNewlyAppliedCredit(creditToApplyNow);
 
       const totalCreditOnReservation = originalCreditUsed + creditToApplyNow;
+      const finalPrice = priceWithItems - totalCreditOnReservation;
       
       setFormData(prev => ({ 
         ...prev, 
-        total_price: priceWithItems - totalCreditOnReservation,
+        total_price: finalPrice,
         credit_used: totalCreditOnReservation,
         rented_items: rentedItemsDetails,
+        payment_status: finalPrice <= 0 ? 'pago' : 'pendente',
       }));
     };
     calculateSegmentedPrice();
-  }, [formData.quadra_id, formData.sport_type, formData.date, formData.start_time, formData.end_time, formData.aluno_id, pricingRules, durationDiscounts, alunos, useCredit, availableCredit, isEditing, originalCreditUsed, selectedItems, rentalItems, quadras, selectedClient]);
+  }, [formData.quadra_id, formData.sport_type, formData.date, formData.start_time, formData.end_time, selectedClient, pricingRules, durationDiscounts, useCredit, availableCredit, isEditing, originalCreditUsed, selectedItems, rentalItems, quadras]);
 
   const handleSaveClick = () => {
     const dataToSave = {
       ...formData,
       originalCreditUsed: originalCreditUsed,
     };
+    
+    // Explicitly set rented_items to null if it's an empty array to prevent DB errors
+    if (dataToSave.rented_items && dataToSave.rented_items.length === 0) {
+      (dataToSave.rented_items as any) = null;
+    }
+
     onSave(isEditing ? { ...reservation, ...dataToSave } as Reservation : dataToSave);
   };
   
@@ -540,11 +556,10 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                       <CreatableClientSelect
                         alunos={alunos}
-                        value={{ id: formData.aluno_id, name: formData.clientName }}
+                        value={{ id: selectedClientId, name: formData.clientName }}
                         onChange={(selection) => {
                           setFormData(prev => ({
                             ...prev,
-                            aluno_id: selection.id || '',
                             clientName: selection.name,
                             clientPhone: selection.phone || '',
                           }));

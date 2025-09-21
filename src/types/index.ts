@@ -153,7 +153,6 @@ export interface Reservation {
   id: string;
   arena_id: string;
   quadra_id: string;
-  aluno_id?: string | null;
   profile_id?: string | null;
   turma_id?: string | null;
   torneio_id?: string | null;

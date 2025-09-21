@@ -118,69 +118,20 @@ const ArenaPublic: React.FC = () => {
     }
     
     try {
-      let alunoRecord: Aluno | null = alunoProfileForSelectedArena;
-      if (!alunoRecord) {
-        const { data: alunoId, error: rpcError } = await supabase.rpc('get_or_create_my_aluno_profile', {
-          p_arena_id: arena.id
-        });
-
-        if (rpcError) throw rpcError;
-        if (!alunoId) throw new Error("Não foi possível criar o perfil de cliente na arena.");
-
-        const { data: newAlunoData, error: fetchError } = await supabase
-          .from('alunos')
-          .select('*')
-          .eq('id', alunoId)
-          .single();
-
-        if (fetchError) throw fetchError;
-        
-        alunoRecord = newAlunoData;
-        refreshAlunoProfile();
-      }
-      
-      if (!alunoRecord) {
-        addToast({ message: 'Erro ao obter ou criar perfil de cliente na arena.', type: 'error' });
-        return;
-      }
-
-      const dataToUpsert: Partial<Reserva> = {
-        ...reservationData,
-        arena_id: arena.id,
-        profile_id: profile.id,
-        clientName: profile.name,
-        clientPhone: reservationData.clientPhone || alunoRecord.phone || '',
+      const params = {
+        p_arena_id: arena.id,
+        p_quadra_id: reservationData.quadra_id,
+        p_date: reservationData.date,
+        p_start_time: reservationData.start_time,
+        p_end_time: reservationData.end_time,
+        p_credit_to_use: reservationData.credit_used || 0,
+        p_rented_items: reservationData.rented_items && reservationData.rented_items.length > 0 ? reservationData.rented_items : null,
       };
 
-      delete (dataToUpsert as any).originalCreditUsed;
-      delete dataToUpsert.id;
-        
-      const { data: savedReservas, error } = await supabase.from('reservas').insert(dataToUpsert).select();
+      const { error } = await supabase.rpc('create_client_reservation', params);
+
       if (error) throw error;
-
-      const savedReserva = savedReservas?.[0];
-      if (!savedReserva) {
-        throw new Error("A reserva foi criada, mas não foi possível obter os dados de confirmação.");
-      }
-
-      if (savedReserva && savedReserva.credit_used && savedReserva.credit_used > 0) {
-        const { error: rpcError } = await supabase.rpc('add_credit_to_aluno', {
-          aluno_id_to_update: alunoRecord.id,
-          arena_id_to_check: arena.id,
-          amount_to_add: -savedReserva.credit_used
-        });
-        if (rpcError) throw rpcError;
-
-        await supabase.from('credit_transactions').insert({
-          aluno_id: alunoRecord.id,
-          arena_id: arena.id,
-          amount: -savedReserva.credit_used,
-          type: 'reservation_payment',
-          description: `Pagamento da reserva #${savedReserva.id.substring(0, 8)}`,
-          related_reservation_id: savedReserva.id,
-        });
-      }
-
+      
       addToast({ message: 'Reserva criada com sucesso!', type: 'success' });
       setIsModalOpen(false);
       setModalSlot(null);

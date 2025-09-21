@@ -109,8 +109,8 @@ const AnalyticsDashboard: React.FC = () => {
         }
 
         try {
-            const start = parse(horario.start, 'HH:mm', new Date());
-            let end = parse(horario.end, 'HH:mm', new Date());
+            const start = parse(horario.start.slice(0, 5), 'HH:mm', new Date());
+            let end = parse(horario.end.slice(0, 5), 'HH:mm', new Date());
 
             if (isNaN(start.getTime()) || isNaN(end.getTime())) return total;
 
@@ -130,8 +130,8 @@ const AnalyticsDashboard: React.FC = () => {
     const totalBookedHoursToday = todaysBookings.reduce((sum, r) => {
         if (!r.start_time || !r.end_time) return sum;
         try {
-            const startTime = parse(r.start_time, 'HH:mm', new Date());
-            let endTime = parse(r.end_time, 'HH:mm', new Date());
+            const startTime = parse(r.start_time.slice(0, 5), 'HH:mm', new Date());
+            let endTime = parse(r.end_time.slice(0, 5), 'HH:mm', new Date());
 
             if (isNaN(startTime.getTime()) || isNaN(endTime.getTime())) return sum;
 
@@ -361,8 +361,8 @@ const TodaysAgenda: React.FC<{ reservations: Reserva[], quadras: Quadra[], allRe
           let durationHours = 0;
           if (r.start_time && r.end_time) {
               try {
-                  const startTime = parse(r.start_time, 'HH:mm', new Date());
-                  let endTime = parse(r.end_time, 'HH:mm', new Date());
+                  const startTime = parse(r.start_time.slice(0, 5), 'HH:mm', new Date());
+                  let endTime = parse(r.end_time.slice(0, 5), 'HH:mm', new Date());
                   if (!isNaN(startTime.getTime()) && !isNaN(endTime.getTime())) {
                       if (endTime <= startTime) {
                           endTime = addDays(endTime, 1);
@@ -373,8 +373,9 @@ const TodaysAgenda: React.FC<{ reservations: Reserva[], quadras: Quadra[], allRe
               } catch (e) { /* silent */ }
           }
 
-          const rentedItemsTitle = r.rented_items && r.rented_items.length > 0 
-            ? `Itens: ${r.rented_items.map(i => `${i.quantity}x ${i.name}`).join(', ')}` 
+          const totalRentedItems = r.rented_items?.reduce((sum, item) => sum + item.quantity, 0) || 0;
+          const rentedItemsTitle = totalRentedItems > 0
+            ? `Itens: ${r.rented_items?.map(i => `${i.quantity}x ${i.name}`).join(', ')}`
             : undefined;
 
           return (
@@ -402,27 +403,30 @@ const TodaysAgenda: React.FC<{ reservations: Reserva[], quadras: Quadra[], allRe
                   </span>
                 </div>
 
-                <div className="flex items-center flex-wrap gap-x-3 gap-y-1 mt-2 text-sm">
-                  <span className="font-semibold text-brand-gray-700 dark:text-brand-gray-300 flex items-center">
+                <div className="flex items-center flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-brand-gray-500 dark:text-brand-gray-400">
+                  <span className="font-semibold text-brand-gray-700 dark:text-brand-gray-300 flex items-center text-sm">
                       {(r.total_price || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                   </span>
                   
                   {durationHours > 0 && (
-                    <>
-                      <span className="text-brand-gray-300 dark:text-brand-gray-600">|</span>
-                      <span className="flex items-center text-brand-gray-500 dark:text-brand-gray-400 text-xs">
-                          <Clock className="h-3 w-3 mr-1" />
-                          {durationHours.toFixed(1).replace('.', ',')}h
-                      </span>
-                    </>
+                    <span className="flex items-center">
+                        <Clock className="h-3 w-3 mr-1" />
+                        {durationHours.toFixed(1).replace('.', ',')}h
+                    </span>
                   )}
 
                   {r.credit_used && r.credit_used > 0 && (
-                    <CreditCard className="h-4 w-4 text-blue-500 ml-2" title={`Pago com ${r.credit_used.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de crédito`} />
+                    <span className="flex items-center text-blue-500 dark:text-blue-400" title={`Pago com ${r.credit_used.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de crédito`}>
+                        <CreditCard className="h-4 w-4 mr-1" />
+                        Crédito
+                    </span>
                   )}
                   
-                  {rentedItemsTitle && (
-                    <ShoppingBag className="h-4 w-4 text-purple-500 ml-2" title={rentedItemsTitle} />
+                  {totalRentedItems > 0 && (
+                    <span className="flex items-center text-purple-500 dark:text-purple-400" title={rentedItemsTitle}>
+                      <ShoppingBag className="h-4 w-4 mr-1" />
+                      {totalRentedItems} {totalRentedItems > 1 ? 'itens' : 'item'}
+                    </span>
                   )}
                 </div>
               </div>
