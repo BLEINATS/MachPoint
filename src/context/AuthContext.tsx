@@ -185,10 +185,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const signIn = async (email: string, password: string) => {
-    const { supabaseWithRetry } = await import('../lib/supabaseClient');
-    const { error } = await supabaseWithRetry(() => 
-      supabase.auth.signInWithPassword({ email, password })
-    );
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
   };
 
