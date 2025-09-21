@@ -8,45 +8,27 @@ if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error("Missing Supabase configuration");
 }
 
-// SOLUÇÃO REPLIT-ESPECÍFICA: Configuração otimizada para contornar restrições de rede
-console.log('🔧 Configurando Supabase para Replit...');
+console.log('🔧 Configuração padrão Supabase');
+console.log('🔗 URL:', supabaseUrl);
 
+// Configuração padrão e segura do Supabase
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     autoRefreshToken: true,
     persistSession: true,
     detectSessionInUrl: true,
-    flowType: 'pkce'
+    flowType: 'pkce' // Seguro para SPAs
   },
   global: {
-    headers: {
-      'Cache-Control': 'no-cache, no-store, must-revalidate',
-      'Pragma': 'no-cache',
-      'Expires': '0'
-    },
     fetch: (url, options = {}) => {
-      // Implementar timeout e retry personalizado para Replit
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 10000) // 10s timeout
-      
       return fetch(url, {
         ...options,
-        signal: controller.signal,
-        mode: 'cors',
-        credentials: 'omit' // Evita problemas de CORS em Replit
-      }).finally(() => {
-        clearTimeout(timeoutId)
+        cache: 'no-store' // Evita problemas de cache em Replit
       })
     }
   },
   db: {
     schema: 'public'
-  },
-  realtime: {
-    heartbeatIntervalMs: 30000,
-    reconnectAfterMs: function (tries: number) {
-      return Math.min(tries * 2000, 30000)
-    }
   }
 })
 
