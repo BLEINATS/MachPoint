@@ -11,10 +11,13 @@ if (!supabaseUrl || !supabaseAnonKey) {
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,
-    detectSessionInUrl: true,
-    flowType: 'pkce'
+    detectSessionInUrl: false,
+    autoRefreshToken: true,
+    storage: window.localStorage
   },
-  db: {
-    schema: 'public'
+  global: {
+    headers: {
+      'Access-Control-Allow-Origin': '*'
+    }
   }
 })
