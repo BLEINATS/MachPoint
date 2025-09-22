@@ -118,12 +118,12 @@ const ClientDashboard: React.FC = () => {
         p_start_time: reservationData.start_time,
         p_end_time: reservationData.end_time,
         p_credit_to_use: reservationData.credit_used || 0,
-        p_rented_items: reservationData.rented_items && reservationData.rented_items.length > 0 ? reservationData.rented_items : null,
-        p_client_name: reservationData.clientName,
-        p_client_phone: reservationData.clientPhone || null
+        p_rented_items: reservationData.rented_items || [],
+        p_total_price: reservationData.total_price || 0,
+        p_sport_type: reservationData.sport_type,
       };
 
-      const { error } = await supabase.rpc('create_client_reservation', params);
+      const { error } = await supabase.rpc('create_booking_with_credit', params);
 
       if (error) throw error;
       
@@ -149,7 +149,7 @@ const ClientDashboard: React.FC = () => {
   
   const handleConfirmCancellation = async (reservaId: string) => {
     try {
-      const { error } = await supabase.rpc('handle_client_cancellation_final', {
+      const { error } = await supabase.rpc('definitive_cancel_function', {
         p_reserva_id: reservaId,
       });
 

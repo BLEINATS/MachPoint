@@ -13,7 +13,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { X, Save, Calendar, Clock, User, Phone, Repeat, Tag, DollarSign, Info, AlertTriangle, CreditCard, ShoppingBag } from 'lucide-react';
-import { Aluno, Quadra, Reservation, PricingRule, DurationDiscount, ReservationType, RentalItem, Profile } from '../../types';
+import { Aluno, Quadra, Reserva, PricingRule, DurationDiscount, ReservationType, RentalItem, Profile } from '../../types';
 import Button from '../Forms/Button';
 import Input from '../Forms/Input';
 import { useAuth } from '../../context/AuthContext';
@@ -28,13 +28,13 @@ import { expandRecurringReservations } from '../../utils/reservationUtils';
 interface ReservationModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (reservation: Omit<Reservation, 'id' | 'created_at' | 'arena_id'> | Reservation) => void;
-  onCancelReservation: (reservation: Reservation) => void;
-  reservation?: Reservation | null;
+  onSave: (reservation: Omit<Reserva, 'id' | 'created_at' | 'arena_id'> | Reserva) => void;
+  onCancelReservation: (reservation: Reserva) => void;
+  reservation?: Reserva | null;
   newReservationSlot?: { quadraId: string, time: string, type?: ReservationType } | null;
   quadras: Quadra[];
   alunos: Aluno[];
-  allReservations: Reservation[];
+  allReservations: Reserva[];
   arenaId: string;
   selectedDate: Date;
   isClientBooking?: boolean;
@@ -80,16 +80,16 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
     quadra_id: '',
     clientName: '',
     clientPhone: '',
-    status: 'confirmada' as Reservation['status'],
-    type: 'avulsa' as Reservation['type'],
+    status: 'confirmada' as Reserva['status'],
+    type: 'avulsa' as ReservationType,
     sport_type: 'Beach Tennis',
     total_price: 0,
     credit_used: 0,
     isRecurring: false,
-    recurringType: 'weekly' as Reservation['recurringType'],
+    recurringType: 'weekly' as Reserva['recurringType'],
     recurringEndDate: format(addDays(new Date(), 30), 'yyyy-MM-dd'),
     rented_items: [] as { itemId: string; name: string; quantity: number; price: number }[],
-    payment_status: 'pendente' as Reservation['payment_status'],
+    payment_status: 'pendente' as Reserva['payment_status'],
     notes: '',
   });
 
@@ -142,7 +142,7 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
       rentalItems.forEach(item => {
         const bookedQuantity = reservationsOnDate
           .filter(r => {
-            if (isEditing && (r.id === reservation?.id || (reservation?.id && r.masterId === reservation.id))) return false;
+            if (isEditing && (r.id === reservation?.id || (reservation?.id && r.master_id === reservation.id))) return false;
             if (r.status !== 'confirmada') return false;
 
             const existingStart = parse(r.start_time, 'HH:mm', reservationBaseDate);
@@ -452,35 +452,24 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
       setNewlyAppliedCredit(creditToApplyNow);
 
       const totalCreditOnReservation = originalCreditUsed + creditToApplyNow;
-      const finalPrice = priceWithItems - totalCreditOnReservation;
       
       setFormData(prev => ({ 
         ...prev, 
-        total_price: finalPrice,
+        total_price: priceWithItems,
         credit_used: totalCreditOnReservation,
         rented_items: rentedItemsDetails,
-        payment_status: finalPrice <= 0 ? 'pago' : 'pendente',
+        payment_status: (priceWithItems - totalCreditOnReservation) <= 0 ? 'pago' : 'pendente',
       }));
     };
     calculateSegmentedPrice();
   }, [formData.quadra_id, formData.sport_type, formData.date, formData.start_time, formData.end_time, selectedClient, pricingRules, durationDiscounts, useCredit, availableCredit, isEditing, originalCreditUsed, selectedItems, rentalItems, quadras]);
 
   const handleSaveClick = () => {
-    // This is the total price of the reservation before any credits are applied.
-    const priceBeforeCredit = subtotal - discountAmount + (formData.rented_items?.reduce((acc, item) => acc + item.price * item.quantity, 0) || 0);
-
     const dataToSave = {
       ...formData,
-      total_price: priceBeforeCredit, // This is the main fix: send the price BEFORE credits.
       originalCreditUsed: originalCreditUsed,
     };
-    
-    // Explicitly set rented_items to null if it's an empty array to prevent DB errors
-    if (dataToSave.rented_items && dataToSave.rented_items.length === 0) {
-      (dataToSave.rented_items as any) = null;
-    }
-
-    onSave(isEditing ? { ...reservation, ...dataToSave } as Reservation : dataToSave);
+    onSave(isEditing ? { ...reservation, ...dataToSave } as Reserva : dataToSave);
   };
   
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -510,10 +499,14 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
     }));
   };
 
+  const finalPriceToPay = useMemo(() => {
+    return (formData.total_price || 0) - (formData.credit_used || 0);
+  }, [formData.total_price, formData.credit_used]);
+
   const finalPriceLabel = useMemo(() => {
-    if (formData.total_price > 0) return 'Valor a Pagar';
+    if (finalPriceToPay > 0) return 'Valor a Pagar';
     return 'Valor Total';
-  }, [formData.total_price]);
+  }, [finalPriceToPay]);
 
   return (
     <AnimatePresence>
@@ -723,7 +716,9 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
 
                       <div className="flex justify-between text-lg font-bold border-t-2 border-brand-gray-300 dark:border-brand-gray-600 pt-3 mt-3">
                           <span className="text-brand-gray-800 dark:text-white">{finalPriceLabel}</span>
-                          <span className="text-brand-blue-600 dark:text-brand-blue-300">{formData.total_price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                          <span className="text-brand-blue-600 dark:text-brand-blue-300">
+                            {finalPriceToPay.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                          </span>
                       </div>
                       
                       {useCredit && (
