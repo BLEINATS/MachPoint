@@ -126,6 +126,9 @@ const ArenaPublic: React.FC = () => {
         p_end_time: reservationData.end_time,
         p_credit_to_use: reservationData.credit_used || 0,
         p_rented_items: reservationData.rented_items && reservationData.rented_items.length > 0 ? reservationData.rented_items : null,
+        p_client_name: reservationData.clientName,
+        p_client_phone: reservationData.clientPhone || null,
+        p_total_price: reservationData.total_price || 0,
       };
 
       const { error } = await supabase.rpc('create_client_reservation', params);

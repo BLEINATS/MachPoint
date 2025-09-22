@@ -7,7 +7,6 @@ interface OperationTabProps {
   setFormData: React.Dispatch<React.SetStateAction<Partial<Arena>>>;
 }
 
-
 const OperationTab: React.FC<OperationTabProps> = ({ formData, setFormData }) => {
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const { name, value } = e.target;

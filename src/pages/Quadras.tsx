@@ -246,10 +246,10 @@ const Quadras: React.FC = () => {
         </div>
 
         <div className="mb-8 border-b border-brand-gray-200 dark:border-brand-gray-700">
-          <nav className="-mb-px flex space-x-6" aria-label="Tabs">
+          <nav className="-mb-px flex space-x-4 overflow-x-auto" aria-label="Tabs">
             <button
               onClick={() => setActiveTab('quadras')}
-              className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center transition-colors ${
+              className={`whitespace-nowrap py-4 px-3 border-b-2 font-medium text-sm flex items-center transition-colors ${
                 activeTab === 'quadras'
                   ? 'border-brand-blue-500 text-brand-blue-600 dark:text-brand-blue-400'
                   : 'border-transparent text-brand-gray-500 hover:text-brand-gray-700 hover:border-brand-gray-300 dark:text-brand-gray-400 dark:hover:text-brand-gray-200 dark:hover:border-brand-gray-600'
@@ -260,7 +260,7 @@ const Quadras: React.FC = () => {
             </button>
             <button
               onClick={() => setActiveTab('itens')}
-              className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center transition-colors ${
+              className={`whitespace-nowrap py-4 px-3 border-b-2 font-medium text-sm flex items-center transition-colors ${
                 activeTab === 'itens'
                   ? 'border-brand-blue-500 text-brand-blue-600 dark:text-brand-blue-400'
                   : 'border-transparent text-brand-gray-500 hover:text-brand-gray-700 hover:border-brand-gray-300 dark:text-brand-gray-400 dark:hover:text-brand-gray-200 dark:hover:border-brand-gray-600'
@@ -271,7 +271,7 @@ const Quadras: React.FC = () => {
             </button>
             <button
               onClick={() => setActiveTab('promocoes')}
-              className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center transition-colors ${
+              className={`whitespace-nowrap py-4 px-3 border-b-2 font-medium text-sm flex items-center transition-colors ${
                 activeTab === 'promocoes'
                   ? 'border-brand-blue-500 text-brand-blue-600 dark:text-brand-blue-400'
                   : 'border-transparent text-brand-gray-500 hover:text-brand-gray-700 hover:border-brand-gray-300 dark:text-brand-gray-400 dark:hover:text-brand-gray-200 dark:hover:border-brand-gray-600'

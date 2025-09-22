@@ -30,8 +30,19 @@ const QuadraCard: React.FC<QuadraCardProps> = ({ quadra, onEdit, onDelete, index
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
   const navigate = useNavigate();
 
-  const hasPhotos = quadra.photos && quadra.photos.length > 0;
-  const hasMultiplePhotos = hasPhotos && quadra.photos.length > 1;
+  const photosToShow = useMemo(() => {
+    if (!quadra.photos || quadra.photos.length === 0) {
+      return [];
+    }
+    const coverPhoto = quadra.cover_photo;
+    if (coverPhoto && quadra.photos.includes(coverPhoto)) {
+      return [coverPhoto, ...quadra.photos.filter(p => p !== coverPhoto)];
+    }
+    return quadra.photos;
+  }, [quadra.photos, quadra.cover_photo]);
+
+  const hasPhotos = photosToShow.length > 0;
+  const hasMultiplePhotos = photosToShow.length > 1;
 
   const priceRange = useMemo(() => {
     if (!quadra.pricing_rules || quadra.pricing_rules.length === 0) {
@@ -51,15 +62,15 @@ const QuadraCard: React.FC<QuadraCardProps> = ({ quadra, onEdit, onDelete, index
 
   const nextPhoto = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (hasPhotos) {
-      setCurrentPhotoIndex((prev) => (prev + 1) % quadra.photos.length);
+    if (hasMultiplePhotos) {
+      setCurrentPhotoIndex((prev) => (prev + 1) % photosToShow.length);
     }
   };
 
   const prevPhoto = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (hasPhotos) {
-      setCurrentPhotoIndex((prev) => (prev - 1 + quadra.photos.length) % quadra.photos.length);
+    if (hasMultiplePhotos) {
+      setCurrentPhotoIndex((prev) => (prev - 1 + photosToShow.length) % photosToShow.length);
     }
   };
 
@@ -92,7 +103,7 @@ const QuadraCard: React.FC<QuadraCardProps> = ({ quadra, onEdit, onDelete, index
     >
       <div className="aspect-video bg-brand-gray-200 dark:bg-brand-gray-700 relative overflow-hidden group">
         {hasPhotos ? (
-            <img src={quadra.photos[currentPhotoIndex]} alt={`${quadra.name} - Foto ${currentPhotoIndex + 1}`} className="w-full h-full object-cover transition-opacity duration-300" />
+            <img src={photosToShow[currentPhotoIndex]} alt={`${quadra.name} - Foto ${currentPhotoIndex + 1}`} className="w-full h-full object-cover transition-opacity duration-300" />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-brand-gray-400 dark:text-brand-gray-500 bg-gradient-to-br from-brand-gray-100 to-brand-gray-200 dark:from-brand-gray-800 dark:to-brand-gray-700">
             <MapPin className="h-12 w-12" />
@@ -104,7 +115,7 @@ const QuadraCard: React.FC<QuadraCardProps> = ({ quadra, onEdit, onDelete, index
               <button onClick={prevPhoto} className="bg-black/50 text-white p-2 rounded-full hover:bg-black/70 transition-colors"><ArrowLeft className="h-5 w-5" /></button>
               <button onClick={nextPhoto} className="bg-black/50 text-white p-2 rounded-full hover:bg-black/70 transition-colors"><ArrowRight className="h-5 w-5" /></button>
             </div>
-            <div className="absolute bottom-2 right-2 bg-black/60 text-white text-xs font-semibold px-2 py-1 rounded-full">{currentPhotoIndex + 1} / {quadra.photos.length}</div>
+            <div className="absolute bottom-2 right-2 bg-black/60 text-white text-xs font-semibold px-2 py-1 rounded-full">{currentPhotoIndex + 1} / {photosToShow.length}</div>
           </>
         )}
         <div className="absolute top-3 right-3 z-10">

@@ -243,17 +243,13 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
         
         let clientData = {};
         if (isClientBooking) {
-          if (clientProfile) {
-            clientData = {
-              clientName: clientProfile.name,
-              clientPhone: clientProfile.phone || '',
-            };
-          } else if (userProfile) {
-            clientData = {
-              clientName: userProfile.name,
-              clientPhone: '',
-            };
-          }
+            // The global user profile is the source of truth for personal data
+            if (userProfile) {
+                clientData = {
+                    clientName: userProfile.name,
+                    clientPhone: userProfile.phone || '',
+                };
+            }
         }
 
         setFormData(prev => ({
@@ -470,8 +466,12 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
   }, [formData.quadra_id, formData.sport_type, formData.date, formData.start_time, formData.end_time, selectedClient, pricingRules, durationDiscounts, useCredit, availableCredit, isEditing, originalCreditUsed, selectedItems, rentalItems, quadras]);
 
   const handleSaveClick = () => {
+    // This is the total price of the reservation before any credits are applied.
+    const priceBeforeCredit = subtotal - discountAmount + (formData.rented_items?.reduce((acc, item) => acc + item.price * item.quantity, 0) || 0);
+
     const dataToSave = {
       ...formData,
+      total_price: priceBeforeCredit, // This is the main fix: send the price BEFORE credits.
       originalCreditUsed: originalCreditUsed,
     };
     

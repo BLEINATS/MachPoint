@@ -21,6 +21,7 @@ export interface Profile {
   email: string;
   avatar_url: string | null;
   role: 'cliente' | 'admin_arena';
+  phone?: string | null;
   clientType?: 'cliente' | 'aluno' | 'mensalista';
   birth_date?: string;
   gender?: 'masculino' | 'feminino' | 'outro' | 'nao_informado';

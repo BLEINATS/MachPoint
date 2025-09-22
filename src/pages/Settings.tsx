@@ -1,41 +1,61 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { Building, FileText, BarChart2, CheckCircle, Save, ArrowLeft } from 'lucide-react';
+import { Building, FileText, BarChart2, CheckCircle, Save, ArrowLeft, User, Lock } from 'lucide-react';
 import Layout from '../components/Layout/Layout';
 import { useAuth } from '../context/AuthContext';
-import { Arena } from '../types';
+import { Arena, Profile } from '../types';
 import Button from '../components/Forms/Button';
 import ProfileTab from '../components/Settings/ProfileTab';
+import ClientProfileSettingsTab from '../components/Settings/ClientProfileSettingsTab';
 import OperationTab from '../components/Settings/OperationTab';
 import PlanTab from '../components/Settings/PlanTab';
 
-type TabType = 'profile' | 'operation' | 'plan';
+type AdminTabType = 'profile' | 'operation' | 'plan';
+type ClientTabType = 'my-profile' | 'security';
 
 const Settings: React.FC = () => {
-  const { arena, updateArena, isLoading: isAuthLoading } = useAuth();
-  const [activeTab, setActiveTab] = useState<TabType>('profile');
-  const [formData, setFormData] = useState<Partial<Arena>>({});
+  const { arena, updateArena, profile, updateProfile, isLoading: isAuthLoading } = useAuth();
+  
+  const [arenaFormData, setArenaFormData] = useState<Partial<Arena>>({});
+  const [profileFormData, setProfileFormData] = useState<Partial<Profile>>({});
+
   const [isSaving, setIsSaving] = useState(false);
   const [showSuccess, setShowSuccess] = useState(false);
 
-  useEffect(() => {
-    if (arena) {
-      setFormData(arena);
-    }
-  }, [arena]);
+  const isAdmin = profile?.role === 'admin_arena';
 
-  const tabs: { id: TabType; label: string; icon: React.ElementType }[] = [
+  const adminTabs: { id: AdminTabType; label: string; icon: React.ElementType }[] = [
     { id: 'profile', label: 'Perfil da Arena', icon: Building },
     { id: 'operation', label: 'Operação e Políticas', icon: FileText },
     { id: 'plan', label: 'Plano e Faturamento', icon: BarChart2 },
   ];
 
+  const clientTabs: { id: ClientTabType; label: string; icon: React.ElementType }[] = [
+    { id: 'my-profile', label: 'Meu Perfil', icon: User },
+    { id: 'security', label: 'Segurança', icon: Lock },
+  ];
+
+  const tabs = isAdmin ? adminTabs : clientTabs;
+  const [activeTab, setActiveTab] = useState(tabs[0].id);
+
+  useEffect(() => {
+    if (arena && isAdmin) {
+      setArenaFormData(arena);
+    }
+    if (profile && !isAdmin) {
+      setProfileFormData(profile);
+    }
+  }, [arena, profile, isAdmin]);
+
   const handleSave = async () => {
-    if (!arena) return;
     setIsSaving(true);
     try {
-      await updateArena(formData);
+      if (isAdmin) {
+        await updateArena(arenaFormData);
+      } else {
+        await updateProfile(profileFormData);
+      }
       setShowSuccess(true);
       setTimeout(() => setShowSuccess(false), 2000);
     } catch (error) {
@@ -47,15 +67,31 @@ const Settings: React.FC = () => {
   };
 
   const renderContent = () => {
-    switch (activeTab) {
-      case 'profile':
-        return <ProfileTab formData={formData} setFormData={setFormData} />;
-      case 'operation':
-        return <OperationTab formData={formData} setFormData={setFormData} />;
-      case 'plan':
-        return <PlanTab />;
-      default:
-        return null;
+    if (isAdmin) {
+      switch (activeTab) {
+        case 'profile':
+          return <ProfileTab formData={arenaFormData} setFormData={setArenaFormData} />;
+        case 'operation':
+          return <OperationTab formData={arenaFormData} setFormData={setArenaFormData} />;
+        case 'plan':
+          return <PlanTab />;
+        default:
+          return null;
+      }
+    } else {
+      switch (activeTab) {
+        case 'my-profile':
+          return <ClientProfileSettingsTab formData={profileFormData} setFormData={setProfileFormData} />;
+        case 'security':
+          return (
+            <div>
+              <h3 className="text-lg font-semibold text-brand-gray-900 dark:text-white">Alterar Senha</h3>
+              <p className="mt-2 text-brand-gray-500 dark:text-brand-gray-400">Funcionalidade de alteração de senha em desenvolvimento.</p>
+            </div>
+          );
+        default:
+          return null;
+      }
     }
   };
 
@@ -68,6 +104,8 @@ const Settings: React.FC = () => {
       </Layout>
     );
   }
+  
+  const canSave = isAdmin ? (activeTab === 'profile' || activeTab === 'operation') : (activeTab === 'my-profile');
 
   return (
     <Layout>
@@ -81,11 +119,12 @@ const Settings: React.FC = () => {
             Voltar para o Dashboard
           </Link>
           <h1 className="text-3xl font-bold text-brand-gray-900 dark:text-white">Configurações</h1>
-          <p className="text-brand-gray-600 dark:text-brand-gray-400 mt-2">Gerencie as informações e políticas da sua arena.</p>
+          <p className="text-brand-gray-600 dark:text-brand-gray-400 mt-2">
+            {isAdmin ? 'Gerencie as informações e políticas da sua arena.' : 'Gerencie as informações do seu perfil.'}
+          </p>
         </motion.div>
 
         <div className="bg-white dark:bg-brand-gray-900 rounded-xl shadow-2xl overflow-hidden flex flex-col md:flex-row min-h-[70vh]">
-          {/* Sidebar */}
           <aside className="w-full md:w-72 bg-brand-gray-50 dark:bg-brand-gray-800 p-6 border-b md:border-b-0 md:border-r border-brand-gray-200 dark:border-brand-gray-700">
             <nav className="space-y-2">
               {tabs.map(tab => (
@@ -105,7 +144,6 @@ const Settings: React.FC = () => {
             </nav>
           </aside>
 
-          {/* Main Content */}
           <main className="flex-1 p-6 md:p-8 flex flex-col">
             <div className="flex-1">
               <AnimatePresence mode="wait">
@@ -121,8 +159,7 @@ const Settings: React.FC = () => {
               </AnimatePresence>
             </div>
             
-            {/* Footer */}
-            {(activeTab === 'profile' || activeTab === 'operation') && (
+            {canSave && (
               <div className="mt-8 pt-6 border-t border-brand-gray-200 dark:border-brand-gray-700 flex justify-end">
                 <Button onClick={handleSave} isLoading={isSaving} disabled={isSaving}>
                   <AnimatePresence mode="wait" initial={false}>
@@ -134,7 +171,7 @@ const Settings: React.FC = () => {
                       className="flex items-center"
                     >
                       {showSuccess ? (
-                        <><CheckCircle className="h-4 w-4 mr-2" /> Salvo com sucesso!</>
+                        <><CheckCircle className="h-4 w-4 mr-2" /> Salvo!</>
                       ) : (
                         <><Save className="h-4 w-4 mr-2" /> Salvar Alterações</>
                       )}
