@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabaseClient';
-import { Quadra, Reserva, Aluno, Turma, Professor, CreditTransaction, Profile } from '../../types';
+import { Quadra, Reserva, Aluno, Turma, Professor, CreditTransaction, Profile, Arena } from '../../types';
 import { Calendar, History, Compass, Search, Sparkles, GraduationCap, CreditCard, LayoutDashboard, Loader2, CheckCircle, AlertCircle, ShoppingBag, Clock, Heart, DollarSign } from 'lucide-react';
 import { isAfter, startOfDay, isSameDay, format, parse, getDay, addDays, isBefore, endOfDay, isPast, addMinutes } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
@@ -18,6 +18,7 @@ import { expandRecurringReservations } from '../../utils/reservationUtils';
 import DatePickerCalendar from './DatePickerCalendar';
 import RecommendationCard from './RecommendationCard';
 import ClientCancellationModal from './ClientCancellationModal';
+import ArenaInfoCard from './ArenaInfoCard';
 
 type TabType = 'overview' | 'reservations' | 'credits';
 
@@ -110,66 +111,32 @@ const ClientDashboard: React.FC = () => {
       return;
     }
 
-    const creationParams = {
-        p_arena_id: selectedArenaContext.id,
-        p_quadra_id: reservationData.quadra_id,
-        p_date: reservationData.date,
-        p_start_time: reservationData.start_time,
-        p_end_time: reservationData.end_time,
-        p_credit_to_use: reservationData.credit_used || 0,
-        p_rented_items: reservationData.rented_items || [],
-        p_client_name: profile.name,
-        p_client_phone: profile.phone || '',
+    const params = {
+      p_profile_id: profile.id,
+      p_arena_id: selectedArenaContext.id,
+      p_quadra_id: reservationData.quadra_id,
+      p_date: reservationData.date,
+      p_start_time: reservationData.start_time,
+      p_end_time: reservationData.end_time,
+      p_total_price: reservationData.total_price || 0,
+      p_credit_to_use: reservationData.credit_used || 0,
+      p_rented_items: reservationData.rented_items || [],
+      p_sport_type: reservationData.sport_type || 'Outro',
     };
 
     try {
-        // Step 1: Create the reservation.
-        const { error: createError } = await supabase.rpc('create_client_reservation', creationParams);
-        if (createError) throw createError;
-
-        // Step 2: Find the reservation to get its ID.
-        const { data: foundReservas, error: findError } = await supabase
-            .from('reservas')
-            .select('id')
-            .eq('profile_id', profile.id)
-            .eq('quadra_id', reservationData.quadra_id)
-            .eq('date', reservationData.date)
-            .eq('start_time', reservationData.start_time)
-            .order('created_at', { ascending: false })
-            .limit(1);
-
-        if (findError || !foundReservas || foundReservas.length === 0) {
-            addToast({ message: 'Reserva criada, mas falha ao atualizar o preço. Por favor, contate o administrador.', type: 'info' });
-        } else {
-            const newReservaId = foundReservas[0].id;
-
-            // Step 3: Update with correct details.
-            const { error: updateError } = await supabase
-                .from('reservas')
-                .update({ 
-                    total_price: reservationData.total_price,
-                    sport_type: reservationData.sport_type,
-                    clientPhone: profile.phone || reservationData.clientPhone,
-                    rented_items: reservationData.rented_items,
-                    credit_used: reservationData.credit_used,
-                    payment_status: reservationData.payment_status,
-                 })
-                .eq('id', newReservaId);
-
-            if (updateError) {
-                addToast({ message: 'Reserva criada, mas falha ao atualizar o preço. Por favor, contate o administrador.', type: 'info' });
-            } else {
-                addToast({ message: 'Reserva criada com sucesso!', type: 'success' });
-            }
-        }
-
+      const { error } = await supabase.rpc('create_booking_with_credit', params);
+      if (error) throw error;
+      
+      addToast({ message: 'Reserva criada com sucesso!', type: 'success' });
     } catch (error: any) {
-        addToast({ message: `Erro no processo de reserva: ${error.message}`, type: 'error' });
+      console.error("Erro ao criar reserva (Dashboard):", error);
+      addToast({ message: `Erro ao criar reserva: ${error.message}`, type: 'error' });
     } finally {
-        setIsModalOpen(false);
-        setModalSlot(null);
-        refreshAlunoProfile();
-        await loadData();
+      setIsModalOpen(false);
+      setModalSlot(null);
+      refreshAlunoProfile();
+      await loadData();
     }
   };
 
@@ -183,18 +150,27 @@ const ClientDashboard: React.FC = () => {
   };
   
   const handleConfirmCancellation = async (reservaId: string) => {
+    if (!profile) {
+      addToast({ message: 'Erro: Perfil do usuário não encontrado.', type: 'error' });
+      return;
+    }
     try {
-      const { error } = await supabase.rpc('definitive_cancel_function', {
+      const { error } = await supabase.rpc('handle_client_cancellation_final', {
         p_reserva_id: reservaId,
+        p_profile_id: profile.id
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error("Erro ao cancelar reserva:", error);
+        throw error;
+      }
 
       addToast({ message: 'Reserva cancelada e crédito aplicado com sucesso!', type: 'success' });
       await loadData();
       refreshAlunoProfile();
 
     } catch (error: any) {
+      console.error("Erro ao cancelar reserva:", error);
       addToast({ message: `Erro ao cancelar reserva: ${error.message}`, type: 'error' });
     } finally {
       setIsCancelModalOpen(false);
@@ -249,17 +225,64 @@ const ClientDashboard: React.FC = () => {
 
 
   const upcomingReservations = useMemo(() => {
-    const today = startOfDay(new Date());
+    const now = new Date();
     return reservas
-      .filter(r => (isAfter(parseDateStringAsLocal(r.date), today) || isSameDay(parseDateStringAsLocal(r.date), today)) && r.status === 'confirmada')
-      .sort((a, b) => parseDateStringAsLocal(a.date).getTime() - parseDateStringAsLocal(a.start_time).getTime() || a.start_time.localeCompare(b.start_time));
+      .filter(r => {
+        if (r.status !== 'confirmada') return false;
+        try {
+          const reservationDate = parseDateStringAsLocal(r.date);
+          const [endHours, endMinutes] = r.end_time.split(':').map(Number);
+          const endDateTime = new Date(reservationDate.setHours(endHours, endMinutes, 0, 0));
+          return isAfter(endDateTime, now);
+        } catch {
+          return false;
+        }
+      })
+      .sort((a, b) => {
+        try {
+          const aDate = parseDateStringAsLocal(a.date);
+          const [aStartHours, aStartMinutes] = a.start_time.split(':').map(Number);
+          const aDateTime = new Date(aDate.setHours(aStartHours, aStartMinutes, 0, 0));
+
+          const bDate = parseDateStringAsLocal(b.date);
+          const [bStartHours, bStartMinutes] = b.start_time.split(':').map(Number);
+          const bDateTime = new Date(bDate.setHours(bStartHours, bStartMinutes, 0, 0));
+          
+          return aDateTime.getTime() - bDateTime.getTime();
+        } catch {
+          return 0;
+        }
+      });
   }, [reservas]);
 
   const pastReservations = useMemo(() => {
-    const today = startOfDay(new Date());
+    const now = new Date();
     return reservas
-      .filter(r => isBefore(parseDateStringAsLocal(r.date), today))
-      .sort((a, b) => parseDateStringAsLocal(b.date).getTime() - parseDateStringAsLocal(a.date).getTime());
+      .filter(r => {
+        try {
+          const reservationDate = parseDateStringAsLocal(r.date);
+          const [endHours, endMinutes] = r.end_time.split(':').map(Number);
+          const endDateTime = new Date(reservationDate.setHours(endHours, endMinutes, 0, 0));
+          return isBefore(endDateTime, now);
+        } catch {
+          return true; // If parsing fails, assume it's in the past to be safe
+        }
+      })
+      .sort((a, b) => {
+        try {
+          const aDate = parseDateStringAsLocal(a.date);
+          const [aStartHours, aStartMinutes] = a.start_time.split(':').map(Number);
+          const aDateTime = new Date(aDate.setHours(aStartHours, aStartMinutes, 0, 0));
+
+          const bDate = parseDateStringAsLocal(b.date);
+          const [bStartHours, bStartMinutes] = b.start_time.split(':').map(Number);
+          const bDateTime = new Date(bDate.setHours(bStartHours, bStartMinutes, 0, 0));
+
+          return bDateTime.getTime() - aDateTime.getTime();
+        } catch {
+          return 0;
+        }
+      });
   }, [reservas]);
 
   const isStudent = useMemo(() => !!alunoProfileForSelectedArena?.plan_name && alunoProfileForSelectedArena.plan_name.toLowerCase() !== 'avulso', [alunoProfileForSelectedArena]);
@@ -337,6 +360,7 @@ const ClientDashboard: React.FC = () => {
                   profile={profile}
                   arenaName={selectedArenaContext?.name}
                   recommendation={recommendation}
+                  selectedArena={selectedArenaContext}
                />;
       case 'reservations':
         return <ReservationsTab upcoming={upcomingReservations} past={pastReservations} quadras={quadras} arenaName={selectedArenaContext?.name} onCancel={handleOpenCancelModal} />;
@@ -440,7 +464,8 @@ const OverviewTab: React.FC<{
   profile: Profile | null,
   arenaName?: string,
   recommendation: { quadra: Quadra; date: Date; time: string } | null;
-}> = ({creditBalance, nextReservation, nextClass, quadras, reservas, onSlotClick, selectedDate, setSelectedDate, profile, arenaName, recommendation}) => {
+  selectedArena: Arena | null;
+}> = ({creditBalance, nextReservation, nextClass, quadras, reservas, onSlotClick, selectedDate, setSelectedDate, profile, arenaName, recommendation, selectedArena}) => {
   const [favoriteQuadras, setFavoriteQuadras] = useState<string[]>([]);
 
   useEffect(() => {
@@ -482,7 +507,14 @@ const OverviewTab: React.FC<{
       <div className="lg:w-2/3 space-y-8 order-1 lg:order-none">
         {nextClass && <NextClassCard date={nextClass.date} turmaName={nextClass.turma.name} quadraName={nextClass.quadra?.name} professorName={nextClass.professor?.name} startTime={nextClass.turma.start_time} arenaName={arenaName} />}
         {nextReservation && <UpcomingReservationCard reservation={nextReservation} quadra={quadras.find(q => q.id === nextReservation.quadra_id)} index={0} arenaName={arenaName} />}
-        {!nextClass && !nextReservation && <EmptyState message="Você não tem nenhuma atividade agendada." />}
+        
+        {!nextClass && !nextReservation && selectedArena && (
+          <ArenaInfoCard arena={selectedArena} />
+        )}
+        {!nextClass && !nextReservation && !selectedArena && (
+          <EmptyState message="Você não tem nenhuma atividade agendada." />
+        )}
+
         <QuickBookingWidget 
           quadras={sortedQuadras}
           reservas={reservas}
@@ -737,6 +769,5 @@ const EmptyState: React.FC<{message: string}> = ({ message }) => (
     <p className="text-brand-gray-600 dark:text-brand-gray-400">{message}</p>
   </div>
 );
-
 
 export default ClientDashboard;

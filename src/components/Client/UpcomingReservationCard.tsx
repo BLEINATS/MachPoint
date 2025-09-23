@@ -30,7 +30,7 @@ const UpcomingReservationCard: React.FC<UpcomingReservationCardProps> = ({ reser
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.1 }}
-      className="bg-white dark:bg-brand-gray-800 rounded-lg shadow-lg border border-brand-gray-200 dark:border-brand-gray-700 overflow-hidden flex flex-col"
+      className="bg-white dark:bg-brand-gray-800 rounded-lg shadow-lg border border-brand-gray-200 dark:border-brand-gray-700 overflow-hidden flex flex-col h-full"
     >
       <div className="p-5 flex-1">
         <h3 className="font-bold text-lg text-brand-gray-900 dark:text-white mb-2">{quadra.name}</h3>
