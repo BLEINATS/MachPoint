@@ -96,7 +96,7 @@ const Header: React.FC = () => {
                           <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400 truncate">{profile.email}</p>
                         </div>
                         <div className="py-1 border-t border-brand-gray-200 dark:border-brand-gray-700">
-                          <Link to="/perfil" onClick={() => setIsProfileMenuOpen(false)} className="flex items-center w-full px-4 py-2 text-sm text-brand-gray-700 dark:text-brand-gray-200 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
+                          <Link to={profile?.role === 'admin_arena' ? '/dashboard' : '/perfil'} onClick={() => setIsProfileMenuOpen(false)} className="flex items-center w-full px-4 py-2 text-sm text-brand-gray-700 dark:text-brand-gray-200 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
                             <LayoutDashboard className="h-4 w-4 mr-3" /> Meu Painel
                           </Link>
                           <Link to="/settings" onClick={() => setIsProfileMenuOpen(false)} className="flex items-center w-full px-4 py-2 text-sm text-brand-gray-700 dark:text-brand-gray-200 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">

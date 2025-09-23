@@ -111,7 +111,7 @@ const Reservations: React.FC = () => {
       stateHandled = true;
     }
      if (location.state?.openModal) {
-      const type = location.state.type || 'normal';
+      const type = location.state.type || 'avulsa';
       setNewReservationSlot({ quadraId: '', time: '', type });
       setSelectedReservation(null);
       setIsModalOpen(true);
@@ -376,7 +376,7 @@ const Reservations: React.FC = () => {
   };
 
   const openNewReservationModal = (quadraId: string, time: string) => {
-    setNewReservationSlot({ quadraId, time, type: 'normal' });
+    setNewReservationSlot({ quadraId, time, type: 'avulsa' });
     setSelectedReservation(null);
     setIsModalOpen(true);
   };

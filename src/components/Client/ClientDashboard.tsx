@@ -55,7 +55,7 @@ const ClientDashboard: React.FC = () => {
     try {
       const [quadrasRes, clientReservasRes, allReservasRes, turmasRes, profsRes] = await Promise.all([
         supabase.from('quadras').select('*, pricing_rules(*)').eq('arena_id', selectedArenaContext.id),
-        supabase.from('reservas').select('id, quadra_id, date, start_time, end_time, status, total_price, payment_status, credit_used, rented_items, clientName').eq('profile_id', profile.id).eq('arena_id', selectedArenaContext.id),
+        supabase.from('reservas').select('id, quadra_id, date, start_time, end_time, status, total_price, payment_status, credit_used, rented_items, clientName, clientPhone, sport_type').eq('profile_id', profile.id).eq('arena_id', selectedArenaContext.id),
         supabase.from('reservas').select('id, quadra_id, date, start_time, end_time, status, isRecurring, recurringType, recurringEndDate, master_id, type').eq('arena_id', selectedArenaContext.id),
         supabase.from('turmas').select('id, name, quadra_id, professor_id, start_time, daysOfWeek, student_ids').eq('arena_id', selectedArenaContext.id),
         supabase.from('professores').select('id, name').eq('arena_id', selectedArenaContext.id),
@@ -110,8 +110,7 @@ const ClientDashboard: React.FC = () => {
       return;
     }
 
-    try {
-      const params = {
+    const creationParams = {
         p_arena_id: selectedArenaContext.id,
         p_quadra_id: reservationData.quadra_id,
         p_date: reservationData.date,
@@ -119,22 +118,58 @@ const ClientDashboard: React.FC = () => {
         p_end_time: reservationData.end_time,
         p_credit_to_use: reservationData.credit_used || 0,
         p_rented_items: reservationData.rented_items || [],
-        p_total_price: reservationData.total_price || 0,
-        p_sport_type: reservationData.sport_type,
-      };
+        p_client_name: profile.name,
+        p_client_phone: profile.phone || '',
+    };
 
-      const { error } = await supabase.rpc('create_booking_with_credit', params);
+    try {
+        // Step 1: Create the reservation.
+        const { error: createError } = await supabase.rpc('create_client_reservation', creationParams);
+        if (createError) throw createError;
 
-      if (error) throw error;
-      
-      addToast({ message: 'Reserva criada com sucesso!', type: 'success' });
-      setIsModalOpen(false);
-      setModalSlot(null);
-      refreshAlunoProfile();
-      await loadData();
+        // Step 2: Find the reservation to get its ID.
+        const { data: foundReservas, error: findError } = await supabase
+            .from('reservas')
+            .select('id')
+            .eq('profile_id', profile.id)
+            .eq('quadra_id', reservationData.quadra_id)
+            .eq('date', reservationData.date)
+            .eq('start_time', reservationData.start_time)
+            .order('created_at', { ascending: false })
+            .limit(1);
+
+        if (findError || !foundReservas || foundReservas.length === 0) {
+            addToast({ message: 'Reserva criada, mas falha ao atualizar o preço. Por favor, contate o administrador.', type: 'info' });
+        } else {
+            const newReservaId = foundReservas[0].id;
+
+            // Step 3: Update with correct details.
+            const { error: updateError } = await supabase
+                .from('reservas')
+                .update({ 
+                    total_price: reservationData.total_price,
+                    sport_type: reservationData.sport_type,
+                    clientPhone: profile.phone || reservationData.clientPhone,
+                    rented_items: reservationData.rented_items,
+                    credit_used: reservationData.credit_used,
+                    payment_status: reservationData.payment_status,
+                 })
+                .eq('id', newReservaId);
+
+            if (updateError) {
+                addToast({ message: 'Reserva criada, mas falha ao atualizar o preço. Por favor, contate o administrador.', type: 'info' });
+            } else {
+                addToast({ message: 'Reserva criada com sucesso!', type: 'success' });
+            }
+        }
 
     } catch (error: any) {
-      addToast({ message: `Erro ao criar reserva: ${error.message}`, type: 'error' });
+        addToast({ message: `Erro no processo de reserva: ${error.message}`, type: 'error' });
+    } finally {
+        setIsModalOpen(false);
+        setModalSlot(null);
+        refreshAlunoProfile();
+        await loadData();
     }
   };
 

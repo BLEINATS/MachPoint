@@ -215,7 +215,7 @@ const AnalyticsDashboard: React.FC = () => {
   const handleActionClick = (action: string) => {
     switch (action) {
       case 'Nova Reserva':
-        navigate('/reservas', { state: { openModal: true, type: 'normal' } });
+        navigate('/reservas', { state: { openModal: true, type: 'avulsa' } });
         break;
       case 'Bloquear Horário':
         navigate('/reservas', { state: { openModal: true, type: 'bloqueio' } });
