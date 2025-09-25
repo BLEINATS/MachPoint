@@ -1,5 +1,5 @@
 entrypoint = "index.js"
-modules = ["nodejs-22", "postgresql-16"]
+modules = ["nodejs-22"]
 hidden = [".config", "package-lock.json"]
 
 [gitHubImport]
@@ -15,7 +15,6 @@ ignorePorts = false
 
 [agent]
 expertMode = true
-integrations = ["javascript_supabase:1.0.0"]
 
 [workflows]
 runButton = "Project"
@@ -27,24 +26,24 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "React App"
+args = "MachPoint"
 
 [[workflows.workflow]]
-name = "React App"
+name = "MachPoint"
 author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "npm run dev"
 waitForPort = 5000
 
+[workflows.workflow.metadata]
+outputType = "webview"
+
 [[ports]]
 localPort = 5000
 externalPort = 80
 
 [[ports]]
-localPort = 44937
-externalPort = 3001
+localPort = 44297
+externalPort = 3000

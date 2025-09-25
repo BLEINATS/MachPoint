@@ -772,3 +772,5 @@ const EmptyState: React.FC<{message: string}> = ({ message }) => (
     <p className="text-brand-gray-600 dark:text-brand-gray-400">{message}</p>
   </div>
 );
+
+export default ClientDashboard;

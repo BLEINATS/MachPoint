@@ -174,6 +174,7 @@ export interface Reservation {
   recurringType?: 'daily' | 'weekly';
   recurringEndDate?: string | null;
   masterId?: string;
+  master_id?: string;
   created_at: string;
   updated_at?: string;
   rented_items?: {
@@ -183,6 +184,9 @@ export interface Reservation {
     price: number;
   }[] | null;
 }
+
+// Alias para compatibilidade
+export type Reserva = Reservation;
 
 export interface CreditTransaction {
   id?: string;
