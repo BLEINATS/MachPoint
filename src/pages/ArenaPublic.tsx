@@ -123,6 +123,9 @@ const ArenaPublic: React.FC = () => {
         p_date: reservationData.date,
         p_start_time: reservationData.start_time,
         p_end_time: reservationData.end_time,
+        p_total_price: reservationData.total_price,
+        p_payment_status: reservationData.payment_status,
+        p_sport_type: reservationData.sport_type,
         p_credit_to_use: reservationData.credit_used || 0,
         p_rented_items: reservationData.rented_items || [],
         p_client_name: profile.name,
@@ -130,8 +133,7 @@ const ArenaPublic: React.FC = () => {
     };
 
     try {
-        console.log("✅ Tentando criar reserva (Pública):", params);
-        const { error } = await supabase.rpc('create_client_reservation', params);
+        const { error } = await supabase.rpc('create_client_reservation_atomic', params);
         if (error) throw error;
         
         addToast({ message: 'Reserva criada com sucesso!', type: 'success' });
