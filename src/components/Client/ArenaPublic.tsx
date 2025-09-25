@@ -4,15 +4,15 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { Calendar, Clock, MapPin, DollarSign, User, X, Heart, Repeat, Check, Loader2, ShoppingBag } from 'lucide-react';
 import { format, addDays, startOfDay, addMinutes, isSameDay, isPast, parse, getDay, endOfDay } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../../context/AuthContext';
 import Layout from '../components/Layout/Layout';
 import Button from '../components/Forms/Button';
-import { Arena, Quadra, Reserva, Aluno, Profile } from '../types';
-import { getReservationTypeDetails, expandRecurringReservations } from '../utils/reservationUtils';
-import { parseDateStringAsLocal } from '../utils/dateUtils';
+import { Arena, Quadra, Reserva, Aluno, Profile } from '../../types';
+import { getReservationTypeDetails, expandRecurringReservations, timeToMinutes } from '../../utils/reservationUtils';
+import { parseDateStringAsLocal } from '../../utils/dateUtils';
 import ReservationModal from '../components/Reservations/ReservationModal';
-import { supabase } from '../lib/supabaseClient';
-import { useToast } from '../context/ToastContext';
+import { supabase } from '../../lib/supabaseClient';
+import { useToast } from '../../context/ToastContext';
 
 const ArenaPublic: React.FC = () => {
   const { slug } = useParams<{ slug: string }>();
@@ -117,12 +117,15 @@ const ArenaPublic: React.FC = () => {
       return;
     }
 
-    const creationParams = {
+    const params = {
         p_arena_id: arena.id,
         p_quadra_id: reservationData.quadra_id,
         p_date: reservationData.date,
         p_start_time: reservationData.start_time,
         p_end_time: reservationData.end_time,
+        p_total_price: reservationData.total_price,
+        p_payment_status: reservationData.payment_status,
+        p_sport_type: reservationData.sport_type,
         p_credit_to_use: reservationData.credit_used || 0,
         p_rented_items: reservationData.rented_items || [],
         p_client_name: profile.name,
@@ -130,47 +133,13 @@ const ArenaPublic: React.FC = () => {
     };
 
     try {
-        // Step 1: Create the reservation.
-        const { error: createError } = await supabase.rpc('create_client_reservation', creationParams);
-        if (createError) throw createError;
-
-        // Step 2: Find the reservation to get its ID.
-        const { data: foundReservas, error: findError } = await supabase
-            .from('reservas')
-            .select('id')
-            .eq('profile_id', profile.id)
-            .eq('quadra_id', reservationData.quadra_id)
-            .eq('date', reservationData.date)
-            .eq('start_time', reservationData.start_time)
-            .order('created_at', { ascending: false })
-            .limit(1);
-
-        if (findError || !foundReservas || foundReservas.length === 0) {
-            addToast({ message: 'Reserva criada, mas falha ao atualizar o preço. Por favor, contate o administrador.', type: 'info' });
-        } else {
-            const newReservaId = foundReservas[0].id;
-
-            // Step 3: Update with correct details.
-            const { error: updateError } = await supabase
-                .from('reservas')
-                .update({ 
-                    total_price: reservationData.total_price,
-                    sport_type: reservationData.sport_type,
-                    clientPhone: profile.phone || reservationData.clientPhone,
-                    rented_items: reservationData.rented_items,
-                    credit_used: reservationData.credit_used,
-                    payment_status: reservationData.payment_status,
-                 })
-                .eq('id', newReservaId);
-
-            if (updateError) {
-                addToast({ message: 'Reserva criada, mas falha ao atualizar o preço. Por favor, contate o administrador.', type: 'info' });
-            } else {
-                addToast({ message: 'Reserva criada com sucesso!', type: 'success' });
-            }
-        }
+        const { error } = await supabase.rpc('create_client_reservation_atomic', params);
+        if (error) throw error;
+        
+        addToast({ message: 'Reserva criada com sucesso!', type: 'success' });
 
     } catch (error: any) {
+        console.error("Erro ao criar reserva (Pública):", error);
         addToast({ message: `Erro no processo de reserva: ${error.message}`, type: 'error' });
     } finally {
         setIsModalOpen(false);
@@ -224,12 +193,27 @@ const ArenaPublic: React.FC = () => {
       return { status: 'past', data: null };
     }
 
-    const reserva = displayedReservations.find(r => 
-      r.quadra_id === quadraId && 
-      isSameDay(parseDateStringAsLocal(r.date), selectedDate) && 
-      r.start_time.slice(0, 5) === time && 
-      r.status !== 'cancelada'
-    );
+    const slotStartMinutes = timeToMinutes(time);
+
+    const reserva = displayedReservations.find(r => {
+      if (r.quadra_id !== quadraId || !isSameDay(parseDateStringAsLocal(r.date), selectedDate) || r.status === 'cancelada') {
+        return false;
+      }
+
+      const reservationStartMinutes = timeToMinutes(r.start_time);
+      let reservationEndMinutes = timeToMinutes(r.end_time);
+
+      if (reservationEndMinutes <= reservationStartMinutes) {
+        if (r.end_time.includes('00:00')) {
+            reservationEndMinutes = 24 * 60;
+        } else {
+            reservationEndMinutes += 24 * 60;
+        }
+      }
+      
+      return slotStartMinutes >= reservationStartMinutes && slotStartMinutes < reservationEndMinutes;
+    });
+
     if (reserva) return { status: 'booked', data: reserva };
 
     return { status: 'available', data: null };

@@ -14,11 +14,12 @@ import ArenaSelector from './ArenaSelector';
 import NextClassCard from './Student/NextClassCard';
 import ReservationModal from '../Reservations/ReservationModal';
 import { useToast } from '../../context/ToastContext';
-import { expandRecurringReservations } from '../../utils/reservationUtils';
+import { expandRecurringReservations, timeToMinutes } from '../../utils/reservationUtils';
 import DatePickerCalendar from './DatePickerCalendar';
 import RecommendationCard from './RecommendationCard';
 import ClientCancellationModal from './ClientCancellationModal';
 import ArenaInfoCard from './ArenaInfoCard';
+import ReservationDetailModal from './ReservationDetailModal';
 
 type TabType = 'overview' | 'reservations' | 'credits';
 
@@ -42,6 +43,9 @@ const ClientDashboard: React.FC = () => {
 
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const [reservationToCancel, setReservationToCancel] = useState<Reserva | null>(null);
+
+  const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
+  const [reservationToDetail, setReservationToDetail] = useState<Reserva | null>(null);
 
   const myArenas = useMemo(() => {
     return allArenas.filter(arena => memberships.some(m => m.arena_id === arena.id));
@@ -150,6 +154,11 @@ const ClientDashboard: React.FC = () => {
     }
     setReservationToCancel(reserva);
     setIsCancelModalOpen(true);
+  };
+
+  const handleOpenDetailModal = (reserva: Reserva) => {
+    setReservationToDetail(reserva);
+    setIsDetailModalOpen(true);
   };
   
   const handleConfirmCancellation = async (reservaId: string) => {
@@ -365,7 +374,7 @@ const ClientDashboard: React.FC = () => {
                   selectedArena={selectedArenaContext}
                />;
       case 'reservations':
-        return <ReservationsTab upcoming={upcomingReservations} past={pastReservations} quadras={quadras} arenaName={selectedArenaContext?.name} onCancel={handleOpenCancelModal} />;
+        return <ReservationsTab upcoming={upcomingReservations} past={pastReservations} quadras={quadras} arenaName={selectedArenaContext?.name} onCancel={handleOpenCancelModal} onDetail={handleOpenDetailModal} />;
       case 'credits':
         return <CreditsTab balance={alunoProfileForSelectedArena?.credit_balance || 0} history={creditHistory} />;
       default:
@@ -447,6 +456,18 @@ const ClientDashboard: React.FC = () => {
             onConfirm={handleConfirmCancellation}
             reserva={reservationToCancel}
             policyText={selectedArenaContext.cancellation_policy}
+          />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {isDetailModalOpen && reservationToDetail && selectedArenaContext && (
+          <ReservationDetailModal
+            isOpen={isDetailModalOpen}
+            onClose={() => setIsDetailModalOpen(false)}
+            reserva={reservationToDetail}
+            quadra={quadras.find(q => q.id === reservationToDetail.quadra_id) || null}
+            arenaName={selectedArenaContext.name}
+            onCancel={handleOpenCancelModal}
           />
         )}
       </AnimatePresence>
@@ -599,12 +620,27 @@ const QuickBookingWidget: React.FC<{
       return { status: 'past', data: null };
     }
 
-    const reserva = displayedReservations.find(r => 
-      r.quadra_id === quadraId && 
-      isSameDay(parseDateStringAsLocal(r.date), selectedDate) && 
-      r.start_time.slice(0, 5) === time && 
-      r.status !== 'cancelada'
-    );
+    const slotStartMinutes = timeToMinutes(time);
+
+    const reserva = displayedReservations.find(r => {
+      if (r.quadra_id !== quadraId || !isSameDay(parseDateStringAsLocal(r.date), selectedDate) || r.status === 'cancelada') {
+        return false;
+      }
+
+      const reservationStartMinutes = timeToMinutes(r.start_time);
+      let reservationEndMinutes = timeToMinutes(r.end_time);
+
+      if (reservationEndMinutes <= reservationStartMinutes) {
+        if (r.end_time.includes('00:00')) {
+            reservationEndMinutes = 24 * 60;
+        } else {
+            reservationEndMinutes += 24 * 60;
+        }
+      }
+      
+      return slotStartMinutes >= reservationStartMinutes && slotStartMinutes < reservationEndMinutes;
+    });
+
     if (reserva) return { status: 'booked', data: reserva };
 
     return { status: 'available', data: null };
@@ -621,7 +657,7 @@ const QuickBookingWidget: React.FC<{
   };
   
   const renderSlotButton = (quadra: Quadra, time: string) => {
-    const { status, data } = getSlotStatus(time, quadra.id);
+    const { status } = getSlotStatus(time, quadra.id);
     let styles = 'bg-brand-gray-100 text-brand-gray-500 dark:bg-brand-gray-700 dark:text-brand-gray-400';
     let icon = <Clock className="h-3 w-3 mr-1" />;
     
@@ -629,7 +665,7 @@ const QuickBookingWidget: React.FC<{
       styles = 'bg-green-50 text-green-700 dark:bg-green-500/10 dark:text-green-300 hover:bg-green-100 dark:hover:bg-green-500/20';
     } else if (status === 'past') {
       styles = 'bg-brand-gray-100 text-brand-gray-400 dark:bg-brand-gray-700/50 dark:text-brand-gray-500 cursor-not-allowed';
-    } else if (status === 'booked' && data) {
+    } else if (status === 'booked') {
       styles = 'bg-red-50 text-red-700 dark:bg-red-500/10 dark:text-red-400 cursor-not-allowed';
     }
 
@@ -681,14 +717,14 @@ const QuickBookingWidget: React.FC<{
 };
 
 
-const ReservationsTab: React.FC<{upcoming: Reserva[], past: Reserva[], quadras: Quadra[], arenaName?: string, onCancel: (reserva: Reserva) => void}> = ({upcoming, past, quadras, arenaName, onCancel}) => (
+const ReservationsTab: React.FC<{upcoming: Reserva[], past: Reserva[], quadras: Quadra[], arenaName?: string, onCancel: (reserva: Reserva) => void, onDetail: (reserva: Reserva) => void}> = ({upcoming, past, quadras, arenaName, onCancel, onDetail}) => (
   <div className="space-y-8">
-    <ReservationList title="Próximas Reservas" reservations={upcoming} quadras={quadras} arenaName={arenaName} onCancel={onCancel} />
-    <ReservationList title="Histórico de Reservas" reservations={past} quadras={quadras} arenaName={arenaName} isPast />
+    <ReservationList title="Próximas Reservas" reservations={upcoming} quadras={quadras} arenaName={arenaName} onCancel={onCancel} onDetail={onDetail} />
+    <ReservationList title="Histórico de Reservas" reservations={past} quadras={quadras} arenaName={arenaName} isPast onDetail={onDetail} />
   </div>
 );
 
-const ReservationList: React.FC<{title: string, reservations: Reserva[], quadras: Quadra[], arenaName?: string, isPast?: boolean, onCancel?: (reserva: Reserva) => void}> = ({title, reservations, quadras, arenaName, isPast, onCancel}) => (
+const ReservationList: React.FC<{title: string, reservations: Reserva[], quadras: Quadra[], arenaName?: string, isPast?: boolean, onCancel?: (reserva: Reserva) => void, onDetail: (reserva: Reserva) => void}> = ({title, reservations, quadras, arenaName, isPast, onCancel, onDetail}) => (
   <div className="bg-white dark:bg-brand-gray-800 rounded-lg shadow-md border border-brand-gray-200 dark:border-brand-gray-700">
     <h3 className="text-xl font-semibold p-6">{title}</h3>
     {reservations.length === 0 ? (
@@ -696,7 +732,7 @@ const ReservationList: React.FC<{title: string, reservations: Reserva[], quadras
     ) : (
       <ul className="divide-y divide-brand-gray-200 dark:divide-brand-gray-700">
         {reservations.map(res => (
-          <li key={res.id} className="p-4 sm:p-6 hover:bg-brand-gray-50 dark:hover:bg-brand-gray-700/50 transition-colors">
+          <li key={res.id} onClick={() => onDetail(res)} className="p-4 sm:p-6 hover:bg-brand-gray-50 dark:hover:bg-brand-gray-700/50 transition-colors cursor-pointer">
             <div className="flex flex-col sm:flex-row justify-between gap-4">
               <div>
                 <p className="font-bold text-brand-gray-900 dark:text-white">{quadras.find(q => q.id === res.quadra_id)?.name} <span className="font-normal text-brand-gray-500">• {arenaName}</span></p>
