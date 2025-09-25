@@ -127,7 +127,7 @@ const ClientDashboard: React.FC = () => {
     };
 
     try {
-        const { error } = await supabase.rpc('create_booking_with_credit', params);
+        const { error } = await supabase.rpc('create_client_reservation', params);
         if (error) throw error;
         
         addToast({ message: 'Reserva criada com sucesso!', type: 'success' });
