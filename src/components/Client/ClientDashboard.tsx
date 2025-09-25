@@ -60,7 +60,7 @@ const ClientDashboard: React.FC = () => {
     try {
       const [quadrasRes, clientReservasRes, allReservasRes, turmasRes, profsRes] = await Promise.all([
         supabase.from('quadras').select('*, pricing_rules(*)').eq('arena_id', selectedArenaContext.id),
-        supabase.from('reservas').select('id, quadra_id, date, start_time, end_time, status, total_price, payment_status, credit_used, rented_items, clientName, clientPhone, sport_type').eq('profile_id', profile.id).eq('arena_id', selectedArenaContext.id),
+        supabase.from('reservas').select('id, quadra_id, date, start_time, end_time, status, total_price, payment_status, credit_used, rented_items, clientName, clientPhone, sport_type, created_at, created_by_name').eq('profile_id', profile.id).eq('arena_id', selectedArenaContext.id),
         supabase.from('reservas').select('id, quadra_id, date, start_time, end_time, status, isRecurring, recurringType, recurringEndDate, master_id, type').eq('arena_id', selectedArenaContext.id),
         supabase.from('turmas').select('id, name, quadra_id, professor_id, start_time, daysOfWeek, student_ids').eq('arena_id', selectedArenaContext.id),
         supabase.from('professores').select('id, name').eq('arena_id', selectedArenaContext.id),

@@ -176,6 +176,7 @@ export interface Reservation {
   masterId?: string;
   master_id?: string;
   created_at: string;
+  created_by_name?: string | null;
   updated_at?: string;
   rented_items?: {
     itemId: string;

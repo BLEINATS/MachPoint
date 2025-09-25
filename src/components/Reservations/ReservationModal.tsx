@@ -20,6 +20,7 @@ import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabaseClient';
 import { useToast } from '../../context/ToastContext';
 import { format, parse, getDay, addDays, addMinutes, isBefore, isAfter, startOfDay, endOfDay } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
 import CreatableClientSelect from '../Forms/CreatableClientSelect';
 import { parseDateStringAsLocal } from '../../utils/dateUtils';
 import { maskPhone } from '../../utils/masks';
@@ -63,7 +64,7 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
   const [isLoading, setIsLoading] = useState(false);
   const [customerType, setCustomerType] = useState<'Avulso' | 'Mensalista' | null>(null);
 
-  const [subtotal, setSubtotal] = useState(0);
+  const [reservationPrice, setReservationPrice] = useState(0);
   const [discountAmount, setDiscountAmount] = useState(0);
   const [discountInfo, setDiscountInfo] = useState<{ percentage: number; duration: number } | null>(null);
   const [priceBreakdown, setPriceBreakdown] = useState<{ description: string; subtotal: number }[]>([]);
@@ -91,6 +92,8 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
     rented_items: [] as { itemId: string; name: string; quantity: number; price: number }[],
     payment_status: 'pendente' as Reserva['payment_status'],
     notes: '',
+    created_by_name: '',
+    created_at: '',
   });
 
   const isEditing = !!reservation;
@@ -223,6 +226,8 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
           rented_items: reservation.rented_items || [],
           payment_status: reservation.payment_status || 'pendente',
           notes: reservation.notes || '',
+          created_by_name: reservation.created_by_name || '',
+          created_at: reservation.created_at || '',
         });
         setOriginalCreditUsed(creditAlreadyUsed);
         const initialSelectedItems: Record<string, number> = {};
@@ -243,7 +248,6 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
         
         let clientData = {};
         if (isClientBooking) {
-            // The global user profile is the source of truth for personal data
             if (userProfile) {
                 clientData = {
                     clientName: userProfile.name,
@@ -355,13 +359,13 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
 
       if (reservationStartMinutes < openingMinutes || effectiveReservationEndMinutes > effectiveClosingMinutes) {
         setOperatingHoursWarning(`Atenção: O horário selecionado (${start_time} - ${end_time}) está fora do funcionamento da quadra (${operatingHours.start} - ${operatingHours.end}).`);
-        setPriceBreakdown([]); setSubtotal(0); setDiscountAmount(0); setDiscountInfo(null);
+        setPriceBreakdown([]); setReservationPrice(0); setDiscountAmount(0); setDiscountInfo(null);
         return;
       }
       setOperatingHoursWarning(null);
 
       if (pricingRules.length === 0) {
-        setPriceBreakdown([]); setSubtotal(0); setDiscountAmount(0); setDiscountInfo(null);
+        setPriceBreakdown([]); setReservationPrice(0); setDiscountAmount(0); setDiscountInfo(null);
         setFormData(prev => ({ ...prev, total_price: 0, credit_used: 0, rented_items: [] }));
         setNewlyAppliedCredit(0);
         return;
@@ -407,7 +411,7 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
         subtotal: data.hours * data.pricePerHour,
       }));
       setPriceBreakdown(breakdown);
-      setSubtotal(totalCalculatedPrice);
+      setReservationPrice(totalCalculatedPrice);
 
       const totalDurationHours = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
       const matchingDiscount = durationDiscounts.filter(d => d.is_active && totalDurationHours >= d.duration_hours).sort((a, b) => b.duration_hours - a.duration_hours)[0];
@@ -499,14 +503,12 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
     }));
   };
 
-  const finalPriceToPay = useMemo(() => {
-    return (formData.total_price || 0) - (formData.credit_used || 0);
-  }, [formData.total_price, formData.credit_used]);
-
-  const finalPriceLabel = useMemo(() => {
-    if (finalPriceToPay > 0) return 'Valor a Pagar';
-    return 'Valor Total';
-  }, [finalPriceToPay]);
+  const rentalCost = useMemo(() => {
+    return formData.rented_items?.reduce((acc, item) => acc + item.price * item.quantity, 0) || 0;
+  }, [formData.rented_items]);
+  
+  const totalBruto = reservationPrice + rentalCost;
+  const valorAPagar = totalBruto - (formData.credit_used || 0) - discountAmount;
 
   return (
     <AnimatePresence>
@@ -567,6 +569,14 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
 
                   {customerType && !isClientBooking && <span className={`text-xs -mt-4 block font-semibold ${customerType === 'Mensalista' ? 'text-green-600' : 'text-blue-600'}`}>{customerType}</span>}
                   
+                  {isEditing && formData.created_by_name && (
+                    <div className="mt-4 p-3 rounded-md bg-brand-gray-50 dark:bg-brand-gray-800/50 border dark:border-brand-gray-700">
+                        <p className="text-xs text-brand-gray-500 dark:text-brand-gray-400">
+                            Reserva criada por <strong className="text-brand-gray-700 dark:text-brand-gray-300">{formData.created_by_name}</strong> em {formData.created_at ? format(new Date(formData.created_at), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR }) : 'data indisponível'}
+                        </p>
+                    </div>
+                  )}
+
                   {isEditing && originalCreditUsed > 0 && (
                     <div className="p-3 rounded-md bg-gray-100 dark:bg-gray-700/50 flex items-center gap-3">
                       <Info className="h-5 w-5 text-gray-500 dark:text-gray-400 flex-shrink-0" />
@@ -653,82 +663,46 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
                     </div>
                   )}
                   
-                  <div className="p-4 rounded-lg bg-brand-gray-50 dark:bg-brand-gray-800 space-y-3 border border-brand-gray-200 dark:border-brand-gray-700">
-                      <h4 className="font-semibold text-brand-gray-800 dark:text-white">Detalhamento do Preço</h4>
-                      <div className="space-y-2">
-                        {priceBreakdown.length > 0 ? priceBreakdown.map((item, index) => (
-                            <div key={index} className="flex justify-between items-start text-sm gap-4">
-                                <span className="text-brand-gray-600 dark:text-brand-gray-400">{item.description}</span>
-                                <span className="font-medium text-brand-gray-800 dark:text-white whitespace-nowrap">{item.subtotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                            </div>
-                        )) : (
-                          <p className="text-sm text-brand-gray-500">Nenhum cálculo de preço disponível.</p>
-                        )}
+                  <div className="p-4 rounded-lg bg-brand-gray-50 dark:bg-brand-gray-800 space-y-2 border border-brand-gray-200 dark:border-brand-gray-700">
+                      <h4 className="font-semibold text-brand-gray-800 dark:text-white">Resumo Financeiro</h4>
+                      
+                      <div className="flex justify-between items-center text-sm">
+                          <span className="text-brand-gray-600 dark:text-brand-gray-400">Valor da Reserva</span>
+                          <span className="font-medium text-brand-gray-800 dark:text-white">{reservationPrice.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                       </div>
 
-                      <div className="flex justify-between text-sm border-t border-brand-gray-200 dark:border-brand-gray-700 pt-3 mt-3">
-                          <span className="text-brand-gray-600 dark:text-brand-gray-400">Subtotal</span>
-                          <span className="font-medium text-brand-gray-800 dark:text-white">{subtotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                      </div>
-
-                      {discountAmount > 0 && discountInfo && (
-                        <div>
-                          <div className="flex justify-between text-sm text-green-600 dark:text-green-400">
-                            <span>Desconto por Duração ({discountInfo.percentage}%)</span>
-                            <span>- {discountAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                          </div>
-                          <div className="text-xs text-green-600 dark:text-green-500 pl-1 mt-0.5">
-                            Aplicado para {discountInfo.duration.toFixed(1).replace('.', ',')}h de reserva
-                          </div>
+                      {discountAmount > 0 && (
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-green-600 dark:text-green-400">Desconto por Duração ({discountInfo?.percentage}%)</span>
+                          <span className="font-medium text-green-600 dark:text-green-400">- {discountAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                         </div>
                       )}
                       
-                      {formData.rented_items && formData.rented_items.length > 0 && (
-                        <div className="border-t border-brand-gray-200 dark:border-brand-gray-600 pt-2 mt-2">
-                          <div className="flex justify-between text-sm text-purple-600 dark:text-purple-400 font-semibold">
-                            <span>Itens Alugados</span>
-                            <span>+ {formData.rented_items.reduce((acc, item) => acc + item.price * item.quantity, 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                          </div>
-                          <div className="pl-4 mt-1 space-y-0.5">
-                            {formData.rented_items.map(item => (
-                              <div key={item.itemId} className="flex justify-between text-xs text-brand-gray-500 dark:text-brand-gray-400">
-                                <span>{item.quantity}x {item.name}</span>
-                                <span>{(item.price * item.quantity).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                              </div>
-                            ))}
-                          </div>
+                      {rentalCost > 0 && (
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-brand-gray-600 dark:text-brand-gray-400">Itens Alugados</span>
+                          <span className="font-medium text-brand-gray-800 dark:text-white">+ {rentalCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                         </div>
                       )}
 
-                      {originalCreditUsed > 0 && (
-                          <div className="flex justify-between text-sm text-blue-600 dark:text-blue-400">
-                              <span>Crédito Já Utilizado</span>
-                              <span>- {originalCreditUsed.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                          </div>
-                      )}
+                      <div className="flex justify-between text-md font-bold border-t border-brand-gray-200 dark:border-brand-gray-700 pt-2 mt-2">
+                          <span className="text-brand-gray-800 dark:text-white">Total</span>
+                          <span className="text-brand-gray-800 dark:text-white">{totalBruto.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                      </div>
                       
-                      {newlyAppliedCredit > 0 && (
-                          <div className="flex justify-between text-sm text-blue-600 dark:text-blue-400">
-                              <span>Crédito Adicional Aplicado</span>
-                              <span>- {newlyAppliedCredit.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                          </div>
+                      {(formData.credit_used || 0) > 0 && (
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-blue-600 dark:text-blue-400">Crédito Utilizado</span>
+                          <span className="font-medium text-blue-600 dark:text-blue-400">- {(formData.credit_used || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                        </div>
                       )}
 
-                      <div className="flex justify-between text-lg font-bold border-t-2 border-brand-gray-300 dark:border-brand-gray-600 pt-3 mt-3">
-                          <span className="text-brand-gray-800 dark:text-white">{finalPriceLabel}</span>
+                      <div className="flex justify-between text-lg font-bold border-t-2 border-brand-gray-300 dark:border-brand-gray-600 pt-2 mt-2">
+                          <span className="text-brand-gray-800 dark:text-white">Valor a Pagar</span>
                           <span className="text-brand-blue-600 dark:text-brand-blue-300">
-                            {finalPriceToPay.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                            {valorAPagar.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                           </span>
                       </div>
-                      
-                      {useCredit && (
-                        <div className="text-right text-sm text-green-600 dark:text-green-400 mt-2">
-                            <span>Crédito Restante: </span>
-                            <span className="font-bold">
-                                {(availableCredit - newlyAppliedCredit).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                            </span>
-                        </div>
-                      )}
                   </div>
 
                   {operatingHoursWarning ? (
@@ -736,7 +710,7 @@ const ReservationModal: React.FC<ReservationModalProps> = ({ isOpen, onClose, on
                         <AlertTriangle className="h-4 w-4 mr-2 mt-0.5 flex-shrink-0"/>
                         <p className="text-xs">{operatingHoursWarning}</p>
                     </div>
-                  ) : (formData.total_price === 0 && subtotal === 0 && priceBreakdown.length === 0) && (
+                  ) : (formData.total_price === 0 && reservationPrice === 0 && priceBreakdown.length === 0) && (
                     <div className="p-3 rounded-md bg-yellow-50 dark:bg-yellow-900/50 flex items-start text-yellow-700 dark:text-yellow-300">
                         <AlertTriangle className="h-4 w-4 mr-2 mt-0.5 flex-shrink-0"/>
                         <p className="text-xs">O valor é R$ 0,00. Verifique se existe uma regra de preço (padrão ou promocional) para este esporte, dia e horário.</p>

@@ -4,7 +4,7 @@ import QRCode from 'qrcode.react';
 import { Reserva, Quadra } from '../../types';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
-import { Calendar, Clock, MapPin, X, QrCode, ShoppingBag, CreditCard, DollarSign, CheckCircle, AlertCircle } from 'lucide-react';
+import { Calendar, Clock, MapPin, X, ShoppingBag, CreditCard, DollarSign, CheckCircle, AlertCircle, User, Info } from 'lucide-react';
 import { parseDateStringAsLocal } from '../../utils/dateUtils';
 import { useTheme } from '../../context/ThemeContext';
 import Button from '../Forms/Button';
@@ -31,7 +31,6 @@ const ReservationDetailModal: React.FC<ReservationDetailModalProps> = ({ isOpen,
   
   const handleCancelClick = () => {
     onClose();
-    // Use a timeout to ensure the detail modal closes before the cancel modal opens
     setTimeout(() => onCancel(reserva), 150);
   };
 
@@ -43,13 +42,12 @@ const ReservationDetailModal: React.FC<ReservationDetailModalProps> = ({ isOpen,
     }
   }, [reserva.payment_status]);
 
-  const totalPaid = useMemo(() => {
-    if (!reserva) return 0;
-    if (reserva.payment_status === 'pago') {
-      return reserva.total_price || 0;
-    }
-    return reserva.credit_used || 0;
-  }, [reserva]);
+  const rentalItemsTotal = useMemo(() => {
+    return reserva.rented_items?.reduce((acc, item) => acc + item.price * item.quantity, 0) || 0;
+  }, [reserva.rented_items]);
+
+  const reservationValue = (reserva.total_price || 0) - rentalItemsTotal;
+  const amountToPay = (reserva.total_price || 0) - (reserva.credit_used || 0);
 
   return (
     <AnimatePresence>
@@ -87,38 +85,44 @@ const ReservationDetailModal: React.FC<ReservationDetailModalProps> = ({ isOpen,
                 <InfoItem icon={MapPin} label="Local" value={`${quadra.name} • ${arenaName}`} />
                 <InfoItem icon={Calendar} label="Data" value={format(parseDateStringAsLocal(reserva.date), "EEEE, dd 'de' MMMM", { locale: ptBR })} />
                 <InfoItem icon={Clock} label="Horário" value={`${reserva.start_time.slice(0, 5)} - ${reserva.end_time.slice(0, 5)}`} />
+                {reserva.created_by_name && (
+                    <InfoItem icon={User} label="Reservado por" value={reserva.created_by_name} />
+                )}
+                <InfoItem icon={Info} label="Data da Reserva" value={reserva.created_at ? format(new Date(reserva.created_at), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR }) : 'Não disponível'} />
               </div>
-
-              {reserva.rented_items && reserva.rented_items.length > 0 && (
-                <div className="border-t border-brand-gray-200 dark:border-brand-gray-700 pt-4">
-                  <h4 className="font-semibold text-brand-gray-800 dark:text-white mb-2 flex items-center"><ShoppingBag className="h-4 w-4 mr-2 text-brand-blue-500" /> Itens Alugados</h4>
-                  <ul className="space-y-1 text-sm">
-                    {reserva.rented_items.map(item => (
-                      <li key={item.itemId} className="flex justify-between">
-                        <span className="text-brand-gray-600 dark:text-brand-gray-300">{item.quantity}x {item.name}</span>
-                        <span className="font-medium text-brand-gray-700 dark:text-brand-gray-200">{(item.price * item.quantity).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
 
               <div className="border-t border-brand-gray-200 dark:border-brand-gray-700 pt-4 space-y-2">
                 <h4 className="font-semibold text-brand-gray-800 dark:text-white mb-2 flex items-center"><DollarSign className="h-4 w-4 mr-2 text-brand-blue-500" /> Pagamento</h4>
+                
                 <div className="flex justify-between text-sm">
-                  <span className="text-brand-gray-600 dark:text-brand-gray-400">Valor total</span>
-                  <span className="font-medium">{(reserva.total_price || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                  <span className="text-brand-gray-600 dark:text-brand-gray-400">Valor da Reserva</span>
+                  <span className="font-medium">{(reservationValue).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                 </div>
+                
+                {rentalItemsTotal > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-brand-gray-600 dark:text-brand-gray-400">Itens Alugados</span>
+                    <span className="font-medium">+ {rentalItemsTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                  </div>
+                )}
+
+                <div className="flex justify-between text-sm font-semibold border-t border-brand-gray-200 dark:border-brand-gray-700 pt-2 mt-2">
+                  <span>Total</span>
+                  <span>{(reserva.total_price || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                </div>
+
                 {reserva.credit_used && reserva.credit_used > 0 && (
                   <div className="flex justify-between text-sm">
                     <span className="text-brand-gray-600 dark:text-brand-gray-400 flex items-center"><CreditCard className="h-4 w-4 mr-1.5 text-blue-500"/> Crédito utilizado</span>
                     <span className="font-medium text-blue-600 dark:text-blue-400">- {(reserva.credit_used).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                   </div>
                 )}
-                <div className="flex justify-between text-sm font-bold border-t border-brand-gray-200 dark:border-brand-gray-700 pt-2 mt-2">
-                  <span className="text-brand-gray-800 dark:text-white">Total Pago</span>
-                  <span className="text-green-600 dark:text-green-400">{totalPaid.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                
+                <div className="flex justify-between text-lg font-bold border-t-2 border-brand-gray-300 dark:border-brand-gray-600 pt-2 mt-2">
+                  <span>Valor a Pagar</span>
+                  <span className="text-brand-blue-600 dark:text-brand-blue-300">{amountToPay.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                 </div>
+
                  <div className="flex justify-end items-center text-xs mt-1">
                     <paymentStatus.icon className={`h-3 w-3 mr-1 ${paymentStatus.color}`} />
                     <span className={`font-medium ${paymentStatus.color}`}>{paymentStatus.label}</span>

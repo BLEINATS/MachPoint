@@ -72,7 +72,7 @@ const Reservations: React.FC = () => {
 
       const { data: reservasData, error: reservasError } = await supabase
         .from('reservas')
-        .select('id, arena_id, quadra_id, profile_id, turma_id, torneio_id, evento_id, clientName, clientPhone, date, start_time, end_time, status, type, total_price, credit_used, payment_status, sport_type, notes, isRecurring, recurringType, recurringEndDate, master_id, created_at, updated_at, rented_items')
+        .select('id, arena_id, quadra_id, profile_id, turma_id, torneio_id, evento_id, clientName, clientPhone, date, start_time, end_time, status, type, total_price, credit_used, payment_status, sport_type, notes, isRecurring, recurringType, recurringEndDate, master_id, created_at, created_by_name, updated_at, rented_items')
         .eq('arena_id', arena.id);
       if (reservasError) throw reservasError;
       setReservas(reservasData || []);
