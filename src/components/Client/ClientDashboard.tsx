@@ -112,31 +112,34 @@ const ClientDashboard: React.FC = () => {
     }
 
     const params = {
-      p_profile_id: profile.id,
-      p_arena_id: selectedArenaContext.id,
-      p_quadra_id: reservationData.quadra_id,
-      p_date: reservationData.date,
-      p_start_time: reservationData.start_time,
-      p_end_time: reservationData.end_time,
-      p_total_price: reservationData.total_price || 0,
-      p_credit_to_use: reservationData.credit_used || 0,
-      p_rented_items: reservationData.rented_items || [],
-      p_sport_type: reservationData.sport_type || 'Outro',
+        p_arena_id: selectedArenaContext.id,
+        p_quadra_id: reservationData.quadra_id,
+        p_date: reservationData.date,
+        p_start_time: reservationData.start_time,
+        p_end_time: reservationData.end_time,
+        p_profile_id: profile.id,
+        p_sport_type: reservationData.sport_type,
+        p_total_price: reservationData.total_price,
+        p_credit_to_use: reservationData.credit_used || 0,
+        p_rented_items: reservationData.rented_items || [],
+        p_client_name: profile.name,
+        p_client_phone: profile.phone || '',
     };
 
     try {
-      const { error } = await supabase.rpc('create_booking_with_credit', params);
-      if (error) throw error;
-      
-      addToast({ message: 'Reserva criada com sucesso!', type: 'success' });
+        const { error } = await supabase.rpc('create_booking_with_credit', params);
+        if (error) throw error;
+        
+        addToast({ message: 'Reserva criada com sucesso!', type: 'success' });
+
     } catch (error: any) {
-      console.error("Erro ao criar reserva (Dashboard):", error);
-      addToast({ message: `Erro ao criar reserva: ${error.message}`, type: 'error' });
+        console.error("Erro ao criar reserva (Dashboard):", error);
+        addToast({ message: `Erro ao criar reserva: ${error.message}`, type: 'error' });
     } finally {
-      setIsModalOpen(false);
-      setModalSlot(null);
-      refreshAlunoProfile();
-      await loadData();
+        setIsModalOpen(false);
+        setModalSlot(null);
+        refreshAlunoProfile();
+        await loadData();
     }
   };
 
@@ -769,5 +772,3 @@ const EmptyState: React.FC<{message: string}> = ({ message }) => (
     <p className="text-brand-gray-600 dark:text-brand-gray-400">{message}</p>
   </div>
 );
-
-export default ClientDashboard;

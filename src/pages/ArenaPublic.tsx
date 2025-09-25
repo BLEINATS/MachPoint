@@ -117,7 +117,7 @@ const ArenaPublic: React.FC = () => {
       return;
     }
 
-    const creationParams = {
+    const params = {
         p_arena_id: arena.id,
         p_quadra_id: reservationData.quadra_id,
         p_date: reservationData.date,
@@ -130,47 +130,14 @@ const ArenaPublic: React.FC = () => {
     };
 
     try {
-        // Step 1: Create the reservation.
-        const { error: createError } = await supabase.rpc('create_client_reservation', creationParams);
-        if (createError) throw createError;
-
-        // Step 2: Find the reservation to get its ID.
-        const { data: foundReservas, error: findError } = await supabase
-            .from('reservas')
-            .select('id')
-            .eq('profile_id', profile.id)
-            .eq('quadra_id', reservationData.quadra_id)
-            .eq('date', reservationData.date)
-            .eq('start_time', reservationData.start_time)
-            .order('created_at', { ascending: false })
-            .limit(1);
-
-        if (findError || !foundReservas || foundReservas.length === 0) {
-            addToast({ message: 'Reserva criada, mas falha ao atualizar o preço. Por favor, contate o administrador.', type: 'info' });
-        } else {
-            const newReservaId = foundReservas[0].id;
-
-            // Step 3: Update with correct details.
-            const { error: updateError } = await supabase
-                .from('reservas')
-                .update({ 
-                    total_price: reservationData.total_price,
-                    sport_type: reservationData.sport_type,
-                    clientPhone: profile.phone || reservationData.clientPhone,
-                    rented_items: reservationData.rented_items,
-                    credit_used: reservationData.credit_used,
-                    payment_status: reservationData.payment_status,
-                 })
-                .eq('id', newReservaId);
-
-            if (updateError) {
-                addToast({ message: 'Reserva criada, mas falha ao atualizar o preço. Por favor, contate o administrador.', type: 'info' });
-            } else {
-                addToast({ message: 'Reserva criada com sucesso!', type: 'success' });
-            }
-        }
+        console.log("✅ Tentando criar reserva (Pública):", params);
+        const { error } = await supabase.rpc('create_client_reservation', params);
+        if (error) throw error;
+        
+        addToast({ message: 'Reserva criada com sucesso!', type: 'success' });
 
     } catch (error: any) {
+        console.error("Erro ao criar reserva (Pública):", error);
         addToast({ message: `Erro no processo de reserva: ${error.message}`, type: 'error' });
     } finally {
         setIsModalOpen(false);
