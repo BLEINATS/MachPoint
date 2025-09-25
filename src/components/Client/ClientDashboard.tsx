@@ -111,7 +111,7 @@ const ClientDashboard: React.FC = () => {
       return;
     }
 
-    // Parâmetros conforme assinatura da função: (p_arena_id, p_client_name, p_client_phone, p_credit_to_use, p_date, p_end_time, p_quadra_id, p_rented_items, p_start_time)
+    // Parâmetros da função create_client_reservation
     const params = {
         p_arena_id: selectedArenaContext.id,
         p_client_name: profile.name,
