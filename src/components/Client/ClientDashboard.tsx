@@ -159,8 +159,7 @@ const ClientDashboard: React.FC = () => {
     }
     try {
       const { error } = await supabase.rpc('handle_client_cancellation_final', {
-        p_reserva_id: reservaId,
-        p_profile_id: profile.id
+        p_reserva_id: reservaId
       });
 
       if (error) {
