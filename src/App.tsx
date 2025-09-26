@@ -16,6 +16,7 @@ import Torneios from './pages/Torneios';
 import TorneioDetail from './pages/TorneioDetail';
 import Eventos from './pages/Eventos';
 import EventoDetail from './pages/EventoDetail';
+import Gamification from './pages/Gamification';
 import { ThemeProvider } from './context/ThemeContext';
 import { ToastProvider } from './context/ToastContext';
 
@@ -110,6 +111,14 @@ const AppRoutes: React.FC = () => {
           element={
             <ProtectedRoute>
               <EventoDetail />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/gamification"
+          element={
+            <ProtectedRoute>
+              <Gamification />
             </ProtectedRoute>
           }
         />

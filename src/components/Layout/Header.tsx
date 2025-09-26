@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { 
   LogOut, Sun, Moon, Settings, Bookmark, LayoutGrid, 
   User as UserIcon, LayoutDashboard, GraduationCap, Trophy, 
-  PartyPopper, Calendar, ChevronDown, Loader2, Bell
+  PartyPopper, Calendar, ChevronDown, Loader2, Bell, Gift
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
@@ -113,6 +113,16 @@ const Header: React.FC = () => {
     navigate('/');
   };
 
+  const NavIconButton: React.FC<{ to: string; title: string; children: React.ReactNode }> = ({ to, title, children }) => (
+    <button
+      onClick={() => navigate(to)}
+      title={title}
+      className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700"
+    >
+      {children}
+    </button>
+  );
+
   return (
     <header className="bg-white dark:bg-brand-gray-800 shadow-sm border-b border-brand-gray-200 dark:border-brand-gray-700 sticky top-0 z-40">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -149,11 +159,12 @@ const Header: React.FC = () => {
               <>
                 {isAdminView && (
                   <>
-                    <Link to="/quadras" title="Minhas Quadras" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700"><LayoutGrid className="h-5 w-5" /></Link>
-                    <Link to="/reservas" title="Reservas" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700"><Bookmark className="h-5 w-5" /></Link>
-                    <Link to="/alunos" title="Clientes e Alunos" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700"><GraduationCap className="h-5 w-5" /></Link>
-                    <Link to="/torneios" title="Torneios" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700"><Trophy className="h-5 w-5" /></Link>
-                    <Link to="/eventos" title="Eventos" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700"><PartyPopper className="h-5 w-5" /></Link>
+                    <NavIconButton to="/quadras" title="Minhas Quadras"><LayoutGrid className="h-5 w-5" /></NavIconButton>
+                    <NavIconButton to="/reservas" title="Reservas"><Bookmark className="h-5 w-5" /></NavIconButton>
+                    <NavIconButton to="/alunos" title="Clientes e Alunos"><GraduationCap className="h-5 w-5" /></NavIconButton>
+                    <NavIconButton to="/torneios" title="Torneios"><Trophy className="h-5 w-5" /></NavIconButton>
+                    <NavIconButton to="/eventos" title="Eventos"><PartyPopper className="h-5 w-5" /></NavIconButton>
+                    <NavIconButton to="/gamification" title="Gamificação"><Gift className="h-5 w-5" /></NavIconButton>
                   </>
                 )}
                 

@@ -118,6 +118,9 @@ export interface Aluno {
   created_at: string;
   avatar_url?: string;
   credit_balance?: number;
+  gamification_points?: number;
+  gamification_level_id?: string | null;
+  gamification_levels?: { name: string } | null; // For joins
 }
 
 export interface Professor {
@@ -163,7 +166,7 @@ export interface Reservation {
   date: string;
   start_time: string;
   end_time: string;
-  status: 'confirmada' | 'pendente' | 'cancelada';
+  status: 'confirmada' | 'pendente' | 'cancelada' | 'realizada';
   type: ReservationType;
   total_price?: number;
   credit_used?: number;
@@ -289,6 +292,63 @@ export interface Notificacao {
   link_to?: string | null;
   created_at: string;
 }
+
+// Gamification Types
+export interface GamificationSettings {
+  arena_id: string;
+  is_enabled: boolean;
+  points_per_reservation: number;
+  points_per_real: number;
+}
+
+export interface GamificationLevel {
+  id: string;
+  arena_id: string;
+  name: string;
+  points_required: number;
+  level_rank: number;
+}
+
+export interface GamificationReward {
+  id: string;
+  arena_id: string;
+  title: string;
+  description: string;
+  points_cost: number;
+  type: 'discount' | 'free_hour' | 'free_item';
+  value: number | null;
+  quantity: number | null;
+  is_active: boolean;
+}
+
+export interface GamificationAchievement {
+  id: string;
+  arena_id: string;
+  name: string;
+  description: string;
+  type: 'first_reservation' | 'play_all_courts' | 'weekly_frequency' | 'loyalty_10' | 'loyalty_50' | 'loyalty_100';
+  points_reward: number;
+  icon: string;
+}
+
+export interface AlunoAchievement {
+  aluno_id: string;
+  achievement_id: string;
+  unlocked_at: string;
+}
+
+export interface GamificationPointTransaction {
+  id: string;
+  arena_id: string;
+  aluno_id: string;
+  points: number;
+  type: 'reservation_completed' | 'manual_adjustment' | 'achievement_unlocked';
+  description: string;
+  related_reservation_id: string | null;
+  related_achievement_id: string | null;
+  created_at: string;
+}
+
 
 export type SupabaseData<T> = {
   data: T[] | null;

@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import { Session } from '@supabase/supabase-js';
-import { supabase } from '../lib/supabaseClient';
+import { supabase, supabaseWithRetry } from '../lib/supabaseClient';
 import { AuthState, User, Profile, Arena, ArenaMembership, Aluno } from '../types';
 import { useToast } from './ToastContext';
 
@@ -40,12 +40,14 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   const { addToast } = useToast();
 
   const fetchAlunoProfile = useCallback(async (profileId: string, arenaId: string) => {
-    const { data: alunoData, error: alunoError } = await supabase
-      .from('alunos')
-      .select('*')
-      .eq('profile_id', profileId)
-      .eq('arena_id', arenaId)
-      .single();
+    const { data: alunoData, error: alunoError } = await supabaseWithRetry(() =>
+      supabase
+        .from('alunos')
+        .select('*')
+        .eq('profile_id', profileId)
+        .eq('arena_id', arenaId)
+        .single()
+    );
     if (alunoError && alunoError.code !== 'PGRST116') {
       console.error("Erro ao buscar perfil de aluno:", alunoError);
     }
@@ -93,36 +95,42 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const fetchAllData = async () => {
       setIsLoading(true);
       try {
-        const { data: allArenasData, error: allArenasError } = await supabase
-          .from('arenas')
-          .select('*');
+        const { data: allArenasData, error: allArenasError } = await supabaseWithRetry(() =>
+          supabase.from('arenas').select('*')
+        );
         if (allArenasError) throw allArenasError;
         setAllArenas(allArenasData || []);
 
-        const { data: profileData, error: profileError } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', session.user.id)
-          .single();
+        const { data: profileData, error: profileError } = await supabaseWithRetry(() =>
+          supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', session.user.id)
+            .single()
+        );
         if (profileError && profileError.code !== 'PGRST116') throw profileError;
         setProfile(profileData);
 
         if (profileData) {
           if (profileData.role === 'admin_arena') {
-            const { data: adminArenaData, error: adminArenaError } = await supabase
-              .from('arenas')
-              .select('*')
-              .eq('owner_id', session.user.id)
-              .single();
+            const { data: adminArenaData, error: adminArenaError } = await supabaseWithRetry(() =>
+              supabase
+                .from('arenas')
+                .select('*')
+                .eq('owner_id', session.user.id)
+                .single()
+            );
             if (adminArenaError && adminArenaError.code !== 'PGRST116') throw adminArenaError;
             setArena(adminArenaData || null);
             setSelectedArenaContext(adminArenaData || null);
           } else {
             setArena(null);
-            const { data: membershipsData, error: membershipsError } = await supabase
-              .from('arena_memberships')
-              .select('*')
-              .eq('profile_id', session.user.id);
+            const { data: membershipsData, error: membershipsError } = await supabaseWithRetry(() =>
+              supabase
+                .from('arena_memberships')
+                .select('*')
+                .eq('profile_id', session.user.id)
+            );
             if (membershipsError) throw membershipsError;
             setMemberships(membershipsData || []);
             
@@ -151,9 +159,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
           setSelectedArenaContext(null);
           setAlunoProfileForSelectedArena(null);
         }
-      } catch (error) {
+      } catch (error: any) {
         console.error("Erro ao buscar dados do usuário e arenas:", error);
-        addToast({ message: 'Erro ao carregar seus dados.', type: 'error' });
+        addToast({ message: 'Falha ao carregar dados. Verifique sua conexão e recarregue a página.', type: 'error' });
       } finally {
         setIsLoading(false);
       }

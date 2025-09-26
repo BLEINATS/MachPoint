@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Users, GraduationCap, BookOpen, Plus, Search, Edit2, Trash2, BadgeCheck, BadgeX, BadgeHelp, Briefcase, Loader2, Phone } from 'lucide-react';
+import { ArrowLeft, Users, GraduationCap, BookOpen, Plus, Search, BadgeCheck, BadgeX, BadgeHelp, Briefcase, Loader2, Phone, Star } from 'lucide-react';
 import Layout from '../components/Layout/Layout';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -59,8 +59,27 @@ const Alunos: React.FC = () => {
     try {
       const { data: alunosData, error: alunosError } = await supabase
         .from('alunos')
-        .select('*')
+        .select(`
+          id,
+          arena_id,
+          profile_id,
+          name,
+          email,
+          phone,
+          status,
+          sport,
+          plan_name,
+          monthly_fee,
+          join_date,
+          created_at,
+          avatar_url,
+          credit_balance,
+          gamification_points,
+          gamification_level_id,
+          gamification_levels ( name )
+        `)
         .eq('arena_id', arena.id);
+        
       if (alunosError) throw alunosError;
       setAlunos(alunosData || []);
 
@@ -87,6 +106,14 @@ const Alunos: React.FC = () => {
     loadData();
   }, [loadData]);
   
+  const handleDataChange = useCallback((updatedAluno?: Aluno) => {
+    if (updatedAluno) {
+      setAlunos(prevAlunos => prevAlunos.map(a => a.id === updatedAluno.id ? updatedAluno : a));
+    }
+    // We can still refetch for eventual consistency, but the UI update is now instant.
+    loadData();
+  }, [loadData]);
+  
   useEffect(() => {
     if (location.state?.openModal) {
       setIsAlunoModalOpen(true);
@@ -98,6 +125,7 @@ const Alunos: React.FC = () => {
     if (!arena) return;
     const isEditing = 'id' in alunoData;
     const dataToSave = { ...alunoData, arena_id: arena.id };
+    delete (dataToSave as any).gamification_levels;
     if (!isEditing) delete (dataToSave as any).id;
     if (!dataToSave.profile_id) delete (dataToSave as any).profile_id;
     
@@ -305,9 +333,9 @@ const Alunos: React.FC = () => {
     }
     switch (activeTab) {
       case 'clientes':
-        return <AlunosList alunos={filteredClientes} onEdit={setEditingAluno} onDelete={handleDeleteAluno} type="Cliente" />;
+        return <AlunosList alunos={filteredClientes} onEdit={setEditingAluno} />;
       case 'alunos':
-        return <AlunosList alunos={filteredAlunos} onEdit={setEditingAluno} onDelete={handleDeleteAluno} type="Aluno" />;
+        return <AlunosList alunos={filteredAlunos} onEdit={setEditingAluno} />;
       case 'professores':
         return <ProfessoresList professores={filteredProfessores} onEdit={setEditingProfessor} onDelete={handleDeleteProfessor} />;
       case 'turmas':
@@ -412,6 +440,7 @@ const Alunos: React.FC = () => {
         availablePlans={availablePlans}
         modalType={activeTab === 'clientes' ? 'Cliente' : 'Aluno'}
         allAlunos={alunos}
+        onDataChange={handleDataChange}
       />
       <ProfessorModal 
         isOpen={isProfessorModalOpen} 
@@ -445,11 +474,9 @@ const Alunos: React.FC = () => {
   );
 };
 
-const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void, onDelete: (id: string) => void, type: 'Cliente' | 'Aluno' }> = ({ alunos, onEdit, onDelete, type }) => {
+const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void }> = ({ alunos, onEdit }) => {
   if (alunos.length === 0) {
-    const title = type === 'Cliente' ? "Nenhum cliente encontrado" : "Nenhum aluno com plano encontrado";
-    const description = type === 'Cliente' ? "Clique em 'Adicionar Cliente' para começar a montar sua base de contatos." : "Cadastre alunos em planos para que eles apareçam aqui.";
-    return <PlaceholderTab title={title} description={description} />;
+    return <PlaceholderTab title="Nenhum cliente/aluno encontrado" description="Cadastre novos clientes ou alunos para vê-los aqui." />;
   }
   
   const getStatusProps = (status: Aluno['status']) => {
@@ -466,12 +493,11 @@ const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void, on
         <table className="min-w-full divide-y divide-brand-gray-200 dark:divide-brand-gray-700">
           <thead className="bg-brand-gray-50 dark:bg-brand-gray-700/50">
             <tr>
-              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">{type}</th>
+              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Cliente/Aluno</th>
               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Status</th>
-              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Crédito</th>
-              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Plano / Mensalidade</th>
+              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Nível / Pontos</th>
+              <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Plano</th>
               <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Membro Desde</th>
-              <th scope="col" className="relative px-6 py-3"><span className="sr-only">Ações</span></th>
             </tr>
           </thead>
           <tbody className="bg-white dark:bg-brand-gray-800 divide-y divide-brand-gray-200 dark:divide-brand-gray-700">
@@ -483,7 +509,8 @@ const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void, on
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   transition={{ delay: index * 0.05 }}
-                  className="hover:bg-brand-gray-50 dark:hover:bg-brand-gray-700/50"
+                  onClick={() => onEdit(aluno)}
+                  className="hover:bg-brand-gray-50 dark:hover:bg-brand-gray-700/50 cursor-pointer"
                 >
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center">
@@ -509,36 +536,17 @@ const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void, on
                     </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    {aluno.credit_balance && aluno.credit_balance > 0 ? (
-                      <span className="text-sm font-semibold text-blue-600 dark:text-blue-400">
-                        {aluno.credit_balance.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                      </span>
-                    ) : (
-                      <span className="text-sm text-brand-gray-400 dark:text-brand-gray-500">-</span>
-                    )}
+                    <div className="text-sm text-brand-gray-900 dark:text-white flex items-center">
+                      <Star className="h-4 w-4 mr-1 text-yellow-400" />
+                      {(aluno as any).gamification_levels?.name || 'Iniciante'}
+                    </div>
+                    <div className="text-sm text-brand-gray-500">{aluno.gamification_points || 0} pontos</div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm text-brand-gray-900 dark:text-white">{aluno.plan_name}</div>
-                    <div className="text-sm font-semibold">
-                      {aluno.monthly_fee && aluno.monthly_fee > 0 ? (
-                        <span className="text-green-600 dark:text-green-400">
-                          {aluno.monthly_fee.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                        </span>
-                      ) : (
-                        <span className="text-brand-gray-500 dark:text-brand-gray-400 font-normal">
-                          Paga por uso
-                        </span>
-                      )}
-                    </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-brand-gray-500 dark:text-brand-gray-400">
                     {format(parseDateStringAsLocal(aluno.join_date), 'dd/MM/yyyy')}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <div className="flex items-center justify-end space-x-1">
-                        <Button variant="ghost" size="sm" onClick={() => onEdit(aluno)} className="p-2" title="Editar"><Edit2 className="h-4 w-4" /></Button>
-                        <Button variant="ghost" size="sm" onClick={() => onDelete(aluno.id)} className="p-2 hover:text-red-500" title="Excluir"><Trash2 className="h-4 w-4" /></Button>
-                    </div>
                   </td>
                 </motion.tr>
               );
@@ -582,7 +590,7 @@ const ProfessoresList: React.FC<{ professores: Professor[], onEdit: (prof: Profe
                 </div>
               </div>
               <div className="flex space-x-1">
-                  <Button variant="ghost" size="sm" onClick={() => onEdit(prof)} className="p-2" title="Editar"><Edit2 className="h-4 w-4" /></Button>
+                  <Button variant="ghost" size="sm" onClick={() => onEdit(prof)} className="p-2" title="Editar"><Edit className="h-4 w-4" /></Button>
                   <Button variant="ghost" size="sm" onClick={() => onDelete(prof.id)} className="p-2 hover:text-red-500" title="Excluir"><Trash2 className="h-4 w-4" /></Button>
               </div>
             </div>
