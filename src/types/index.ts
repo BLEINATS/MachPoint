@@ -120,7 +120,8 @@ export interface Aluno {
   credit_balance?: number;
   gamification_points?: number;
   gamification_level_id?: string | null;
-  gamification_levels?: { name: string } | null; // Changed from gamification_level
+  gamification_levels?: { name: string } | null;
+  gamification_point_transactions?: { points: number }[];
 }
 
 export interface Professor {
@@ -342,7 +343,7 @@ export interface GamificationPointTransaction {
   arena_id: string;
   aluno_id: string;
   points: number;
-  type: 'reservation_completed' | 'manual_adjustment' | 'achievement_unlocked';
+  type: 'reservation_completed' | 'manual_adjustment' | 'achievement_unlocked' | 'reward_redemption';
   description: string;
   related_reservation_id: string | null;
   related_achievement_id: string | null;

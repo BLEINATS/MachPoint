@@ -43,15 +43,29 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { data: alunoData, error: alunoError } = await supabaseWithRetry(() =>
       supabase
         .from('alunos')
-        .select('*, gamification_levels(name)')
+        .select(`
+          *,
+          gamification_levels(name),
+          gamification_point_transactions ( points )
+        `)
         .eq('profile_id', profileId)
         .eq('arena_id', arenaId)
         .single()
     );
+
     if (alunoError && alunoError.code !== 'PGRST116') {
       console.error("Erro ao buscar perfil de aluno:", alunoError);
+      setAlunoProfileForSelectedArena(null);
+      return;
     }
-    setAlunoProfileForSelectedArena(alunoData || null);
+
+    if (alunoData) {
+      const totalPoints = (alunoData.gamification_point_transactions || []).reduce((sum: number, tx: any) => sum + tx.points, 0);
+      const processedAluno = { ...alunoData, gamification_points: totalPoints };
+      setAlunoProfileForSelectedArena(processedAluno);
+    } else {
+      setAlunoProfileForSelectedArena(null);
+    }
   }, []);
 
   const refreshAlunoProfile = useCallback(() => {

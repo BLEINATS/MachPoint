@@ -3,8 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabaseClient';
-import { Quadra, Reserva, Aluno, Turma, Professor, CreditTransaction, Profile, Arena, GamificationLevel, GamificationReward, GamificationAchievement, AlunoAchievement } from '../../types';
-import { Calendar, History, Compass, Search, Sparkles, GraduationCap, CreditCard, LayoutDashboard, Loader2, CheckCircle, AlertCircle, ShoppingBag, Clock, Heart, DollarSign, Gift } from 'lucide-react';
+import { Quadra, Reserva, Aluno, Turma, Professor, CreditTransaction, Profile, Arena, GamificationLevel, GamificationReward, GamificationAchievement, AlunoAchievement, GamificationPointTransaction } from '../../types';
+import { Calendar, History, Compass, Search, Sparkles, GraduationCap, CreditCard, LayoutDashboard, Loader2, CheckCircle, AlertCircle, ShoppingBag, Clock, Heart, DollarSign, Gift, Star } from 'lucide-react';
 import { isAfter, startOfDay, isSameDay, format, parse, getDay, addDays, isBefore, endOfDay, isPast, addMinutes } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { parseDateStringAsLocal } from '../../utils/dateUtils';
@@ -33,6 +33,7 @@ const ClientDashboard: React.FC = () => {
   const [reservas, setReservas] = useState<Reserva[]>([]);
   const [allArenaReservations, setAllArenaReservations] = useState<Reserva[]>([]);
   const [creditHistory, setCreditHistory] = useState<CreditTransaction[]>([]);
+  const [gamificationHistory, setGamificationHistory] = useState<GamificationPointTransaction[]>([]);
   const [turmas, setTurmas] = useState<Turma[]>([]);
   const [professores, setProfessores] = useState<Professor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -90,15 +91,16 @@ const ClientDashboard: React.FC = () => {
       setGamificationEnabled(gamificationSettingsRes.data?.is_enabled || false);
 
       if (alunoProfileForSelectedArena?.id) {
-        const { data: creditData, error: creditError } = await supabase
-          .from('credit_transactions')
-          .select('id, amount, type, description, created_at')
-          .eq('aluno_id', alunoProfileForSelectedArena.id)
-          .eq('arena_id', selectedArenaContext.id)
-          .order('created_at', { ascending: false });
+        const [creditRes, gamificationHistoryRes] = await Promise.all([
+            supabase.from('credit_transactions').select('id, amount, type, description, created_at').eq('aluno_id', alunoProfileForSelectedArena.id).eq('arena_id', selectedArenaContext.id).order('created_at', { ascending: false }),
+            supabase.from('gamification_point_transactions').select('*').eq('aluno_id', alunoProfileForSelectedArena.id).order('created_at', { ascending: false })
+        ]);
         
-        if (creditError) throw creditError;
-        setCreditHistory(creditData || []);
+        if (creditRes.error) throw creditRes.error;
+        if (gamificationHistoryRes.error) throw gamificationHistoryRes.error;
+        
+        setCreditHistory(creditRes.data || []);
+        setGamificationHistory(gamificationHistoryRes.data || []);
 
         if (gamificationSettingsRes.data?.is_enabled) {
           const [levelsRes, rewardsRes, achievementsRes, unlockedRes] = await Promise.all([
@@ -119,6 +121,7 @@ const ClientDashboard: React.FC = () => {
         }
       } else {
         setCreditHistory([]);
+        setGamificationHistory([]);
       }
 
     } catch (error: any) {
@@ -402,13 +405,15 @@ const ClientDashboard: React.FC = () => {
                   arenaName={selectedArenaContext?.name}
                   recommendation={recommendation}
                   selectedArena={selectedArenaContext}
+                  totalPoints={alunoProfileForSelectedArena?.gamification_points}
+                  levelName={(alunoProfileForSelectedArena?.gamification_levels as { name: string } | null)?.name}
                />;
       case 'reservations':
         return <ReservationsTab upcoming={upcomingReservations} past={pastReservations} quadras={quadras} arenaName={selectedArenaContext?.name} onCancel={handleOpenCancelModal} onDetail={handleOpenDetailModal} />;
       case 'credits':
         return <CreditsTab balance={alunoProfileForSelectedArena?.credit_balance || 0} history={creditHistory} />;
       case 'rewards':
-        return <RewardsTab aluno={alunoProfileForSelectedArena} levels={levels} rewards={rewards} achievements={achievements} unlockedAchievements={unlockedAchievements} />;
+        return <RewardsTab aluno={alunoProfileForSelectedArena} levels={levels} rewards={rewards} achievements={achievements} unlockedAchievements={unlockedAchievements} history={gamificationHistory} />;
       default:
         return null;
     }
@@ -520,7 +525,9 @@ const OverviewTab: React.FC<{
   arenaName?: string,
   recommendation: { quadra: Quadra; date: Date; time: string } | null;
   selectedArena: Arena | null;
-}> = ({creditBalance, nextReservation, nextClass, quadras, reservas, onSlotClick, selectedDate, setSelectedDate, profile, arenaName, recommendation, selectedArena}) => {
+  totalPoints?: number;
+  levelName?: string;
+}> = ({creditBalance, nextReservation, nextClass, quadras, reservas, onSlotClick, selectedDate, setSelectedDate, profile, arenaName, recommendation, selectedArena, totalPoints, levelName}) => {
   const [favoriteQuadras, setFavoriteQuadras] = useState<string[]>([]);
 
   useEffect(() => {
@@ -584,6 +591,7 @@ const OverviewTab: React.FC<{
       {/* Sidebar - Appears second on mobile */}
       <div className="lg:w-1/3 space-y-8 order-2 lg:order-none">
         <CreditBalanceCard balance={creditBalance} />
+        <GamificationPointsCard points={totalPoints} levelName={levelName} />
         {recommendation ? (
           <RecommendationCard 
             quadraName={recommendation.quadra.name}
@@ -831,6 +839,17 @@ const CreditBalanceCard: React.FC<{balance: number}> = ({balance}) => (
     </div>
     <p className="text-4xl font-bold mt-2">{balance.toLocaleString('pt-BR', {style: 'currency', currency: 'BRL'})}</p>
     <p className="text-sm opacity-80 mt-1">Use seu crédito para abater o valor de novas reservas.</p>
+  </div>
+);
+
+const GamificationPointsCard: React.FC<{points?: number, levelName?: string}> = ({points = 0, levelName = 'Iniciante'}) => (
+  <div className="bg-gradient-to-r from-yellow-400 to-orange-500 dark:from-yellow-500 dark:to-orange-600 text-white p-6 rounded-lg shadow-lg">
+    <div className="flex justify-between items-center">
+      <h3 className="font-semibold">MatchPlay Rewards</h3>
+      <Star className="h-6 w-6" />
+    </div>
+    <p className="text-4xl font-bold mt-2">{points}</p>
+    <p className="text-sm opacity-80 mt-1">Pontos • Nível {levelName}</p>
   </div>
 );
 

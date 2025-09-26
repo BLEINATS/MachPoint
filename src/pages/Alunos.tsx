@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Users, GraduationCap, BookOpen, Plus, Search, BadgeCheck, BadgeX, BadgeHelp, Briefcase, Loader2, Phone, Star } from 'lucide-react';
+import { ArrowLeft, Users, GraduationCap, BookOpen, Plus, Search, BadgeCheck, BadgeX, BadgeHelp, Briefcase, Loader2, Phone, Star, Edit, Trash2 } from 'lucide-react';
 import Layout from '../components/Layout/Layout';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -57,28 +57,41 @@ const Alunos: React.FC = () => {
     if (!arena) return;
     setIsLoading(true);
     try {
-      const { data: alunosData, error: alunosError } = await supabase
-        .from('alunos')
-        .select(`
-          id, arena_id, profile_id, name, email, phone, status, sport, plan_name, monthly_fee, join_date, created_at, avatar_url, credit_balance, gamification_points,
-          gamification_levels ( name )
-        `)
-        .eq('arena_id', arena.id);
-        
-      if (alunosError) throw alunosError;
-      setAlunos(alunosData || []);
+      const [alunosRes, professoresRes, turmasRes, quadrasRes, levelsRes] = await Promise.all([
+        supabase
+          .from('alunos')
+          .select(`
+            id, arena_id, profile_id, name, email, phone, status, sport, plan_name, monthly_fee, join_date, created_at, avatar_url, credit_balance, gamification_level_id,
+            gamification_point_transactions ( points )
+          `)
+          .eq('arena_id', arena.id),
+        supabase.from('professores').select('*').eq('arena_id', arena.id),
+        supabase.from('turmas').select('*').eq('arena_id', arena.id),
+        supabase.from('quadras').select('*').eq('arena_id', arena.id),
+        supabase.from('gamification_levels').select('name, points_required').eq('arena_id', arena.id).order('points_required', { ascending: false })
+      ]);
 
-      const { data: professoresData, error: professoresError } = await supabase.from('professores').select('*').eq('arena_id', arena.id);
-      if (professoresError) throw professoresError;
-      setProfessores(professoresData || []);
+      if (alunosRes.error) throw alunosRes.error;
+      if (professoresRes.error) throw professoresRes.error;
+      if (turmasRes.error) throw turmasRes.error;
+      if (quadrasRes.error) throw quadrasRes.error;
+      if (levelsRes.error) throw levelsRes.error;
 
-      const { data: turmasData, error: turmasError } = await supabase.from('turmas').select('*').eq('arena_id', arena.id);
-      if (turmasError) throw turmasError;
-      setTurmas(turmasData || []);
-      
-      const { data: quadrasData, error: quadrasError } = await supabase.from('quadras').select('*').eq('arena_id', arena.id);
-      if (quadrasError) throw quadrasError;
-      setQuadras(quadrasData || []);
+      const processedAlunos = (alunosRes.data || []).map(aluno => {
+          const totalPoints = (aluno.gamification_point_transactions || []).reduce((sum: number, tx: any) => sum + tx.points, 0);
+          const currentLevel = levelsRes.data.find(l => totalPoints >= l.points_required) || null;
+          
+          return { 
+              ...aluno, 
+              gamification_points: totalPoints,
+              gamification_levels: currentLevel ? { name: currentLevel.name } : null
+          };
+      });
+
+      setAlunos(processedAlunos);
+      setProfessores(professoresRes.data || []);
+      setTurmas(turmasRes.data || []);
+      setQuadras(quadrasRes.data || []);
 
     } catch (error: any) {
       addToast({ message: `Erro ao carregar dados: ${error.message}`, type: 'error' });
@@ -86,6 +99,7 @@ const Alunos: React.FC = () => {
       setIsLoading(false);
     }
   }, [arena, addToast]);
+
 
   useEffect(() => {
     loadData();
@@ -107,6 +121,7 @@ const Alunos: React.FC = () => {
     const isEditing = 'id' in alunoData;
     const dataToSave = { ...alunoData, arena_id: arena.id };
     delete (dataToSave as any).gamification_levels;
+    delete (dataToSave as any).gamification_point_transactions;
     if (!isEditing) delete (dataToSave as any).id;
     if (!dataToSave.profile_id) delete (dataToSave as any).profile_id;
     
@@ -253,7 +268,7 @@ const Alunos: React.FC = () => {
   const filteredClientes = useMemo(() => 
     alunos.filter(a => 
       !isAluno(a) &&
-      (a.name.toLowerCase().includes(searchTerm.toLowerCase()) || a.email?.toLowerCase().includes(searchTerm.toLowerCase()))
+      (a.name.toLowerCase().includes(searchTerm.toLowerCase()) || (a.email && a.email.toLowerCase().includes(searchTerm.toLowerCase())))
     ),
     [alunos, searchTerm]
   );
@@ -261,7 +276,7 @@ const Alunos: React.FC = () => {
   const filteredAlunos = useMemo(() => 
     alunos.filter(a => 
       isAluno(a) &&
-      (a.name.toLowerCase().includes(searchTerm.toLowerCase()) || a.email?.toLowerCase().includes(searchTerm.toLowerCase()))
+      (a.name.toLowerCase().includes(searchTerm.toLowerCase()) || (a.email && a.email.toLowerCase().includes(searchTerm.toLowerCase())))
     ),
     [alunos, searchTerm]
   );
@@ -484,7 +499,7 @@ const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void }> 
           <tbody className="bg-white dark:bg-brand-gray-800 divide-y divide-brand-gray-200 dark:divide-brand-gray-700">
             {alunos.map((aluno, index) => {
               const statusProps = getStatusProps(aluno.status);
-              const levelName = aluno.gamification_levels?.name || 'Iniciante';
+              const levelName = (aluno.gamification_levels as { name: string } | null)?.name || 'Iniciante';
               return (
                 <motion.tr 
                   key={aluno.id}

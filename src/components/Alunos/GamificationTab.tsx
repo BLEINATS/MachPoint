@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Aluno, GamificationPointTransaction, AlunoAchievement, GamificationAchievement } from '../../types';
+import { Aluno, GamificationPointTransaction, GamificationLevel } from '../../types';
 import { supabase } from '../../lib/supabaseClient';
 import { useToast } from '../../context/ToastContext';
 import { Loader2, Plus, Minus, Star, Trophy, History } from 'lucide-react';
@@ -20,11 +20,13 @@ const GamificationTab: React.FC<GamificationTabProps> = ({ aluno, onDataChange }
   const [pointsToAdd, setPointsToAdd] = useState<number | string>('');
   const [adjustmentReason, setAdjustmentReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [totalPoints, setTotalPoints] = useState(0);
+  const [currentLevel, setCurrentLevel] = useState<GamificationLevel | null>(null);
 
   const loadGamificationData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [historyRes, achievementsRes] = await Promise.all([
+      const [historyRes, achievementsRes, levelsRes] = await Promise.all([
         supabase
           .from('gamification_point_transactions')
           .select('*')
@@ -33,21 +35,34 @@ const GamificationTab: React.FC<GamificationTabProps> = ({ aluno, onDataChange }
         supabase
           .from('aluno_achievements')
           .select('*, gamification_achievements(*)')
-          .eq('aluno_id', aluno.id)
+          .eq('aluno_id', aluno.id),
+        supabase
+          .from('gamification_levels')
+          .select('*')
+          .eq('arena_id', aluno.arena_id)
+          .order('points_required', { ascending: false })
       ]);
 
       if (historyRes.error) throw historyRes.error;
       if (achievementsRes.error) throw achievementsRes.error;
+      if (levelsRes.error) throw levelsRes.error;
       
-      setHistory(historyRes.data || []);
+      const transactions = historyRes.data || [];
+      const pointsSum = transactions.reduce((acc, tx) => acc + tx.points, 0);
+      
+      setHistory(transactions);
       setUnlockedAchievements(achievementsRes.data || []);
+      setTotalPoints(pointsSum);
+
+      const level = levelsRes.data?.find(l => pointsSum >= l.points_required) || null;
+      setCurrentLevel(level);
 
     } catch (error: any) {
       addToast({ message: `Erro ao carregar dados de gamificação: ${error.message}`, type: 'error' });
     } finally {
       setIsLoading(false);
     }
-  }, [aluno.id, addToast]);
+  }, [aluno.id, aluno.arena_id, addToast]);
 
   useEffect(() => {
     loadGamificationData();
@@ -70,10 +85,27 @@ const GamificationTab: React.FC<GamificationTabProps> = ({ aluno, onDataChange }
 
       if (rpcError) throw rpcError;
       
+      if (aluno.profile_id) {
+        const notificationMessage = points > 0 
+          ? `Você ganhou ${points} pontos: ${adjustmentReason}`
+          : `Você perdeu ${Math.abs(points)} pontos: ${adjustmentReason}`;
+          
+        const { error: notificationError } = await supabase.from('notificacoes').insert({
+          profile_id: aluno.profile_id,
+          arena_id: aluno.arena_id,
+          message: notificationMessage,
+          type: 'gamification_points'
+        });
+        if (notificationError) {
+            console.error("Erro ao criar notificação:", notificationError);
+        }
+      }
+
       addToast({ message: 'Pontos ajustados com sucesso!', type: 'success' });
       setPointsToAdd('');
       setAdjustmentReason('');
 
+      await loadGamificationData();
       onDataChange();
 
     } catch (error: any) {
@@ -89,8 +121,23 @@ const GamificationTab: React.FC<GamificationTabProps> = ({ aluno, onDataChange }
 
   return (
     <div className="space-y-6">
+      {/* Summary Card */}
+      <div className="bg-brand-gray-50 dark:bg-brand-gray-900/50 rounded-lg p-4 flex justify-between items-center border border-brand-gray-200 dark:border-brand-gray-700">
+        <div className="flex items-center">
+          <Star className="h-8 w-8 text-yellow-500 mr-4" />
+          <div>
+            <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400">Nível Atual</p>
+            <p className="font-bold text-lg text-brand-gray-900 dark:text-white">{currentLevel?.name || 'Iniciante'}</p>
+          </div>
+        </div>
+        <div className="text-right">
+          <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400">Pontuação Total</p>
+          <p className="font-bold text-lg text-brand-blue-500">{totalPoints}</p>
+        </div>
+      </div>
+
       {/* Manual Adjustment */}
-      <div className="p-4 border rounded-lg bg-brand-gray-50 dark:bg-brand-gray-900/50">
+      <div className="p-4 border rounded-lg">
         <h4 className="font-semibold mb-3">Ajuste Manual de Pontos</h4>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Input 

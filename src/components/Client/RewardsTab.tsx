@@ -1,7 +1,8 @@
 import React from 'react';
-import { Aluno, GamificationLevel, GamificationReward, GamificationAchievement, AlunoAchievement } from '../../types';
-import { Star, Gift, Trophy, CheckCircle } from 'lucide-react';
+import { Aluno, GamificationLevel, GamificationReward, GamificationAchievement, AlunoAchievement, GamificationPointTransaction } from '../../types';
+import { Star, Gift, Trophy, CheckCircle, History } from 'lucide-react';
 import Button from '../Forms/Button';
+import { format } from 'date-fns';
 
 interface RewardsTabProps {
   aluno: Aluno | null;
@@ -9,9 +10,10 @@ interface RewardsTabProps {
   rewards: GamificationReward[];
   achievements: GamificationAchievement[];
   unlockedAchievements: AlunoAchievement[];
+  history: GamificationPointTransaction[];
 }
 
-const RewardsTab: React.FC<RewardsTabProps> = ({ aluno, levels, rewards, achievements, unlockedAchievements }) => {
+const RewardsTab: React.FC<RewardsTabProps> = ({ aluno, levels, rewards, achievements, unlockedAchievements, history }) => {
   if (!aluno) {
     return <div className="text-center p-8 text-brand-gray-500">Carregando dados de gamificação...</div>;
   }
@@ -84,6 +86,34 @@ const RewardsTab: React.FC<RewardsTabProps> = ({ aluno, levels, rewards, achieve
               </div>
             );
           })}
+        </div>
+      </div>
+      
+      {/* History */}
+      <div>
+        <h3 className="text-xl font-semibold mb-4 flex items-center"><History className="mr-2 h-5 w-5 text-brand-blue-500" /> Histórico de Pontos</h3>
+        <div className="bg-white dark:bg-brand-gray-800 rounded-lg shadow-md border border-brand-gray-200 dark:border-brand-gray-700">
+          <div className="max-h-96 overflow-y-auto">
+            {history.length > 0 ? (
+              <ul className="divide-y divide-brand-gray-200 dark:divide-brand-gray-700">
+                {history.map(tx => (
+                  <li key={tx.id} className="p-4 flex justify-between items-center">
+                    <div>
+                      <p className="font-medium text-sm text-brand-gray-800 dark:text-brand-gray-200">{tx.description}</p>
+                      <p className="text-xs text-brand-gray-500 dark:text-brand-gray-400 mt-1">
+                        {format(new Date(tx.created_at), 'dd/MM/yyyy HH:mm')}
+                      </p>
+                    </div>
+                    <span className={`font-bold text-lg ${tx.points >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {tx.points >= 0 ? '+' : ''}{tx.points}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="p-8 text-center text-sm text-brand-gray-500">Nenhuma transação de pontos encontrada.</p>
+            )}
+          </div>
         </div>
       </div>
     </div>
