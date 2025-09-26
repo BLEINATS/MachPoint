@@ -3,8 +3,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { supabase } from '../../lib/supabaseClient';
-import { Quadra, Reserva, Aluno, Turma, Professor, CreditTransaction, Profile, Arena } from '../../types';
-import { Calendar, History, Compass, Search, Sparkles, GraduationCap, CreditCard, LayoutDashboard, Loader2, CheckCircle, AlertCircle, ShoppingBag, Clock, Heart, DollarSign } from 'lucide-react';
+import { Quadra, Reserva, Aluno, Turma, Professor, CreditTransaction, Profile, Arena, GamificationLevel, GamificationReward, GamificationAchievement, AlunoAchievement } from '../../types';
+import { Calendar, History, Compass, Search, Sparkles, GraduationCap, CreditCard, LayoutDashboard, Loader2, CheckCircle, AlertCircle, ShoppingBag, Clock, Heart, DollarSign, Gift } from 'lucide-react';
 import { isAfter, startOfDay, isSameDay, format, parse, getDay, addDays, isBefore, endOfDay, isPast, addMinutes } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { parseDateStringAsLocal } from '../../utils/dateUtils';
@@ -20,8 +20,9 @@ import RecommendationCard from './RecommendationCard';
 import ClientCancellationModal from './ClientCancellationModal';
 import ArenaInfoCard from './ArenaInfoCard';
 import ReservationDetailModal from './ReservationDetailModal';
+import RewardsTab from './RewardsTab';
 
-type TabType = 'overview' | 'reservations' | 'credits';
+type TabType = 'overview' | 'reservations' | 'credits' | 'rewards';
 
 const ClientDashboard: React.FC = () => {
   const { profile, selectedArenaContext, switchArenaContext, memberships, allArenas, alunoProfileForSelectedArena, refreshAlunoProfile } = useAuth();
@@ -36,6 +37,13 @@ const ClientDashboard: React.FC = () => {
   const [professores, setProfessores] = useState<Professor[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<TabType>('overview');
+
+  // Gamification State
+  const [levels, setLevels] = useState<GamificationLevel[]>([]);
+  const [rewards, setRewards] = useState<GamificationReward[]>([]);
+  const [achievements, setAchievements] = useState<GamificationAchievement[]>([]);
+  const [unlockedAchievements, setUnlockedAchievements] = useState<AlunoAchievement[]>([]);
+  const [gamificationEnabled, setGamificationEnabled] = useState(false);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalSlot, setModalSlot] = useState<{ quadraId: string; time: string } | null>(null);
@@ -58,12 +66,13 @@ const ClientDashboard: React.FC = () => {
     }
     setIsLoading(true);
     try {
-      const [quadrasRes, clientReservasRes, allReservasRes, turmasRes, profsRes] = await Promise.all([
+      const [quadrasRes, clientReservasRes, allReservasRes, turmasRes, profsRes, gamificationSettingsRes] = await Promise.all([
         supabase.from('quadras').select('*, pricing_rules(*)').eq('arena_id', selectedArenaContext.id),
         supabase.from('reservas').select('id, quadra_id, date, start_time, end_time, status, total_price, payment_status, credit_used, rented_items, clientName, clientPhone, sport_type, created_at, created_by_name').eq('profile_id', profile.id).eq('arena_id', selectedArenaContext.id),
         supabase.from('reservas').select('id, quadra_id, date, start_time, end_time, status, isRecurring, recurringType, recurringEndDate, master_id, type').eq('arena_id', selectedArenaContext.id),
         supabase.from('turmas').select('id, name, quadra_id, professor_id, start_time, daysOfWeek, student_ids').eq('arena_id', selectedArenaContext.id),
         supabase.from('professores').select('id, name').eq('arena_id', selectedArenaContext.id),
+        supabase.from('gamification_settings').select('is_enabled').eq('arena_id', selectedArenaContext.id).single(),
       ]);
 
       if (quadrasRes.error) throw quadrasRes.error;
@@ -71,12 +80,14 @@ const ClientDashboard: React.FC = () => {
       if (allReservasRes.error) throw allReservasRes.error;
       if (turmasRes.error) throw turmasRes.error;
       if (profsRes.error) throw profsRes.error;
+      if (gamificationSettingsRes.error && gamificationSettingsRes.error.code !== 'PGRST116') throw gamificationSettingsRes.error;
 
       setQuadras(quadrasRes.data as Quadra[] || []);
       setReservas(clientReservasRes.data as Reserva[] || []);
       setAllArenaReservations(allReservasRes.data as Reserva[] || []);
       setTurmas(turmasRes.data as Turma[] || []);
       setProfessores(profsRes.data as Professor[] || []);
+      setGamificationEnabled(gamificationSettingsRes.data?.is_enabled || false);
 
       if (alunoProfileForSelectedArena?.id) {
         const { data: creditData, error: creditError } = await supabase
@@ -88,6 +99,24 @@ const ClientDashboard: React.FC = () => {
         
         if (creditError) throw creditError;
         setCreditHistory(creditData || []);
+
+        if (gamificationSettingsRes.data?.is_enabled) {
+          const [levelsRes, rewardsRes, achievementsRes, unlockedRes] = await Promise.all([
+            supabase.from('gamification_levels').select('*').eq('arena_id', selectedArenaContext.id).order('level_rank', { ascending: true }),
+            supabase.from('gamification_rewards').select('*').eq('arena_id', selectedArenaContext.id).eq('is_active', true),
+            supabase.from('gamification_achievements').select('*').eq('arena_id', selectedArenaContext.id),
+            supabase.from('aluno_achievements').select('*').eq('aluno_id', alunoProfileForSelectedArena.id),
+          ]);
+          if (levelsRes.error) throw levelsRes.error;
+          if (rewardsRes.error) throw rewardsRes.error;
+          if (achievementsRes.error) throw achievementsRes.error;
+          if (unlockedRes.error) throw unlockedRes.error;
+
+          setLevels(levelsRes.data || []);
+          setRewards(rewardsRes.data || []);
+          setAchievements(achievementsRes.data || []);
+          setUnlockedAchievements(unlockedRes.data || []);
+        }
       } else {
         setCreditHistory([]);
       }
@@ -332,10 +361,11 @@ const ClientDashboard: React.FC = () => {
     return upcomingClasses[0];
   }, [isStudent, studentTurmas, quadras, professores]);
 
-  const tabs: { id: TabType; label: string; icon: React.ElementType }[] = [
-    { id: 'overview', label: 'Início', icon: LayoutDashboard },
-    { id: 'reservations', label: 'Reservas', icon: Calendar },
-    { id: 'credits', label: 'Créditos', icon: CreditCard },
+  const tabs: { id: TabType; label: string; icon: React.ElementType; visible: boolean }[] = [
+    { id: 'overview', label: 'Início', icon: LayoutDashboard, visible: true },
+    { id: 'reservations', label: 'Reservas', icon: Calendar, visible: true },
+    { id: 'credits', label: 'Créditos', icon: CreditCard, visible: true },
+    { id: 'rewards', label: 'Recompensas', icon: Gift, visible: gamificationEnabled },
   ];
 
   if (myArenas.length === 0) {
@@ -377,6 +407,8 @@ const ClientDashboard: React.FC = () => {
         return <ReservationsTab upcoming={upcomingReservations} past={pastReservations} quadras={quadras} arenaName={selectedArenaContext?.name} onCancel={handleOpenCancelModal} onDetail={handleOpenDetailModal} />;
       case 'credits':
         return <CreditsTab balance={alunoProfileForSelectedArena?.credit_balance || 0} history={creditHistory} />;
+      case 'rewards':
+        return <RewardsTab aluno={alunoProfileForSelectedArena} levels={levels} rewards={rewards} achievements={achievements} unlockedAchievements={unlockedAchievements} />;
       default:
         return null;
     }
@@ -406,7 +438,7 @@ const ClientDashboard: React.FC = () => {
         <>
           <div className="border-b border-brand-gray-200 dark:border-brand-gray-700 mb-8">
             <nav className="-mb-px flex space-x-6 overflow-x-auto" aria-label="Tabs">
-              {tabs.map(tab => (
+              {tabs.filter(tab => tab.visible).map(tab => (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}

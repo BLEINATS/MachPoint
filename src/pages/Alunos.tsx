@@ -60,22 +60,7 @@ const Alunos: React.FC = () => {
       const { data: alunosData, error: alunosError } = await supabase
         .from('alunos')
         .select(`
-          id,
-          arena_id,
-          profile_id,
-          name,
-          email,
-          phone,
-          status,
-          sport,
-          plan_name,
-          monthly_fee,
-          join_date,
-          created_at,
-          avatar_url,
-          credit_balance,
-          gamification_points,
-          gamification_level_id,
+          id, arena_id, profile_id, name, email, phone, status, sport, plan_name, monthly_fee, join_date, created_at, avatar_url, credit_balance, gamification_points,
           gamification_levels ( name )
         `)
         .eq('arena_id', arena.id);
@@ -106,11 +91,7 @@ const Alunos: React.FC = () => {
     loadData();
   }, [loadData]);
   
-  const handleDataChange = useCallback((updatedAluno?: Aluno) => {
-    if (updatedAluno) {
-      setAlunos(prevAlunos => prevAlunos.map(a => a.id === updatedAluno.id ? updatedAluno : a));
-    }
-    // We can still refetch for eventual consistency, but the UI update is now instant.
+  const handleDataChange = useCallback(() => {
     loadData();
   }, [loadData]);
   
@@ -503,6 +484,7 @@ const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void }> 
           <tbody className="bg-white dark:bg-brand-gray-800 divide-y divide-brand-gray-200 dark:divide-brand-gray-700">
             {alunos.map((aluno, index) => {
               const statusProps = getStatusProps(aluno.status);
+              const levelName = aluno.gamification_levels?.name || 'Iniciante';
               return (
                 <motion.tr 
                   key={aluno.id}
@@ -538,7 +520,7 @@ const AlunosList: React.FC<{ alunos: Aluno[], onEdit: (aluno: Aluno) => void }> 
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm text-brand-gray-900 dark:text-white flex items-center">
                       <Star className="h-4 w-4 mr-1 text-yellow-400" />
-                      {(aluno as any).gamification_levels?.name || 'Iniciante'}
+                      {levelName}
                     </div>
                     <div className="text-sm text-brand-gray-500">{aluno.gamification_points || 0} pontos</div>
                   </td>

@@ -120,7 +120,7 @@ export interface Aluno {
   credit_balance?: number;
   gamification_points?: number;
   gamification_level_id?: string | null;
-  gamification_levels?: { name: string } | null; // For joins
+  gamification_levels?: { name: string } | null; // Changed from gamification_level
 }
 
 export interface Professor {

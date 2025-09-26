@@ -43,7 +43,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     const { data: alunoData, error: alunoError } = await supabaseWithRetry(() =>
       supabase
         .from('alunos')
-        .select('*')
+        .select('*, gamification_levels(name)')
         .eq('profile_id', profileId)
         .eq('arena_id', arenaId)
         .single()
