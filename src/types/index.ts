@@ -279,6 +279,17 @@ export interface Match {
   nextMatchId: string | null;
 }
 
+export interface Notificacao {
+  id: string;
+  arena_id: string;
+  profile_id?: string | null;
+  message: string;
+  type: string;
+  read: boolean;
+  link_to?: string | null;
+  created_at: string;
+}
+
 export type SupabaseData<T> = {
   data: T[] | null;
   error: PostgrestError | null;

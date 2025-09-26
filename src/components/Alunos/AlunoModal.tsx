@@ -7,6 +7,7 @@ import Input from '../Forms/Input';
 import { format } from 'date-fns';
 import { maskPhone } from '../../utils/masks';
 import CreatableSelect from '../Forms/CreatableSelect';
+import { useToast } from '../../context/ToastContext';
 
 interface AlunoModalProps {
   isOpen: boolean;
@@ -17,12 +18,13 @@ interface AlunoModalProps {
   availableSports: string[];
   availablePlans: string[];
   modalType: 'Cliente' | 'Aluno';
+  allAlunos: Aluno[];
 }
 
 const DEFAULT_SPORTS = ['Beach Tennis', 'Futevôlei', 'Futebol Society', 'Vôlei', 'Tênis', 'Padel', 'Funcional'];
 const DEFAULT_PLANS = ['Aula Avulsa', 'Pacote 10 Aulas', 'Plano Mensal - 1x/semana', 'Plano Mensal - 2x/semana', 'Plano Mensal - 3x/semana', 'Plano Mensal - 4x/semana'];
 
-const AlunoModal: React.FC<AlunoModalProps> = ({ isOpen, onClose, onSave, onDelete, initialData, availableSports, availablePlans, modalType }) => {
+const AlunoModal: React.FC<AlunoModalProps> = ({ isOpen, onClose, onSave, onDelete, initialData, availableSports, availablePlans, modalType, allAlunos }) => {
   const [formData, setFormData] = useState({
     name: '',
     email: '',
@@ -33,6 +35,7 @@ const AlunoModal: React.FC<AlunoModalProps> = ({ isOpen, onClose, onSave, onDele
     monthly_fee: '',
     join_date: format(new Date(), 'yyyy-MM-dd'),
   });
+  const { addToast } = useToast();
 
   const isEditing = !!initialData;
 
@@ -67,6 +70,22 @@ const AlunoModal: React.FC<AlunoModalProps> = ({ isOpen, onClose, onSave, onDele
   }, [initialData, isOpen]);
 
   const handleSave = () => {
+    const unmaskedPhone = formData.phone.replace(/\D/g, '');
+
+    if (unmaskedPhone) {
+      const isDuplicate = allAlunos.some(aluno => {
+        if (isEditing && initialData && aluno.id === initialData.id) {
+          return false;
+        }
+        return aluno.phone?.replace(/\D/g, '') === unmaskedPhone;
+      });
+
+      if (isDuplicate) {
+        addToast({ message: 'Este telefone já está em uso por outro cliente.', type: 'error' });
+        return;
+      }
+    }
+
     const dataToSave = {
       ...formData,
       monthly_fee: parseFloat(formData.monthly_fee.replace(',', '.')) || 0,

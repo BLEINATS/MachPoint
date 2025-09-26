@@ -181,20 +181,28 @@ const AnalyticsDashboard: React.FC = () => {
       const typeDetails = getReservationTypeDetails(r.type, r.isRecurring);
       let text = '';
       let details = '';
+      let color = '';
+      let icon: React.ElementType;
+
       if (r.status === 'cancelada') {
         text = `Reserva cancelada`;
         details = `${r.clientName || 'Cliente'} na ${quadraName}`;
+        icon = Clock;
+        color = 'text-red-500';
       } else {
         text = `Nova reserva (${typeDetails.label})`;
         details = `${r.clientName || 'Cliente'} na ${quadraName} - ${(r.total_price || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`;
+        icon = typeDetails.icon;
+        color = 'text-blue-500';
       }
+      
       return {
         id: `res-${r.id}`,
         text: text,
         details: details,
         time: r.updated_at || r.created_at,
-        icon: r.status === 'cancelada' ? Clock : typeDetails.icon,
-        color: 'text-red-500',
+        icon: icon,
+        color: color,
       };
     });
 

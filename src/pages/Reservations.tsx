@@ -36,7 +36,7 @@ import { parseDateStringAsLocal } from '../utils/dateUtils';
 type ViewMode = 'agenda' | 'calendar' | 'list';
 
 const Reservations: React.FC = () => {
-  const { arena } = useAuth();
+  const { arena, profile } = useAuth();
   const { addToast } = useToast();
   const location = useLocation();
   const navigate = useNavigate();
@@ -167,8 +167,8 @@ const Reservations: React.FC = () => {
   };
 
   const handleSaveReservation = async (reservaData: Omit<Reserva, 'id' | 'created_at'> | Reserva) => {
-    if (!arena) return;
-    const isEditing = 'id' in reservaData;
+    if (!arena || !profile) return;
+    const isEditing = !!(reservaData as Reserva).id;
   
     try {
       const startTime = parse(reservaData.start_time, 'HH:mm', new Date());
@@ -215,8 +215,14 @@ const Reservations: React.FC = () => {
       if (!dataToUpsert.profile_id) {
         delete dataToUpsert.profile_id;
       }
-      if (!isEditing) {
+      
+      if (isEditing) {
+        delete dataToUpsert.created_at;
+        delete dataToUpsert.created_by_name;
+      } else {
+        dataToUpsert.created_by_name = profile.name;
         delete dataToUpsert.id;
+        delete dataToUpsert.created_at;
       }
       
       const { data: savedReserva, error } = await supabase.from('reservas').upsert(dataToUpsert).select().single();

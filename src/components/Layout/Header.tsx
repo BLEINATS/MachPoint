@@ -1,33 +1,112 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { 
   LogOut, Sun, Moon, Settings, Bookmark, LayoutGrid, 
   User as UserIcon, LayoutDashboard, GraduationCap, Trophy, 
-  PartyPopper, Calendar, ChevronDown, Loader2
+  PartyPopper, Calendar, ChevronDown, Loader2, Bell
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useTheme } from '../../context/ThemeContext';
 import { motion, AnimatePresence } from 'framer-motion';
 import Button from '../Forms/Button';
+import { supabase } from '../../lib/supabaseClient';
+import { Notificacao } from '../../types';
+import NotificationsPanel from './NotificationsPanel';
+import { useToast } from '../../context/ToastContext';
 
 const Header: React.FC = () => {
   const { user, arena, profile, signOut, isLoading, selectedArenaContext } = useAuth();
+  const { addToast } = useToast();
   const { theme, toggleTheme } = useTheme();
   const navigate = useNavigate();
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<Notificacao[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  
   const profileMenuRef = useRef<HTMLDivElement>(null);
+  const notificationsRef = useRef<HTMLDivElement>(null);
 
   const isAdminView = profile?.role === 'admin_arena' && (!selectedArenaContext || arena?.id === selectedArenaContext.id);
 
+  const handleOutsideClick = useCallback((event: MouseEvent) => {
+    if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
+      setIsProfileMenuOpen(false);
+    }
+    if (notificationsRef.current && !notificationsRef.current.contains(event.target as Node)) {
+      setIsNotificationsOpen(false);
+    }
+  }, []);
+
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target as Node)) {
-        setIsProfileMenuOpen(false);
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [handleOutsideClick]);
+
+  useEffect(() => {
+    if (!profile) {
+      setNotifications([]);
+      setUnreadCount(0);
+      return;
+    }
+
+    const fetchNotifications = async () => {
+      let query = supabase.from('notificacoes').select('*');
+
+      if (profile.role === 'admin_arena' && arena) {
+        query = query.or(`profile_id.eq.${profile.id},and(arena_id.eq.${arena.id},profile_id.is.null)`);
+      } else {
+        query = query.eq('profile_id', profile.id);
+      }
+
+      const { data, error } = await query.order('created_at', { ascending: false }).limit(20);
+
+      if (error) {
+        console.error("Erro ao buscar notificações:", error);
+      } else {
+        setNotifications(data || []);
+        setUnreadCount(data?.filter(n => !n.read).length || 0);
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+
+    fetchNotifications();
+
+    const channel = supabase.channel('public-notifications');
+    channel.on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notificacoes' }, (payload) => {
+      const newNotif = payload.new as Notificacao;
+      const isForMe = newNotif.profile_id === profile.id;
+      const isAdminNotif = profile.role === 'admin_arena' && arena && newNotif.arena_id === arena.id && newNotif.profile_id === null;
+
+      if (isForMe || isAdminNotif) {
+        setNotifications(prev => [newNotif, ...prev]);
+        setUnreadCount(prev => prev + 1);
+        addToast({ message: `Nova notificação: ${newNotif.message}`, type: 'info' });
+      }
+    }).subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [profile, arena, addToast]);
+
+  const handleMarkAsRead = async (id: string) => {
+    const { error } = await supabase.from('notificacoes').update({ read: true }).eq('id', id);
+    if (!error) {
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+      setUnreadCount(prev => Math.max(0, prev - 1));
+    }
+  };
+  
+  const handleMarkAllAsRead = async () => {
+    const unreadIds = notifications.filter(n => !n.read).map(n => n.id);
+    if (unreadIds.length === 0) return;
+
+    const { error } = await supabase.from('notificacoes').update({ read: true }).in('id', unreadIds);
+    if (!error) {
+      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+      setUnreadCount(0);
+    }
+  };
 
   const handleSignOut = async () => {
     await signOut();
@@ -77,6 +156,27 @@ const Header: React.FC = () => {
                     <Link to="/eventos" title="Eventos" className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700"><PartyPopper className="h-5 w-5" /></Link>
                   </>
                 )}
+                
+                <div className="relative" ref={notificationsRef}>
+                  <button onClick={() => setIsNotificationsOpen(p => !p)} className="p-2 rounded-full text-brand-gray-500 dark:text-brand-gray-400 hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700 relative">
+                    <Bell className="h-5 w-5" />
+                    {unreadCount > 0 && (
+                        <span className="absolute top-0 right-0 block h-2.5 w-2.5 rounded-full bg-red-500 ring-2 ring-white dark:ring-brand-gray-800" />
+                    )}
+                  </button>
+                  <AnimatePresence>
+                    {isNotificationsOpen && (
+                      <NotificationsPanel 
+                        notifications={notifications} 
+                        onClose={() => setIsNotificationsOpen(false)}
+                        onMarkAsRead={handleMarkAsRead}
+                        onMarkAllAsRead={handleMarkAllAsRead}
+                        unreadCount={unreadCount}
+                      />
+                    )}
+                  </AnimatePresence>
+                </div>
+
                 <div className="relative" ref={profileMenuRef}>
                   <button onClick={() => setIsProfileMenuOpen(!isProfileMenuOpen)} className="flex items-center gap-2 p-2 rounded-full hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
                     <div className="w-8 h-8 rounded-full bg-brand-gray-200 dark:bg-brand-gray-700 flex items-center justify-center overflow-hidden">

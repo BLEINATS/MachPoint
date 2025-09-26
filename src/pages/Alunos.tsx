@@ -411,6 +411,7 @@ const Alunos: React.FC = () => {
         availableSports={availableSports}
         availablePlans={availablePlans}
         modalType={activeTab === 'clientes' ? 'Cliente' : 'Aluno'}
+        allAlunos={alunos}
       />
       <ProfessorModal 
         isOpen={isProfessorModalOpen} 
