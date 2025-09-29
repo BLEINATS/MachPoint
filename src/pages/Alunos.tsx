@@ -5,7 +5,7 @@ import { ArrowLeft, Users, GraduationCap, BookOpen, Plus, Search, BadgeCheck, Ba
 import Layout from '../components/Layout/Layout';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { supabase } from '../lib/supabaseClient';
+import { supabase, supabaseWithRetry } from '../lib/supabaseClient';
 import { Aluno, Professor, Quadra, Turma, Reserva } from '../types';
 import Button from '../components/Forms/Button';
 import Input from '../components/Forms/Input';
@@ -57,19 +57,21 @@ const Alunos: React.FC = () => {
     if (!arena) return;
     setIsLoading(true);
     try {
-      const [alunosRes, professoresRes, turmasRes, quadrasRes, levelsRes] = await Promise.all([
-        supabase
-          .from('alunos')
-          .select(`
-            id, arena_id, profile_id, name, email, phone, status, sport, plan_name, monthly_fee, join_date, created_at, avatar_url, credit_balance, gamification_level_id,
-            gamification_point_transactions ( points )
-          `)
-          .eq('arena_id', arena.id),
-        supabase.from('professores').select('*').eq('arena_id', arena.id),
-        supabase.from('turmas').select('*').eq('arena_id', arena.id),
-        supabase.from('quadras').select('*').eq('arena_id', arena.id),
-        supabase.from('gamification_levels').select('name, points_required').eq('arena_id', arena.id).order('points_required', { ascending: false })
-      ]);
+      const [alunosRes, professoresRes, turmasRes, quadrasRes, levelsRes] = await supabaseWithRetry(() =>
+        Promise.all([
+          supabase
+            .from('alunos')
+            .select(`
+              id, arena_id, profile_id, name, email, phone, status, sport, plan_name, monthly_fee, join_date, created_at, avatar_url, credit_balance, gamification_level_id, gamification_points,
+              gamification_levels(name)
+            `)
+            .eq('arena_id', arena.id),
+          supabase.from('professores').select('*').eq('arena_id', arena.id),
+          supabase.from('turmas').select('*').eq('arena_id', arena.id),
+          supabase.from('quadras').select('*').eq('arena_id', arena.id),
+          supabase.from('gamification_levels').select('name, points_required').eq('arena_id', arena.id).order('points_required', { ascending: false })
+        ])
+      );
 
       if (alunosRes.error) throw alunosRes.error;
       if (professoresRes.error) throw professoresRes.error;
@@ -78,12 +80,11 @@ const Alunos: React.FC = () => {
       if (levelsRes.error) throw levelsRes.error;
 
       const processedAlunos = (alunosRes.data || []).map(aluno => {
-          const totalPoints = (aluno.gamification_point_transactions || []).reduce((sum: number, tx: any) => sum + tx.points, 0);
+          const totalPoints = aluno.gamification_points || 0;
           const currentLevel = levelsRes.data.find(l => totalPoints >= l.points_required) || null;
           
           return { 
-              ...aluno, 
-              gamification_points: totalPoints,
+              ...aluno,
               gamification_levels: currentLevel ? { name: currentLevel.name } : null
           };
       });

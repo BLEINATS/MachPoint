@@ -1,8 +1,12 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Aluno, GamificationLevel, GamificationReward, GamificationAchievement, AlunoAchievement, GamificationPointTransaction } from '../../types';
 import { Star, Gift, Trophy, CheckCircle, History } from 'lucide-react';
 import Button from '../Forms/Button';
 import { format } from 'date-fns';
+import ConfirmationModal from '../Shared/ConfirmationModal';
+import { supabase } from '../../lib/supabaseClient';
+import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
 
 interface RewardsTabProps {
   aluno: Aluno | null;
@@ -14,17 +18,109 @@ interface RewardsTabProps {
 }
 
 const RewardsTab: React.FC<RewardsTabProps> = ({ aluno, levels, rewards, achievements, unlockedAchievements, history }) => {
+  const [rewardToRedeem, setRewardToRedeem] = useState<GamificationReward | null>(null);
+  const [isRedeeming, setIsRedeeming] = useState(false);
+  const { addToast } = useToast();
+  const { refreshAlunoProfile } = useAuth();
+
   if (!aluno) {
     return <div className="text-center p-8 text-brand-gray-500">Carregando dados de gamificação...</div>;
   }
 
-  const currentLevel = levels.find(l => l.id === aluno.gamification_level_id);
-  const nextLevel = levels.find(l => l.level_rank === (currentLevel?.level_rank || 0) + 1);
-  
-  const progressPercentage = nextLevel
-    ? ((aluno.gamification_points || 0) - (currentLevel?.points_required || 0)) /
-      (nextLevel.points_required - (currentLevel?.points_required || 0)) * 100
-    : 100;
+  const handleConfirmRedemption = async () => {
+    if (!aluno || !rewardToRedeem) return;
+
+    setIsRedeeming(true);
+    try {
+      // 1. Deduct points
+      const { error: rpcError } = await supabase.rpc('add_gamification_points', {
+        p_aluno_id: aluno.id,
+        p_points_to_add: -rewardToRedeem.points_cost,
+        p_description: `Resgate: ${rewardToRedeem.title}`,
+      });
+      if (rpcError) throw rpcError;
+
+      // 2. Update quantity if limited
+      if (rewardToRedeem.quantity !== null && rewardToRedeem.quantity > 0) {
+        const { error: updateError } = await supabase
+          .from('gamification_rewards')
+          .update({ quantity: rewardToRedeem.quantity - 1 })
+          .eq('id', rewardToRedeem.id);
+        if (updateError) {
+          console.error("Erro ao atualizar quantidade da recompensa:", updateError);
+        }
+      }
+
+      // 3. Add credit if it's a discount reward
+      if (rewardToRedeem.type === 'discount' && rewardToRedeem.value && rewardToRedeem.value > 0) {
+        const creditValue = rewardToRedeem.value;
+        
+        const { error: creditError } = await supabase.rpc('add_credit_to_aluno', {
+            aluno_id_to_update: aluno.id,
+            arena_id_to_check: aluno.arena_id,
+            amount_to_add: creditValue
+        });
+        if (creditError) throw creditError;
+
+        const { error: transactionError } = await supabase.from('credit_transactions').insert({
+            aluno_id: aluno.id,
+            arena_id: aluno.arena_id,
+            amount: creditValue,
+            type: 'goodwill_credit',
+            description: `Crédito por resgate: ${rewardToRedeem.title}`,
+        });
+        if (transactionError) throw transactionError;
+
+        if (aluno.profile_id) {
+            await supabase.from('notificacoes').insert({
+                profile_id: aluno.profile_id,
+                arena_id: aluno.arena_id,
+                message: `Você resgatou "${rewardToRedeem.title}" e ganhou ${creditValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de crédito!`,
+                type: 'gamification_reward',
+            });
+        }
+      } else {
+        if (aluno.profile_id) {
+            await supabase.from('notificacoes').insert({
+              profile_id: aluno.profile_id,
+              arena_id: aluno.arena_id,
+              message: `Você resgatou "${rewardToRedeem.title}"!`,
+              type: 'gamification_reward',
+            });
+        }
+      }
+
+      // 4. Notify admin
+      await supabase.from('notificacoes').insert({
+        arena_id: aluno.arena_id,
+        message: `Cliente ${aluno.name} resgatou a recompensa "${rewardToRedeem.title}".`,
+        type: 'gamification_reward',
+      });
+
+      addToast({ message: 'Recompensa resgatada com sucesso!', type: 'success' });
+      refreshAlunoProfile();
+    } catch (error: any) {
+      addToast({ message: `Erro ao resgatar: ${error.message}`, type: 'error' });
+    } finally {
+      setIsRedeeming(false);
+      setRewardToRedeem(null);
+    }
+  };
+
+  const currentLevel = levels.find(l => (aluno.gamification_points || 0) >= l.points_required);
+  const currentLevelIndex = currentLevel ? levels.findIndex(l => l.id === currentLevel.id) : -1;
+  const nextLevel = currentLevelIndex > 0 ? levels[currentLevelIndex - 1] : null;
+
+  let progressPercentage = 0;
+  if (currentLevel) {
+      if (nextLevel && nextLevel.points_required > currentLevel.points_required) {
+          const pointsInLevel = (aluno.gamification_points || 0) - currentLevel.points_required;
+          const pointsForNextLevel = nextLevel.points_required - currentLevel.points_required;
+          progressPercentage = (pointsInLevel / pointsForNextLevel) * 100;
+      } else {
+          progressPercentage = 100;
+      }
+  }
 
   return (
     <div className="space-y-8">
@@ -59,10 +155,17 @@ const RewardsTab: React.FC<RewardsTabProps> = ({ aluno, levels, rewards, achieve
               <div>
                 <h4 className="font-bold">{reward.title}</h4>
                 <p className="text-sm text-brand-gray-500 mt-1">{reward.description}</p>
+                {reward.quantity !== null && <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">Restam: {reward.quantity}</p>}
               </div>
               <div className="flex justify-between items-center mt-4">
                 <span className="font-bold text-green-600 dark:text-green-400">{reward.points_cost} Pontos</span>
-                <Button size="sm" disabled={(aluno.gamification_points || 0) < reward.points_cost}>Resgatar</Button>
+                <Button 
+                  size="sm" 
+                  disabled={(aluno.gamification_points || 0) < reward.points_cost || (reward.quantity !== null && reward.quantity <= 0)}
+                  onClick={() => setRewardToRedeem(reward)}
+                >
+                  Resgatar
+                </Button>
               </div>
             </div>
           ))}
@@ -116,6 +219,24 @@ const RewardsTab: React.FC<RewardsTabProps> = ({ aluno, levels, rewards, achieve
           </div>
         </div>
       </div>
+      
+      <ConfirmationModal
+        isOpen={!!rewardToRedeem}
+        onClose={() => setRewardToRedeem(null)}
+        onConfirm={handleConfirmRedemption}
+        title="Confirmar Resgate"
+        message={
+            rewardToRedeem && (
+                <p>
+                    Você tem certeza que deseja usar{' '}
+                    <strong>{rewardToRedeem.points_cost} pontos</strong> para resgatar a recompensa{' '}
+                    <strong>"{rewardToRedeem.title}"</strong>?
+                </p>
+            )
+        }
+        confirmText={isRedeeming ? 'Resgatando...' : 'Sim, Resgatar'}
+        icon={<Gift className="h-10 w-10 text-green-500" />}
+      />
     </div>
   );
 };

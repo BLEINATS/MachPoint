@@ -45,8 +45,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         .from('alunos')
         .select(`
           *,
-          gamification_levels(name),
-          gamification_point_transactions ( points )
+          gamification_levels(name)
         `)
         .eq('profile_id', profileId)
         .eq('arena_id', arenaId)
@@ -60,9 +59,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
 
     if (alunoData) {
-      const totalPoints = (alunoData.gamification_point_transactions || []).reduce((sum: number, tx: any) => sum + tx.points, 0);
-      const processedAluno = { ...alunoData, gamification_points: totalPoints };
-      setAlunoProfileForSelectedArena(processedAluno);
+      setAlunoProfileForSelectedArena(alunoData);
     } else {
       setAlunoProfileForSelectedArena(null);
     }

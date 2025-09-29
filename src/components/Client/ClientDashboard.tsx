@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { supabase } from '../../lib/supabaseClient';
+import { supabase, supabaseWithRetry } from '../../lib/supabaseClient';
 import { Quadra, Reserva, Aluno, Turma, Professor, CreditTransaction, Profile, Arena, GamificationLevel, GamificationReward, GamificationAchievement, AlunoAchievement, GamificationPointTransaction } from '../../types';
 import { Calendar, History, Compass, Search, Sparkles, GraduationCap, CreditCard, LayoutDashboard, Loader2, CheckCircle, AlertCircle, ShoppingBag, Clock, Heart, DollarSign, Gift, Star } from 'lucide-react';
 import { isAfter, startOfDay, isSameDay, format, parse, getDay, addDays, isBefore, endOfDay, isPast, addMinutes } from 'date-fns';
@@ -67,14 +67,16 @@ const ClientDashboard: React.FC = () => {
     }
     setIsLoading(true);
     try {
-      const [quadrasRes, clientReservasRes, allReservasRes, turmasRes, profsRes, gamificationSettingsRes] = await Promise.all([
-        supabase.from('quadras').select('*, pricing_rules(*)').eq('arena_id', selectedArenaContext.id),
-        supabase.from('reservas').select('id, quadra_id, date, start_time, end_time, status, total_price, payment_status, credit_used, rented_items, clientName, clientPhone, sport_type, created_at, created_by_name').eq('profile_id', profile.id).eq('arena_id', selectedArenaContext.id),
-        supabase.from('reservas').select('id, quadra_id, date, start_time, end_time, status, isRecurring, recurringType, recurringEndDate, master_id, type').eq('arena_id', selectedArenaContext.id),
-        supabase.from('turmas').select('id, name, quadra_id, professor_id, start_time, daysOfWeek, student_ids').eq('arena_id', selectedArenaContext.id),
-        supabase.from('professores').select('id, name').eq('arena_id', selectedArenaContext.id),
-        supabase.from('gamification_settings').select('is_enabled').eq('arena_id', selectedArenaContext.id).single(),
-      ]);
+      const [quadrasRes, clientReservasRes, allReservasRes, turmasRes, profsRes, gamificationSettingsRes] = await supabaseWithRetry(() =>
+        Promise.all([
+          supabase.from('quadras').select('*, pricing_rules(*)').eq('arena_id', selectedArenaContext.id),
+          supabase.from('reservas').select('id, quadra_id, date, start_time, end_time, status, total_price, payment_status, credit_used, rented_items, clientName, clientPhone, sport_type, created_at, created_by_name').eq('profile_id', profile.id).eq('arena_id', selectedArenaContext.id),
+          supabase.from('reservas').select('id, quadra_id, date, start_time, end_time, status, isRecurring, recurringType, recurringEndDate, master_id, type').eq('arena_id', selectedArenaContext.id),
+          supabase.from('turmas').select('id, name, quadra_id, professor_id, start_time, daysOfWeek, student_ids').eq('arena_id', selectedArenaContext.id),
+          supabase.from('professores').select('id, name').eq('arena_id', selectedArenaContext.id),
+          supabase.from('gamification_settings').select('is_enabled').eq('arena_id', selectedArenaContext.id).single(),
+        ])
+      );
 
       if (quadrasRes.error) throw quadrasRes.error;
       if (clientReservasRes.error) throw clientReservasRes.error;
@@ -91,10 +93,12 @@ const ClientDashboard: React.FC = () => {
       setGamificationEnabled(gamificationSettingsRes.data?.is_enabled || false);
 
       if (alunoProfileForSelectedArena?.id) {
-        const [creditRes, gamificationHistoryRes] = await Promise.all([
-            supabase.from('credit_transactions').select('id, amount, type, description, created_at').eq('aluno_id', alunoProfileForSelectedArena.id).eq('arena_id', selectedArenaContext.id).order('created_at', { ascending: false }),
-            supabase.from('gamification_point_transactions').select('*').eq('aluno_id', alunoProfileForSelectedArena.id).order('created_at', { ascending: false })
-        ]);
+        const [creditRes, gamificationHistoryRes] = await supabaseWithRetry(() =>
+            Promise.all([
+                supabase.from('credit_transactions').select('id, amount, type, description, created_at').eq('aluno_id', alunoProfileForSelectedArena.id).eq('arena_id', selectedArenaContext.id).order('created_at', { ascending: false }),
+                supabase.from('gamification_point_transactions').select('*').eq('aluno_id', alunoProfileForSelectedArena.id).order('created_at', { ascending: false })
+            ])
+        );
         
         if (creditRes.error) throw creditRes.error;
         if (gamificationHistoryRes.error) throw gamificationHistoryRes.error;
@@ -103,12 +107,14 @@ const ClientDashboard: React.FC = () => {
         setGamificationHistory(gamificationHistoryRes.data || []);
 
         if (gamificationSettingsRes.data?.is_enabled) {
-          const [levelsRes, rewardsRes, achievementsRes, unlockedRes] = await Promise.all([
-            supabase.from('gamification_levels').select('*').eq('arena_id', selectedArenaContext.id).order('level_rank', { ascending: true }),
-            supabase.from('gamification_rewards').select('*').eq('arena_id', selectedArenaContext.id).eq('is_active', true),
-            supabase.from('gamification_achievements').select('*').eq('arena_id', selectedArenaContext.id),
-            supabase.from('aluno_achievements').select('*').eq('aluno_id', alunoProfileForSelectedArena.id),
-          ]);
+          const [levelsRes, rewardsRes, achievementsRes, unlockedRes] = await supabaseWithRetry(() =>
+            Promise.all([
+                supabase.from('gamification_levels').select('*').eq('arena_id', selectedArenaContext.id).order('points_required', { ascending: false }),
+                supabase.from('gamification_rewards').select('*').eq('arena_id', selectedArenaContext.id).eq('is_active', true),
+                supabase.from('gamification_achievements').select('*').eq('arena_id', selectedArenaContext.id),
+                supabase.from('aluno_achievements').select('*').eq('aluno_id', alunoProfileForSelectedArena.id),
+            ])
+          );
           if (levelsRes.error) throw levelsRes.error;
           if (rewardsRes.error) throw rewardsRes.error;
           if (achievementsRes.error) throw achievementsRes.error;

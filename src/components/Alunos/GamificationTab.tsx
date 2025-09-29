@@ -20,38 +20,28 @@ const GamificationTab: React.FC<GamificationTabProps> = ({ aluno, onDataChange }
   const [pointsToAdd, setPointsToAdd] = useState<number | string>('');
   const [adjustmentReason, setAdjustmentReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [totalPoints, setTotalPoints] = useState(0);
+  const [totalPoints, setTotalPoints] = useState(aluno.gamification_points || 0);
   const [currentLevel, setCurrentLevel] = useState<GamificationLevel | null>(null);
 
   const loadGamificationData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [historyRes, achievementsRes, levelsRes] = await Promise.all([
-        supabase
-          .from('gamification_point_transactions')
-          .select('*')
-          .eq('aluno_id', aluno.id)
-          .order('created_at', { ascending: false }),
-        supabase
-          .from('aluno_achievements')
-          .select('*, gamification_achievements(*)')
-          .eq('aluno_id', aluno.id),
-        supabase
-          .from('gamification_levels')
-          .select('*')
-          .eq('arena_id', aluno.arena_id)
-          .order('points_required', { ascending: false })
+      const [historyRes, achievementsRes, levelsRes, alunoRes] = await Promise.all([
+        supabase.from('gamification_point_transactions').select('*').eq('aluno_id', aluno.id).order('created_at', { ascending: false }),
+        supabase.from('aluno_achievements').select('*, gamification_achievements(*)').eq('aluno_id', aluno.id),
+        supabase.from('gamification_levels').select('*').eq('arena_id', aluno.arena_id).order('points_required', { ascending: false }),
+        supabase.from('alunos').select('gamification_points').eq('id', aluno.id).single()
       ]);
 
       if (historyRes.error) throw historyRes.error;
       if (achievementsRes.error) throw achievementsRes.error;
       if (levelsRes.error) throw levelsRes.error;
+      if (alunoRes.error) throw alunoRes.error;
       
-      const transactions = historyRes.data || [];
-      const pointsSum = transactions.reduce((acc, tx) => acc + tx.points, 0);
-      
-      setHistory(transactions);
+      setHistory(historyRes.data || []);
       setUnlockedAchievements(achievementsRes.data || []);
+      
+      const pointsSum = alunoRes.data?.gamification_points || 0;
       setTotalPoints(pointsSum);
 
       const level = levelsRes.data?.find(l => pointsSum >= l.points_required) || null;

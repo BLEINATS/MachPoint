@@ -2,7 +2,7 @@ import React from 'react';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { Notificacao } from '../../types';
-import { Bell, Check, X, Info, User, DollarSign, Calendar } from 'lucide-react';
+import { Bell, Check, X, Info, User, DollarSign, Calendar, Gift, Trophy } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import Button from '../Forms/Button';
@@ -25,6 +25,10 @@ const getNotificationIcon = (type: string) => {
       return <DollarSign className="h-5 w-5 text-green-500" />;
     case 'novo_cliente':
       return <User className="h-5 w-5 text-purple-500" />;
+    case 'gamification_points':
+      return <Gift className="h-5 w-5 text-yellow-500" />;
+    case 'gamification_reward':
+      return <Trophy className="h-5 w-5 text-orange-500" />;
     default:
       return <Info className="h-5 w-5 text-gray-500" />;
   }
