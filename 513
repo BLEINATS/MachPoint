@@ -1,0 +1,80 @@
+/*
+  # [BUGFIX] Corrige erro de digitação no gatilho de gamificação
+  [This migration fixes a typo in a database function that was preventing reservations from being saved. The function was trying to access a non-existent field `points_per_booking` instead of the correct `points_per_reservation` in the `gamification_settings` table.]
+
+  ## Query Description: [This operation safely drops the existing trigger, replaces the faulty function with a corrected version, and then recreates the trigger. This resolves the "column does not exist" error that occurs when creating a new reservation.]
+  
+  ## Metadata:
+  - Schema-Category: "Structural"
+  - Impact-Level: "Low"
+  - Requires-Backup: false
+  - Reversible: true
+  
+  ## Structure Details:
+  - Drops and recreates trigger `on_reservation_completion_trigger` on table `reservas`.
+  - Replaces function `handle_reservation_completion()`.
+  
+  ## Security Implications:
+  - RLS Status: Unchanged
+  - Policy Changes: No
+  - Auth Requirements: None
+  
+  ## Performance Impact:
+  - Indexes: Unchanged
+  - Triggers: Recreated
+  - Estimated Impact: Negligible. The trigger execution will now succeed instead of failing.
+*/
+
+-- Drop the existing trigger to allow function replacement
+DROP TRIGGER IF EXISTS on_reservation_completion_trigger ON public.reservas;
+
+-- Recreate the function with the correct column name
+CREATE OR REPLACE FUNCTION public.handle_reservation_completion()
+RETURNS TRIGGER AS $$
+DECLARE
+  settings public.gamification_settings;
+  aluno_profile public.alunos;
+  points_to_add INT;
+BEGIN
+  -- Only run for confirmed or realized reservations
+  IF NEW.status = 'confirmada' OR NEW.status = 'realizada' THEN
+    -- Get the gamification settings for the arena
+    SELECT * INTO settings FROM public.gamification_settings WHERE arena_id = NEW.arena_id LIMIT 1;
+
+    -- If gamification is not enabled, exit
+    IF settings IS NULL OR NOT settings.is_enabled THEN
+      RETURN NEW;
+    END IF;
+
+    -- Find the student profile associated with the reservation
+    SELECT * INTO aluno_profile FROM public.alunos WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id LIMIT 1;
+
+    -- If no student profile is found, exit
+    IF aluno_profile IS NULL THEN
+      RETURN NEW;
+    END IF;
+
+    -- Calculate points to add
+    -- THIS IS THE FIX: points_per_reservation instead of points_per_booking
+    points_to_add := settings.points_per_reservation + (floor(NEW.total_price) * settings.points_per_real);
+
+    -- If there are points to add, call the RPC function
+    IF points_to_add > 0 THEN
+      PERFORM public.add_gamification_points(
+        p_aluno_id := aluno_profile.id,
+        p_points_to_add := points_to_add,
+        p_description := 'Reserva #' || substr(NEW.id::text, 1, 8)
+      );
+    END IF;
+
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Recreate the trigger to call the corrected function
+CREATE TRIGGER on_reservation_completion_trigger
+AFTER INSERT OR UPDATE OF status ON public.reservas
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_reservation_completion();

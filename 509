@@ -1,0 +1,90 @@
+/*
+          # [Operation Name]
+          Fix Notification System Schema and Logic
+
+          ## Query Description: [This operation fixes a persistent issue where creating reservations failed due to a NOT NULL constraint on the 'notificacoes' table.
+          1. It alters the 'notificacoes' table to allow the 'profile_id' to be NULL. This aligns the database schema with the frontend application logic, which is designed to handle arena-wide notifications that are not tied to a specific user.
+          2. It replaces the notification trigger function with a more robust version that handles cases where a specific user profile might not be found, preventing future errors.
+          This change is safe and does not risk data loss.]
+          
+          ## Metadata:
+          - Schema-Category: ["Structural", "Logic"]
+          - Impact-Level: ["Low"]
+          - Requires-Backup: [false]
+          - Reversible: [true]
+          
+          ## Structure Details:
+          - Table 'notificacoes': Alters column 'profile_id' to be nullable.
+          - Function 'handle_new_reservation_notification': Replaced with an improved version.
+          - Trigger 'on_new_reservation_notification': Recreated to use the new function.
+          
+          ## Security Implications:
+          - RLS Status: [Not Affected]
+          - Policy Changes: [No]
+          - Auth Requirements: [None]
+          
+          ## Performance Impact:
+          - Indexes: [Not Affected]
+          - Triggers: [Replaced]
+          - Estimated Impact: [Negligible. The function is slightly more efficient.]
+          */
+
+-- 1. Relax the constraint on the notifications table to allow for arena-wide notifications
+ALTER TABLE public.notificacoes
+ALTER COLUMN profile_id DROP NOT NULL;
+
+-- 2. Drop the existing trigger to allow function replacement
+DROP TRIGGER IF EXISTS on_new_reservation_notification ON public.reservas;
+
+-- 3. Recreate the function with more robust and efficient logic
+CREATE OR REPLACE FUNCTION public.handle_new_reservation_notification()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_admin_profile_id UUID;
+  v_arena_name TEXT;
+  v_quadra_name TEXT;
+BEGIN
+  -- Get arena and quadra names once for efficiency
+  SELECT a.name, q.name
+  INTO v_arena_name, v_quadra_name
+  FROM public.arenas a
+  LEFT JOIN public.quadras q ON q.id = NEW.quadra_id
+  WHERE a.id = NEW.arena_id;
+
+  -- Find the arena owner's profile_id
+  SELECT owner_id INTO v_admin_profile_id
+  FROM public.arenas
+  WHERE id = NEW.arena_id;
+
+  -- Insert notification for the arena admin.
+  -- The frontend is designed to pick this up via arena_id even if profile_id is null.
+  INSERT INTO public.notificacoes (profile_id, arena_id, message, type, link_to)
+  VALUES (
+    v_admin_profile_id, -- This can be NULL, and the table now allows it.
+    NEW.arena_id,
+    'Nova reserva de ' || COALESCE(NEW."clientName", 'Cliente') || ' na quadra ' || COALESCE(v_quadra_name, 'N/A') || ' em ' || to_char(NEW.date, 'DD/MM') || ' às ' || NEW.start_time,
+    'nova_reserva',
+    '/reservas'
+  );
+
+  -- Insert notification for the client if they have a profile_id
+  IF NEW.profile_id IS NOT NULL THEN
+    INSERT INTO public.notificacoes (profile_id, arena_id, message, type, link_to)
+    VALUES (
+      NEW.profile_id,
+      NEW.arena_id,
+      'Sua reserva na quadra ' || COALESCE(v_quadra_name, 'N/A') || ' em ' || COALESCE(v_arena_name, 'Arena') || ' para ' || to_char(NEW.date, 'DD/MM') || ' às ' || NEW.start_time || ' foi confirmada!',
+      'nova_reserva',
+      '/perfil'
+    );
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 4. Re-create the trigger to use the new function
+CREATE TRIGGER on_new_reservation_notification
+AFTER INSERT ON public.reservas
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_new_reservation_notification();

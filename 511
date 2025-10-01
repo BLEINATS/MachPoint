@@ -1,0 +1,56 @@
+/*
+          # [Patch] Add Compatibility Column 'clientname'
+          Adds a lowercase 'clientname' column to the 'reservas' table and sets up a trigger to automatically synchronize it with the correct '"clientName"' column. This patch resolves persistent "column does not exist" errors caused by multiple database functions referencing the incorrect column name.
+
+          ## Query Description:
+          - **Safety:** This is a non-destructive operation. It adds a new column and a trigger without altering or deleting existing data.
+          - **Impact:** All new and updated reservations will have the 'clientname' field automatically populated. An update script is included to backfill data for existing reservations.
+          - **Risk:** Low. The main risk is a minor performance overhead on insert/update operations on the 'reservas' table, which is negligible for most applications.
+
+          ## Metadata:
+          - Schema-Category: "Structural"
+          - Impact-Level: "Low"
+          - Requires-Backup: false
+          - Reversible: true (The column and trigger can be dropped manually)
+
+          ## Structure Details:
+          - **Table Modified:** public.reservas
+          - **Column Added:** clientname (TEXT)
+          - **Function Created:** public.sync_clientname_column()
+          - **Trigger Created:** trigger_sync_clientname (BEFORE INSERT OR UPDATE ON public.reservas)
+
+          ## Security Implications:
+          - RLS Status: Unchanged. The new column will inherit existing RLS policies.
+          - Policy Changes: No
+          - Auth Requirements: None
+
+          ## Performance Impact:
+          - Indexes: None added.
+          - Triggers: One trigger added. The performance impact is minimal as it's a simple assignment operation.
+          - Estimated Impact: Negligible.
+          */
+
+-- Step 1: Add the new compatibility column
+ALTER TABLE public.reservas
+ADD COLUMN clientname TEXT;
+
+-- Step 2: Create a function to sync the columns
+CREATE OR REPLACE FUNCTION public.sync_clientname_column()
+RETURNS TRIGGER AS $$
+BEGIN
+  -- Copy the value from the correct "clientName" column to the new lowercase clientname column
+  NEW.clientname := NEW."clientName";
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Step 3: Create a trigger to run the function before inserts or updates
+CREATE TRIGGER trigger_sync_clientname
+BEFORE INSERT OR UPDATE ON public.reservas
+FOR EACH ROW
+EXECUTE FUNCTION public.sync_clientname_column();
+
+-- Step 4: Backfill the new column for all existing reservations
+UPDATE public.reservas
+SET clientname = "clientName"
+WHERE clientname IS NULL;

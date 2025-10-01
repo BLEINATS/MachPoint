@@ -1,0 +1,66 @@
+/*
+  # [Fix] Corrige o `profile_id` nulo em notificações de reserva
+
+  [Description]
+  Esta migração corrige um erro crítico que impede a criação de reservas ao tentar inserir uma notificação sem `profile_id`. A função `handle_new_reservation_notification` foi atualizada para buscar o `owner_id` da arena e usá-lo como `profile_id` para notificações destinadas ao administrador.
+
+  ## Query Description: [Esta operação é segura e corrige um erro crítico. Ela remove e recria um gatilho e sua função associada para garantir que o sistema de notificação funcione corretamente, sem perda de dados.]
+
+  ## Metadata:
+  - Schema-Category: ["Structural"]
+  - Impact-Level: ["High"]
+  - Requires-Backup: [false]
+  - Reversible: [true]
+
+  ## Structure Details:
+  - Affects: trigger `on_new_reservation_notification` on table `reservas`
+  - Affects: function `handle_new_reservation_notification`
+
+  ## Security Implications:
+  - RLS Status: [No Change]
+  - Policy Changes: [No]
+  - Auth Requirements: [Admin]
+
+  ## Performance Impact:
+  - Indexes: [No Change]
+  - Triggers: [Modified]
+  - Estimated Impact: [Melhora ligeiramente a performance ao reduzir o número de `SELECT`s dentro da função.]
+*/
+
+-- Remove o gatilho existente para permitir a alteração da função
+DROP TRIGGER IF EXISTS on_new_reservation_notification ON public.reservas;
+
+-- Recria a função com a lógica corrigida para buscar o dono da arena
+CREATE OR REPLACE FUNCTION public.handle_new_reservation_notification()
+RETURNS TRIGGER AS $$
+DECLARE
+  v_quadra_name TEXT;
+  v_arena_owner_id UUID;
+BEGIN
+  -- Busca o nome da quadra e o ID do dono da arena de uma só vez
+  SELECT q.name, a.owner_id INTO v_quadra_name, v_arena_owner_id
+  FROM public.quadras q
+  JOIN public.arenas a ON q.arena_id = a.id
+  WHERE q.id = NEW.quadra_id;
+
+  -- Insere uma notificação para o administrador da arena, se um dono for encontrado
+  IF v_arena_owner_id IS NOT NULL THEN
+    INSERT INTO public.notificacoes (profile_id, arena_id, message, type, link_to)
+    VALUES (v_arena_owner_id, NEW.arena_id, 'Nova reserva de ' || NEW."clientName" || ' na quadra ' || v_quadra_name, 'nova_reserva', '/reservas');
+  END IF;
+
+  -- Se a reserva tem um profile_id associado (cliente logado), envia notificação para ele
+  IF NEW.profile_id IS NOT NULL THEN
+    INSERT INTO public.notificacoes (profile_id, arena_id, message, type, link_to)
+    VALUES (NEW.profile_id, NEW.arena_id, 'Sua reserva na quadra ' || v_quadra_name || ' foi confirmada!', 'nova_reserva', '/perfil');
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Recria o gatilho para usar a função corrigida
+CREATE TRIGGER on_new_reservation_notification
+AFTER INSERT ON public.reservas
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_new_reservation_notification();

@@ -1,0 +1,56 @@
+/*
+  # [Fix] Corrige o gatilho de notificação de reserva
+  [Esta migração corrige um bug na função `handle_new_notification` que estava causando um erro ao criar novas reservas. A função estava referenciando incorretamente um campo `is_active` nas configurações de gamificação, que foi corrigido para `is_enabled`.]
+
+  ## Query Description: [Esta operação substitui uma função de banco de dados existente. Ela corrige uma referência de nome de campo de `is_active` para `is_enabled` ao verificar as configurações de gamificação. Esta alteração é segura e não afeta os dados existentes, mas é crucial para que o processo de criação de reservas funcione corretamente. Nenhum backup é necessário e a alteração é reversível implantando a versão anterior da função.]
+  
+  ## Metadata:
+  - Schema-Category: ["Structural"]
+  - Impact-Level: ["Low"]
+  - Requires-Backup: [false]
+  - Reversible: [true]
+  
+  ## Structure Details:
+  - A função `public.handle_new_notification` está sendo substituída.
+  
+  ## Security Implications:
+  - RLS Status: [Sem alteração]
+  - Policy Changes: [Não]
+  - Auth Requirements: [A função é executada como `SECURITY DEFINER`, o que é padrão para gatilhos.]
+  
+  ## Performance Impact:
+  - Indexes: [Sem alteração]
+  - Triggers: [O comportamento do gatilho subjacente é corrigido, mas o gatilho em si não é modificado.]
+  - Estimated Impact: [Impacto de desempenho insignificante. Corrige um erro de bloqueio.]
+*/
+
+CREATE OR REPLACE FUNCTION public.handle_new_notification()
+RETURNS TRIGGER AS $$
+DECLARE
+  settings RECORD;
+  message_text TEXT;
+BEGIN
+  -- Busca as configurações de gamificação para a arena
+  SELECT * INTO settings FROM public.gamification_settings WHERE arena_id = NEW.arena_id;
+
+  -- Verifica se a gamificação está habilitada para esta arena
+  -- ESTA É A CORREÇÃO: alterado settings.is_active para settings.is_enabled
+  IF settings.is_enabled THEN
+    message_text := 'Nova reserva de ' || COALESCE(NEW.clientName, 'um cliente') || ' para ' || to_char(NEW.date, 'DD/MM') || '. Pontos de gamificação serão concedidos após a conclusão.';
+  ELSE
+    message_text := 'Nova reserva de ' || COALESCE(NEW.clientName, 'um cliente') || ' para ' || to_char(NEW.date, 'DD/MM') || ' às ' || NEW.start_time || '.';
+  END IF;
+
+  -- Insere notificação para os administradores da arena
+  INSERT INTO public.notificacoes (arena_id, message, type, link_to)
+  VALUES (NEW.arena_id, message_text, 'nova_reserva', '/reservas?date=' || to_char(NEW.date, 'YYYY-MM-DD'));
+
+  -- Insere notificação para o cliente se ele tiver um perfil
+  IF NEW.profile_id IS NOT NULL THEN
+    INSERT INTO public.notificacoes (profile_id, arena_id, message, type, link_to)
+    VALUES (NEW.profile_id, NEW.arena_id, 'Sua reserva para ' || to_char(NEW.date, 'DD/MM') || ' às ' || NEW.start_time || ' foi confirmada!', 'nova_reserva', '/perfil');
+  END IF;
+
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;

@@ -1,0 +1,199 @@
+import React, { useState, useEffect, useCallback } from 'react';
+import { motion } from 'framer-motion';
+import { Link } from 'react-router-dom';
+import { ArrowLeft, Plus, PartyPopper, Loader2 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import Layout from '../components/Layout/Layout';
+import Button from '../components/Forms/Button';
+import { Evento, Quadra, Reserva, Aluno } from '../types';
+import EventoModal from '../components/Eventos/EventoModal';
+import KanbanBoard from '../components/Eventos/KanbanBoard';
+import { eachDayOfInterval, format } from 'date-fns';
+import { parseDateStringAsLocal } from '../utils/dateUtils';
+import { supabase } from '../lib/supabaseClient';
+import { useToast } from '../context/ToastContext';
+import { v4 as uuidv4 } from 'uuid';
+
+const defaultChecklistItems = [
+  'Confirmar pagamento do sinal',
+  'Enviar contrato para o cliente',
+  'Definir layout do evento (mesas, cadeiras, etc.)',
+  'Contratar buffet (se aplicável)',
+  'Contratar decoração (se aplicável)',
+  'Verificar lista de convidados',
+  'Agendar equipe de limpeza pós-evento',
+  'Confirmar pagamento final antes do evento',
+];
+
+const Eventos: React.FC = () => {
+  const { arena } = useAuth();
+  const { addToast } = useToast();
+  const [eventos, setEventos] = useState<Evento[]>([]);
+  const [quadras, setQuadras] = useState<Quadra[]>([]);
+  const [reservas, setReservas] = useState<Reserva[]>([]);
+  const [alunos, setAlunos] = useState<Aluno[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingEvento, setEditingEvento] = useState<Evento | null>(null);
+
+  const loadData = useCallback(async () => {
+    if (arena) {
+      setIsLoading(true);
+      try {
+        const [eventosRes, quadrasRes, reservasRes, alunosRes] = await Promise.all([
+          supabase.from('eventos').select('*').eq('arena_id', arena.id),
+          supabase.from('quadras').select('*, pricing_rules(*)').eq('arena_id', arena.id),
+          supabase.from('reservas').select('*').eq('arena_id', arena.id),
+          supabase.from('alunos').select('*').eq('arena_id', arena.id),
+        ]);
+        if (eventosRes.error) throw eventosRes.error;
+        if (quadrasRes.error) throw quadrasRes.error;
+        if (reservasRes.error) throw reservasRes.error;
+        if (alunosRes.error) throw alunosRes.error;
+
+        setEventos(eventosRes.data || []);
+        setQuadras(quadrasRes.data || []);
+        setReservas(reservasRes.data || []);
+        setAlunos(alunosRes.data || []);
+      } catch (error: any) {
+        addToast({ message: `Erro ao carregar dados: ${error.message}`, type: 'error' });
+      } finally {
+        setIsLoading(false);
+      }
+    }
+  }, [arena, addToast]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const handleSaveEvento = async (eventoData: Evento) => {
+    if (!arena) return;
+
+    const isEditing = !!eventoData.id;
+    const eventoId = eventoData.id || uuidv4();
+
+    const dataToSave: Evento = { 
+      ...eventoData,
+      id: eventoId,
+      arena_id: arena.id,
+      checklist: (eventoData.checklist && eventoData.checklist.length > 0)
+        ? eventoData.checklist
+        : defaultChecklistItems.map(text => ({ id: uuidv4(), text, completed: false }))
+    };
+
+    try {
+        const { data: savedEvento, error: upsertError } = await supabase
+        .from('eventos')
+        .upsert(dataToSave)
+        .select()
+        .single();
+
+      if (upsertError) throw upsertError;
+      if (!savedEvento) throw new Error("Falha ao salvar o evento.");
+
+      // --- SYNC LOGIC ---
+      const { error: deleteError } = await supabase.from('reservas').delete().eq('evento_id', savedEvento.id);
+      if (deleteError) console.error("Erro ao deletar reservas antigas do evento:", deleteError);
+
+      if (
+        (savedEvento.status === 'confirmado' || savedEvento.status === 'realizado') &&
+        savedEvento.include_court_reservation &&
+        savedEvento.quadras_ids && savedEvento.quadras_ids.length > 0
+      ) {
+        const eventBlockReservations: Omit<Reserva, 'id' | 'created_at'>[] = [];
+        const eventDays = eachDayOfInterval({
+          start: parseDateStringAsLocal(savedEvento.startDate),
+          end: parseDateStringAsLocal(savedEvento.endDate),
+        });
+
+        for (const day of eventDays) {
+          for (const quadraId of savedEvento.quadras_ids) {
+            eventBlockReservations.push({
+              arena_id: arena.id,
+              quadra_id: quadraId,
+              evento_id: savedEvento.id,
+              date: format(day, 'yyyy-MM-dd'),
+              start_time: savedEvento.court_start_time || savedEvento.startTime,
+              end_time: savedEvento.court_end_time || savedEvento.endTime,
+              type: 'evento',
+              status: 'confirmada',
+              clientName: `Evento: ${savedEvento.name}`,
+              isRecurring: false,
+              profile_id: null,
+            });
+          }
+        }
+        
+        if (eventBlockReservations.length > 0) {
+          const { error: insertError } = await supabase.from('reservas').insert(eventBlockReservations);
+          if (insertError) console.error("Erro ao criar reservas para o evento:", insertError);
+        }
+      }
+      
+      addToast({ message: `Evento ${isEditing ? 'atualizado' : 'criado'} com sucesso!`, type: 'success' });
+      await loadData();
+      handleCloseModal();
+
+    } catch (error: any) {
+        addToast({ message: `Erro ao salvar evento: ${error.message}`, type: 'error' });
+    }
+  };
+  
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setEditingEvento(null);
+  }
+
+  return (
+    <Layout>
+      <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="mb-8">
+          <Link to="/dashboard" className="inline-flex items-center text-sm font-medium text-brand-gray-600 dark:text-brand-gray-400 hover:text-brand-blue-500 dark:hover:text-brand-blue-400 transition-colors mb-4">
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Voltar para o Dashboard
+          </Link>
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+              <div>
+                  <h1 className="text-3xl font-bold text-brand-gray-900 dark:text-white">Gestão de Eventos Privados</h1>
+                  <p className="text-brand-gray-600 dark:text-brand-gray-400 mt-2">Gerencie orçamentos e locações de espaço para festas, aniversários e mais.</p>
+              </div>
+              <Button onClick={() => setIsModalOpen(true)}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Novo Orçamento
+              </Button>
+          </div>
+        </motion.div>
+
+        {isLoading ? (
+          <div className="flex justify-center items-center h-64"><Loader2 className="w-8 h-8 text-brand-blue-500 animate-spin" /></div>
+        ) : eventos.length > 0 ? (
+            <KanbanBoard eventos={eventos} setEventos={setEventos} />
+        ) : (
+            <div className="text-center py-16">
+            <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="max-w-md mx-auto">
+                <div className="flex justify-center items-center w-16 h-16 bg-brand-gray-100 dark:bg-brand-gray-800 rounded-full mx-auto mb-6">
+                <PartyPopper className="h-8 w-8 text-brand-gray-400" />
+                </div>
+                <h3 className="text-xl font-bold text-brand-gray-900 dark:text-white mb-2">Nenhum evento encontrado</h3>
+                <p className="text-brand-gray-600 dark:text-brand-gray-400">Clique em 'Novo Orçamento' para criar sua primeira proposta de evento.</p>
+            </motion.div>
+            </div>
+        )}
+      </div>
+
+      <EventoModal 
+        isOpen={isModalOpen} 
+        onClose={handleCloseModal} 
+        onSave={handleSaveEvento} 
+        initialData={editingEvento}
+        quadras={quadras}
+        reservas={reservas}
+        alunos={alunos}
+      />
+    </Layout>
+  );
+};
+
+export default Eventos;

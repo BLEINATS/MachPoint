@@ -1,0 +1,67 @@
+/*
+          # [Critical] Fix Function Signature Conflict
+          [This migration resolves a function signature conflict for `check_duplicate_reservation`. The previous update attempted to rename a function parameter, which requires the function to be dropped and recreated. This script performs that action safely, ensuring the function is updated with the correct logic for checking reservation overlaps without causing database errors.]
+
+          ## Query Description: [This operation first removes the old version of the `check_duplicate_reservation` function that is causing the conflict. It then recreates the function with the correct parameter names and improved logic to prevent false overlap detections for adjacent bookings. This is a safe, structural change that does not affect any reservation data.]
+          
+          ## Metadata:
+          - Schema-Category: ["Structural"]
+          - Impact-Level: ["Low"]
+          - Requires-Backup: [false]
+          - Reversible: [false]
+          
+          ## Structure Details:
+          - Drops function: `check_duplicate_reservation(uuid, uuid, date, time, time, uuid)`
+          - Creates function: `check_duplicate_reservation(uuid, uuid, date, time, time, uuid)` with corrected logic and parameter names.
+          
+          ## Security Implications:
+          - RLS Status: [N/A]
+          - Policy Changes: [No]
+          - Auth Requirements: [N/A]
+          
+          ## Performance Impact:
+          - Indexes: [N/A]
+          - Triggers: [N/A]
+          - Estimated Impact: [None. The function is only called during reservation creation/update.]
+          */
+
+-- Drop the function with the conflicting signature.
+-- The signature is taken directly from the error message to ensure the correct function is targeted.
+DROP FUNCTION IF EXISTS public.check_duplicate_reservation(uuid, uuid, date, time without time zone, time without time zone, uuid);
+
+-- Recreate the function with a consistent signature and corrected logic.
+-- Note: We are keeping the 6-parameter signature to avoid breaking dependencies, even if p_arena_id is not used in this specific function's logic.
+CREATE OR REPLACE FUNCTION public.check_duplicate_reservation(
+    p_quadra_id uuid,
+    p_arena_id uuid, -- This parameter is kept for signature compatibility.
+    p_date date,
+    p_start_time time,
+    p_end_time time,
+    p_reserva_id_to_exclude uuid DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_conflict_exists boolean;
+BEGIN
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.reservas r
+        WHERE r.quadra_id = p_quadra_id
+          AND r.date = p_date
+          AND r.status <> 'cancelada'
+          AND (p_reserva_id_to_exclude IS NULL OR r.id <> p_reserva_id_to_exclude)
+          -- Corrected logic to check for overlaps without flagging adjacent slots
+          AND (
+              p_start_time < r.end_time AND p_end_time > r.start_time
+          )
+    ) INTO v_conflict_exists;
+
+    IF v_conflict_exists THEN
+        RAISE EXCEPTION 'Conflito de horário: Já existe uma reserva para esta quadra neste horário.';
+    END IF;
+
+    RETURN FALSE;
+END;
+$$;

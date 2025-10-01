@@ -1,0 +1,50 @@
+import React from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import ProtectedRoute from './components/Auth/ProtectedRoute';
+import Home from './pages/Home';
+import ArenaSignup from './pages/ArenaSignup';
+import Dashboard from './pages/Dashboard';
+import ArenaPublic from './pages/ArenaPublic';
+import Settings from './pages/Settings';
+import Reservations from './pages/Reservations';
+import Quadras from './pages/Quadras';
+import ClientProfile from './pages/ClientProfile';
+import AuthPortal from './pages/AuthPortal';
+import Arenas from './pages/Arenas';
+import Alunos from './pages/Alunos';
+import Torneios from './pages/Torneios';
+import TorneioDetail from './pages/TorneioDetail';
+import Eventos from './pages/Eventos';
+import EventoDetail from './pages/EventoDetail';
+import Gamification from './pages/Gamification';
+
+function App() {
+  return (
+    <Routes>
+      {/* Public Routes */}
+      <Route path="/" element={<Home />} />
+      <Route path="/auth" element={<AuthPortal />} />
+      <Route path="/cadastro-arena" element={<ArenaSignup />} />
+      <Route path="/arenas" element={<Arenas />} />
+      <Route path="/:slug" element={<ArenaPublic />} />
+
+      {/* Protected Routes */}
+      <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+      <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+      <Route path="/reservas" element={<ProtectedRoute><Reservations /></ProtectedRoute>} />
+      <Route path="/quadras" element={<ProtectedRoute><Quadras /></ProtectedRoute>} />
+      <Route path="/alunos" element={<ProtectedRoute><Alunos /></ProtectedRoute>} />
+      <Route path="/torneios" element={<ProtectedRoute><Torneios /></ProtectedRoute>} />
+      <Route path="/torneios/:id" element={<ProtectedRoute><TorneioDetail /></ProtectedRoute>} />
+      <Route path="/eventos" element={<ProtectedRoute><Eventos /></ProtectedRoute>} />
+      <Route path="/eventos/:id" element={<ProtectedRoute><EventoDetail /></ProtectedRoute>} />
+      <Route path="/gamification" element={<ProtectedRoute><Gamification /></ProtectedRoute>} />
+      <Route path="/perfil" element={<ProtectedRoute><ClientProfile /></ProtectedRoute>} />
+      
+      {/* Redirect any other path */}
+      <Route path="*" element={<Navigate to="/" />} />
+    </Routes>
+  );
+}
+
+export default App;

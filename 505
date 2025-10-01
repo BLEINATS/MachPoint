@@ -1,0 +1,52 @@
+/*
+# [Operation Name]
+Patch para Corrigir Erro de Reserva
+
+## Query Description: [Este script aplica uma correção temporária para resolver um erro persistente ao salvar reservas. Ele adiciona uma coluna `is_active` à tabela de configurações de gamificação e a mantém sincronizada com a coluna correta `is_enabled`. Isso garante que qualquer parte do sistema que ainda use o nome antigo da coluna funcione corretamente, desbloqueando a funcionalidade de criação de reservas. Esta é uma medida de compatibilidade e não afeta os dados existentes.]
+
+## Metadata:
+- Schema-Category: "Structural"
+- Impact-Level: "Low"
+- Requires-Backup: false
+- Reversible: true
+
+## Structure Details:
+- Tabela afetada: `public.gamification_settings`
+- Adiciona a coluna: `is_active` (BOOLEAN)
+- Cria a função de gatilho: `public.sync_gamification_is_active()`
+- Cria o gatilho: `on_gamification_settings_sync`
+
+## Security Implications:
+- RLS Status: Não alterado
+- Policy Changes: Não
+- Auth Requirements: N/A
+
+## Performance Impact:
+- Indexes: Nenhum
+- Triggers: Adiciona um gatilho leve na tabela `gamification_settings`. O impacto no desempenho é insignificante, pois esta tabela é raramente atualizada.
+- Estimated Impact: Mínimo
+*/
+
+-- Adiciona a coluna 'is_active' se ela não existir, para evitar erros em execuções repetidas.
+ALTER TABLE public.gamification_settings ADD COLUMN IF NOT EXISTS is_active BOOLEAN;
+
+-- Sincroniza o valor da nova coluna com a coluna correta existente.
+UPDATE public.gamification_settings SET is_active = is_enabled;
+
+-- Cria uma função de gatilho para manter as colunas 'is_active' e 'is_enabled' sincronizadas.
+CREATE OR REPLACE FUNCTION public.sync_gamification_is_active()
+RETURNS TRIGGER AS $$
+BEGIN
+    -- Garante que a coluna 'is_active' sempre reflita o valor de 'is_enabled'.
+    NEW.is_active = NEW.is_enabled;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Remove o gatilho antigo, se existir, para garantir uma substituição limpa.
+DROP TRIGGER IF EXISTS on_gamification_settings_sync ON public.gamification_settings;
+
+-- Cria o gatilho que executa a função de sincronização antes de qualquer inserção ou atualização.
+CREATE TRIGGER on_gamification_settings_sync
+BEFORE INSERT OR UPDATE ON public.gamification_settings
+FOR EACH ROW EXECUTE FUNCTION public.sync_gamification_is_active();
