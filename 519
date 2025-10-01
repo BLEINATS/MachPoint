@@ -8,8 +8,8 @@ async function cleanup() {
   try {
     const files = await fs.readdir(directory);
     
-    // Filtra arquivos que são apenas números, como '160', '161', '0', etc.
-    const filesToDelete = files.filter(file => /^\d+$/.test(file));
+    // Regex to match purely numeric files OR files ending with '-updated-files'
+    const filesToDelete = files.filter(file => /^\d+$|^\d+-updated-files$/.test(file));
 
     if (filesToDelete.length === 0) {
       console.log('Nenhum arquivo temporário para limpar.');
