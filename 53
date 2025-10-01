@@ -1,108 +1,102 @@
 import React from 'react';
-import { Evento, EventoStatus, EventoTipo } from '../../types';
-import { Calendar, Clock, Users, DollarSign, Trophy, CheckCircle, PlayCircle, Ban, LayoutGrid } from 'lucide-react';
-import { format } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
-import { parseDateStringAsLocal } from '../../utils/dateUtils';
+import { motion } from 'framer-motion';
+import { Evento, Participant } from '../../types';
+import Button from '../Forms/Button';
+import { Check, UserPlus, Send, BarChart3, Users, X } from 'lucide-react';
+import { generateBracket } from '../../utils/eventUtils';
 
-interface EventOverviewTabProps {
+interface ParticipantsTabProps {
   evento: Evento;
+  setEvento: React.Dispatch<React.SetStateAction<Evento | null>>;
 }
 
-const StatCard: React.FC<{ icon: React.ElementType, label: string, value: string | number, color: string }> = ({ icon: Icon, label, value, color }) => (
-  <div className="bg-white dark:bg-brand-gray-800 rounded-lg shadow-md p-6 border border-brand-gray-200 dark:border-brand-gray-700">
-    <div className="flex items-center">
-      <div className={`p-3 rounded-lg mr-4 ${color.replace('text-', 'bg-').replace('-500', '-100')} dark:${color.replace('text-', 'bg-').replace('-500', '-900/50')}`}>
-        <Icon className={`h-6 w-6 ${color}`} />
-      </div>
-      <div>
-        <p className="text-sm font-medium text-brand-gray-600 dark:text-brand-gray-400">{label}</p>
-        <p className="text-2xl font-bold text-brand-gray-900 dark:text-white">{value}</p>
-      </div>
-    </div>
-  </div>
-);
+const ParticipantsTab: React.FC<ParticipantsTabProps> = ({ evento, setEvento }) => {
+  const toggleCheckIn = (participantId: string) => {
+    setEvento(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        participants: prev.participants.map(p =>
+          p.id === participantId ? { ...p, checked_in: !p.checked_in } : p
+        ),
+      };
+    });
+  };
 
-const getStatusProps = (status: EventoStatus) => {
-  switch (status) {
-    case 'planejado': return { icon: Calendar, color: 'text-blue-500', label: 'Planejado' };
-    case 'inscricoes_abertas': return { icon: CheckCircle, color: 'text-green-500', label: 'Inscrições Abertas' };
-    case 'em_andamento': return { icon: PlayCircle, color: 'text-yellow-500', label: 'Em Andamento' };
-    case 'concluido': return { icon: Trophy, color: 'text-purple-500', label: 'Concluído' };
-    case 'cancelado': return { icon: Ban, color: 'text-red-500', label: 'Cancelado' };
-    default: return { icon: Calendar, color: 'text-gray-500', label: 'Desconhecido' };
-  }
-};
-
-const getTypeLabel = (type: EventoTipo): string => {
-    const labels: Record<EventoTipo, string> = {
-        torneio: "Torneio",
-        campeonato: "Campeonato",
-        clinica: "Clínica",
-        evento_especial: "Evento Especial",
-    };
-    return labels[type] || "Evento";
-};
-
-const EventOverviewTab: React.FC<EventOverviewTabProps> = ({ evento }) => {
-  const statusProps = getStatusProps(evento.status);
-  const startDate = parseDateStringAsLocal(evento.start_date);
-  const endDate = parseDateStringAsLocal(evento.end_date);
-  const dateString = isNaN(startDate.getTime()) ? "Data a definir" : 
-    format(startDate, 'dd/MM/yyyy') + (
-      !isNaN(endDate.getTime()) && startDate.getTime() !== endDate.getTime() 
-      ? ` a ${format(endDate, 'dd/MM/yyyy')}` 
-      : ''
-    );
+  const handleGenerateBracket = () => {
+    if (evento.participants.length < 2) {
+      alert("É necessário ter pelo menos 2 participantes para gerar as chaves.");
+      return;
+    }
+    const newMatches = generateBracket(evento.participants);
+    setEvento(prev => prev ? { ...prev, matches: newMatches } : null);
+    alert("Chaves geradas com sucesso! Verifique a aba 'Chaves'.");
+  };
 
   return (
-    <div className="space-y-8">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        <StatCard icon={statusProps.icon} label="Status" value={statusProps.label} color={statusProps.color} />
-        <StatCard icon={Users} label="Inscritos" value={`${evento.participants.length} / ${evento.max_participants}`} color="text-blue-500" />
-        <StatCard icon={DollarSign} label="Taxa" value={evento.registration_fee.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} color="text-green-500" />
-        <StatCard icon={Trophy} label="Tipo" value={getTypeLabel(evento.type)} color="text-purple-500" />
+    <div className="space-y-6">
+      <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+        <h3 className="text-xl font-semibold">Lista de Inscritos ({evento.participants.length})</h3>
+        <div className="flex gap-2">
+          <Button variant="outline"><Send className="h-4 w-4 mr-2" /> Comunicar</Button>
+          <Button><UserPlus className="h-4 w-4 mr-2" /> Adicionar Inscrito</Button>
+        </div>
       </div>
 
-      <div className="bg-white dark:bg-brand-gray-800 rounded-lg shadow-md p-6 border border-brand-gray-200 dark:border-brand-gray-700">
-        <h3 className="text-xl font-semibold mb-4">Detalhes do Evento</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 text-sm">
-            <div className="flex items-start">
-                <Calendar className="h-5 w-5 mr-3 mt-1 text-brand-gray-400" />
-                <div>
-                    <p className="font-medium text-brand-gray-600 dark:text-brand-gray-400">Data</p>
-                    <p className="font-semibold text-brand-gray-800 dark:text-brand-gray-200">{dateString}</p>
-                </div>
+      <div className="bg-white dark:bg-brand-gray-800 rounded-lg shadow-md border border-brand-gray-200 dark:border-brand-gray-700 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-brand-gray-200 dark:divide-brand-gray-700">
+            <thead className="bg-brand-gray-50 dark:bg-brand-gray-700/50">
+              <tr>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Nome</th>
+                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">E-mail</th>
+                <th scope="col" className="px-6 py-3 text-center text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase tracking-wider">Check-in</th>
+                <th scope="col" className="relative px-6 py-3"><span className="sr-only">Ações</span></th>
+              </tr>
+            </thead>
+            <tbody className="bg-white dark:bg-brand-gray-800 divide-y divide-brand-gray-200 dark:divide-brand-gray-700">
+              {evento.participants.map((participant, index) => (
+                <motion.tr 
+                  key={participant.id}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: index * 0.05 }}
+                  className="hover:bg-brand-gray-50 dark:hover:bg-brand-gray-700/50"
+                >
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-brand-gray-900 dark:text-white">{participant.name}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-brand-gray-500 dark:text-brand-gray-400">{participant.email}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-center">
+                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${participant.checked_in ? 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300' : 'bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300'}`}>
+                      {participant.checked_in ? <Check className="h-3 w-3 mr-1" /> : <X className="h-3 w-3 mr-1" />}
+                      {participant.checked_in ? 'Feito' : 'Pendente'}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <Button size="sm" variant={participant.checked_in ? 'outline' : 'primary'} onClick={() => toggleCheckIn(participant.id)}>
+                      {participant.checked_in ? 'Desfazer' : 'Check-in'}
+                    </Button>
+                  </td>
+                </motion.tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      
+      <div className="bg-blue-50 dark:bg-brand-blue-500/10 border-l-4 border-blue-400 p-4 rounded-r-lg">
+        <div className="flex items-center justify-between">
+            <div>
+                <h4 className="font-bold text-blue-800 dark:text-blue-200">Próximo Passo: Chaves do Torneio</h4>
+                <p className="text-sm text-blue-700 dark:text-blue-300">Após todos os participantes fazerem o check-in, gere as chaves para iniciar as partidas.</p>
             </div>
-            <div className="flex items-start">
-                <Clock className="h-5 w-5 mr-3 mt-1 text-brand-gray-400" />
-                <div>
-                    <p className="font-medium text-brand-gray-600 dark:text-brand-gray-400">Horário</p>
-                    <p className="font-semibold text-brand-gray-800 dark:text-brand-gray-200">{evento.start_time} - {evento.end_time}</p>
-                </div>
-            </div>
-             <div className="flex items-start">
-                <LayoutGrid className="h-5 w-5 mr-3 mt-1 text-brand-gray-400" />
-                <div>
-                    <p className="font-medium text-brand-gray-600 dark:text-brand-gray-400">Quadras</p>
-                    <p className="font-semibold text-brand-gray-800 dark:text-brand-gray-200">{evento.quadras_ids.length} quadra(s) reservada(s)</p>
-                </div>
-            </div>
-             <div className="flex items-start">
-                <Trophy className="h-5 w-5 mr-3 mt-1 text-brand-gray-400" />
-                <div>
-                    <p className="font-medium text-brand-gray-600 dark:text-brand-gray-400">Categorias</p>
-                    <div className="flex flex-wrap gap-2 mt-1">
-                        {evento.categories.map(cat => (
-                            <span key={cat} className="px-2 py-0.5 text-xs rounded-full bg-brand-gray-100 dark:bg-brand-gray-700 text-brand-gray-700 dark:text-brand-gray-300">{cat}</span>
-                        ))}
-                    </div>
-                </div>
-            </div>
+            <Button onClick={handleGenerateBracket} disabled={evento.matches.length > 0}>
+                <BarChart3 className="h-4 w-4 mr-2" />
+                {evento.matches.length > 0 ? 'Chaves Geradas' : 'Gerar Chaves'}
+            </Button>
         </div>
       </div>
     </div>
   );
 };
 
-export default EventOverviewTab;
+export default ParticipantsTab;

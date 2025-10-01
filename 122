@@ -1,71 +1,40 @@
-import { Participant, Match } from '../types';
+export const maskCEP = (value: string): string => {
+  return value
+    .replace(/\D/g, '') // Remove all non-digit characters
+    .replace(/^(\d{5})(\d)/, '$1-$2') // Add hyphen after 5th digit
+    .slice(0, 9); // Limit to 9 characters (XXXXX-XXX)
+};
 
-// Função para embaralhar um array
-function shuffle<T>(array: T[]): T[] {
-  let currentIndex = array.length, randomIndex;
+export const maskPhone = (value: string): string => {
+  const cleaned = value.replace(/\D/g, '');
+  if (cleaned.length <= 10) {
+    return cleaned
+      .replace(/(\d{2})(\d)/, '($1) $2')
+      .replace(/(\d{4})(\d)/, '$1-$2')
+      .slice(0, 14); // (XX) XXXX-XXXX
+  }
+  return cleaned
+    .replace(/(\d{2})(\d)/, '($1) $2')
+    .replace(/(\d{5})(\d)/, '$1-$2')
+    .slice(0, 15); // (XX) XXXXX-XXXX
+};
 
-  while (currentIndex !== 0) {
-    randomIndex = Math.floor(Math.random() * currentIndex);
-    currentIndex--;
-    [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
+export const maskCPFOrCNPJ = (value: string): string => {
+  const cleaned = value.replace(/\D/g, '');
+
+  if (cleaned.length <= 11) {
+    // CPF
+    return cleaned
+      .replace(/(\d{3})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d)/, '$1.$2')
+      .replace(/(\d{3})(\d{1,2})$/, '$1-$2');
   }
 
-  return array;
-}
-
-export const generateBracket = (participants: Participant[]): Match[] => {
-  if (participants.length < 2) return [];
-
-  const shuffledParticipants = shuffle([...participants]);
-  
-  // For simplicity, we'll work with a power of 2.
-  // We'll take the first 8 participants for this mock.
-  const bracketParticipants = shuffledParticipants.slice(0, 8);
-  const numParticipants = bracketParticipants.length;
-
-  if (numParticipants !== 8) {
-      alert("Esta demonstração de geração de chaves funciona melhor com 8 participantes.");
-  }
-
-  const matches: Match[] = [];
-  let matchCounter = 0;
-
-  // Round 1 (Quarter-finals)
-  for (let i = 0; i < numParticipants / 2; i++) {
-    matches.push({
-      id: `match_${matchCounter++}`,
-      round: 1,
-      matchNumber: i,
-      participant_ids: [bracketParticipants[i * 2].id, bracketParticipants[i * 2 + 1].id],
-      score: [null, null],
-      winner_id: null,
-      nextMatchId: `match_${Math.floor(i / 2) + (numParticipants / 2)}`,
-    });
-  }
-
-  // Round 2 (Semi-finals)
-  for (let i = 0; i < numParticipants / 4; i++) {
-    matches.push({
-      id: `match_${matchCounter++}`,
-      round: 2,
-      matchNumber: i,
-      participant_ids: [null, null],
-      score: [null, null],
-      winner_id: null,
-      nextMatchId: `match_${Math.floor(i / 2) + (numParticipants / 2) + (numParticipants / 4)}`,
-    });
-  }
-  
-  // Round 3 (Final)
-  matches.push({
-    id: `match_${matchCounter++}`,
-    round: 3,
-    matchNumber: 0,
-    participant_ids: [null, null],
-    score: [null, null],
-    winner_id: null,
-    nextMatchId: null, // Final match
-  });
-
-  return matches;
+  // CNPJ
+  return cleaned
+    .slice(0, 14) // Limita para 14 dígitos
+    .replace(/(\d{2})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d)/, '$1/$2')
+    .replace(/(\d{4})(\d{1,2})$/, '$1-$2');
 };

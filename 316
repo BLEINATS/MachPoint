@@ -1,63 +1,66 @@
--- Drop the trigger first, as it depends on the function
+-- Definitive fix for gamification trigger and function
+-- This script corrects a persistent syntax error in the trigger creation and a logic error in the function.
+
+-- 1. Drop the existing trigger to avoid conflicts.
 DROP TRIGGER IF EXISTS on_reservation_completed_add_points ON public.reservas;
 
--- Drop the function
+-- 2. Drop the faulty function.
 DROP FUNCTION IF EXISTS public.handle_reservation_completion();
 
--- Recreate the function with the correct logic and field names
+-- 3. Recreate the function with the correct logic (using 'is_enabled').
 CREATE OR REPLACE FUNCTION public.handle_reservation_completion()
-RETURNS TRIGGER
+RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
 AS $$
 DECLARE
-  settings public.gamification_settings;
-  aluno_profile public.alunos;
-  points_to_add INT;
+    settings public.gamification_settings;
+    aluno_profile public.alunos;
+    points_to_add INT;
 BEGIN
-  -- Fetch gamification settings for the arena
-  SELECT *
-  INTO settings
-  FROM public.gamification_settings
-  WHERE arena_id = NEW.arena_id
-  LIMIT 1;
+    -- Fetch gamification settings for the specific arena
+    SELECT * INTO settings
+    FROM public.gamification_settings
+    WHERE arena_id = NEW.arena_id
+    LIMIT 1;
 
-  -- Proceed only if gamification is enabled (using the correct column name 'is_enabled')
-  IF FOUND AND settings.is_enabled THEN
-    -- Find the corresponding 'aluno' profile
-    SELECT *
-    INTO aluno_profile
+    -- Exit if gamification is disabled or no settings found
+    IF settings IS NULL OR NOT settings.is_enabled THEN
+        RETURN NEW;
+    END IF;
+
+    -- Find the 'aluno' profile linked to the reservation's 'profile_id'
+    SELECT * INTO aluno_profile
     FROM public.alunos
     WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id
     LIMIT 1;
 
-    -- Proceed only if an 'aluno' profile is found
-    IF FOUND THEN
-      -- Calculate points
-      points_to_add := settings.points_per_reservation + floor(NEW.total_price * settings.points_per_real);
-
-      -- Update aluno's points
-      UPDATE public.alunos
-      SET gamification_points = COALESCE(gamification_points, 0) + points_to_add
-      WHERE id = aluno_profile.id;
-
-      -- Log the transaction
-      INSERT INTO public.gamification_point_transactions(arena_id, aluno_id, points, type, description, related_reservation_id)
-      VALUES(NEW.arena_id, aluno_profile.id, points_to_add, 'reservation_completed', 'Pontos por reserva #' || substr(NEW.id::text, 1, 8), NEW.id);
+    -- Exit if no 'aluno' profile is found
+    IF aluno_profile IS NULL THEN
+        RETURN NEW;
     END IF;
-  END IF;
 
-  RETURN NEW;
+    -- Calculate points based on settings
+    points_to_add := settings.points_per_reservation + (COALESCE(NEW.total_price, 0) * settings.points_per_real);
+
+    -- Add points if there are any to add
+    IF points_to_add > 0 THEN
+        -- Use the dedicated function to add points and record the transaction
+        PERFORM public.add_gamification_points(
+            p_aluno_id := aluno_profile.id,
+            p_points_to_add := points_to_add,
+            p_description := 'Pontos por reserva #' || substr(NEW.id::text, 1, 8),
+            p_related_reservation_id := NEW.id
+        );
+    END IF;
+
+    RETURN NEW;
 END;
 $$;
 
--- Recreate the trigger with the correct syntax (no semicolon in WHEN clause)
+-- 4. Recreate the trigger with the CORRECT syntax (no semicolon in the WHEN clause).
 CREATE TRIGGER on_reservation_completed_add_points
 AFTER UPDATE ON public.reservas
 FOR EACH ROW
-WHEN (NEW.status = 'realizada' AND OLD.status <> 'realizada')
+WHEN (NEW.status = 'realizada' AND OLD.status &lt;&gt; 'realizada')
 EXECUTE FUNCTION public.handle_reservation_completion();
-
--- Grant execute on the function for the authenticated role
-GRANT EXECUTE ON FUNCTION public.handle_reservation_completion() TO authenticated;

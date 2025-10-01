@@ -1,33 +1,43 @@
 /*
-# [SECURITY] Set Search Path for Functions
-[This operation secures database functions by explicitly setting the search_path. This prevents potential hijacking attacks by ensuring functions resolve objects in the intended schema ('public') first, mitigating risks associated with mutable search paths.]
+# [SECURITY] Set Search Path for More Functions
+This migration enhances security by explicitly setting the `search_path` for several additional database functions. This mitigates potential hijacking attacks by ensuring functions only search for objects in trusted schemas.
 
-## Query Description: [This operation modifies the configuration of existing database functions to enhance security. It sets a fixed `search_path` to `public`, preventing malicious users from manipulating function execution by creating objects with the same name in other schemas. This is a safe, non-destructive operation that does not alter data or logic.]
+## Query Description:
+- This operation modifies the metadata of existing functions.
+- It does not alter the logic or data of the functions themselves.
+- The change is safe and reversible.
 
 ## Metadata:
 - Schema-Category: ["Security", "Safe"]
 - Impact-Level: ["Low"]
-- Requires-Backup: [false]
-- Reversible: [true]
+- Requires-Backup: false
+- Reversible: true
 
 ## Structure Details:
-[
-  - Modifies function: `handle_new_reservation_notification()`,
-  - Modifies function: `handle_new_user_profile()`
-]
+- Modifies `search_path` for:
+  - `handle_reservation_completion()`
+  - `create_my_aluno_profile()`
+  - `is_arena_admin(uuid)`
 
 ## Security Implications:
-- RLS Status: [Not Changed]
-- Policy Changes: [No]
-- Auth Requirements: [None]
+- RLS Status: Unchanged
+- Policy Changes: No
+- Auth Requirements: Admin privileges required to run.
 
 ## Performance Impact:
-- Indexes: [Not Changed]
-- Triggers: [Not Changed]
-- Estimated Impact: [None. This is a metadata change with no performance overhead.]
+- Indexes: None
+- Triggers: None
+- Estimated Impact: Negligible performance impact.
 */
-ALTER FUNCTION public.handle_new_reservation_notification()
-SET search_path = 'public';
 
-ALTER FUNCTION public.handle_new_user_profile()
-SET search_path = 'public';
+-- Set a secure search path for the function that handles reservation completion
+ALTER FUNCTION public.handle_reservation_completion()
+SET search_path = public, extensions;
+
+-- Set a secure search path for the function that creates an "aluno" profile
+ALTER FUNCTION public.create_my_aluno_profile()
+SET search_path = public, extensions;
+
+-- Set a secure search path for the function that checks admin status
+ALTER FUNCTION public.is_arena_admin(uuid)
+SET search_path = public, extensions;

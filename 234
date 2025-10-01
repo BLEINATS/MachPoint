@@ -1,48 +1,178 @@
 /*
-  # [Structural] Criação da Tabela de Regras de Precificação
-  ## Query Description: 
-  Este script reestrutura a forma como os preços das quadras são armazenados, passando de um preço fixo por hora para um sistema de regras flexível.
-  - A coluna `price_per_hour` será REMOVIDA da tabela `quadras`.
-  - Uma nova tabela `pricing_rules` será CRIADA para armazenar preços baseados em esporte, horário e dia da semana.
-  - O cálculo de preço nas reservas passará a depender das regras cadastradas nesta nova tabela.
-  **Impacto:** Nenhuma reserva existente será afetada, mas o preço para novas reservas dependerá das regras que você criar. É importante cadastrar as novas regras de preço após aplicar esta migração.
-  ## Metadata:
-  - Schema-Category: "Structural"
-  - Impact-Level: "Medium"
-  - Requires-Backup: false
-  - Reversible: false
-  ## Structure Details:
-  - Tabela `quadras`: Remoção da coluna `price_per_hour`.
-  - Tabela `pricing_rules`: Criação da tabela com colunas para `quadra_id`, `sport_type`, `start_time`, `end_time`, `days_of_week`, e `price`.
-  ## Security Implications:
-  - RLS Status: Habilitado na nova tabela `pricing_rules`.
-  - Policy Changes: Novas políticas serão criadas para `pricing_rules`, permitindo que apenas o dono da arena gerencie suas próprias regras.
-  - Auth Requirements: Apenas usuários autenticados como donos de arena podem modificar as regras.
-*/
--- 1. Cria a nova tabela para regras de precificação
-CREATE TABLE public.pricing_rules (
-    id uuid NOT NULL DEFAULT gen_random_uuid(),
-    arena_id uuid NOT NULL,
-    quadra_id uuid NOT NULL,
-    sport_type text NOT NULL,
-    start_time time without time zone NOT NULL,
-    end_time time without time zone NOT NULL,
-    days_of_week integer[] NOT NULL, -- 0=Dom, 1=Seg, ..., 6=Sáb
-    price numeric NOT NULL,
-    created_at timestamp with time zone NOT NULL DEFAULT now(),
-    CONSTRAINT pricing_rules_pkey PRIMARY KEY (id),
-    CONSTRAINT pricing_rules_arena_id_fkey FOREIGN KEY (arena_id) REFERENCES arenas(id) ON DELETE CASCADE,
-    CONSTRAINT pricing_rules_quadra_id_fkey FOREIGN KEY (quadra_id) REFERENCES quadras(id) ON DELETE CASCADE
+          # Criação das Tabelas Centrais da Aplicação
+          Este script cria as tabelas essenciais para o funcionamento do sistema, incluindo reservas, alunos, professores, turmas e eventos, e configura as políticas de segurança (RLS) para garantir o isolamento de dados por arena.
+
+          ## Query Description: "Este script estabelece a fundação do banco de dados da sua aplicação. Ele não afeta dados existentes em outras tabelas (como 'quadras'), mas cria novas estruturas vazias. É um passo seguro e fundamental para a persistência de dados."
+          
+          ## Metadata:
+          - Schema-Category: "Structural"
+          - Impact-Level: "Low"
+          - Requires-Backup: false
+          - Reversible: true
+          
+          ## Structure Details:
+          - Tabelas Criadas: turmas, professores, alunos, reservas, torneios, eventos_privados.
+          - Políticas de Segurança (RLS): Habilitadas e configuradas para todas as novas tabelas, garantindo que apenas o dono da arena possa gerenciar seus próprios dados.
+          
+          ## Security Implications:
+          - RLS Status: Enabled
+          - Policy Changes: Yes
+          - Auth Requirements: As políticas são baseadas no `auth.uid()` do usuário logado.
+          
+          ## Performance Impact:
+          - Indexes: Chaves primárias e estrangeiras são indexadas por padrão.
+          - Triggers: Nenhum trigger é adicionado neste script.
+          - Estimated Impact: Nenhum impacto em performance existente. A criação é rápida.
+          */
+
+-- Tabela de Professores
+CREATE TABLE IF NOT EXISTS public.professores (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    arena_id uuid NOT NULL REFERENCES public.arenas(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    phone TEXT,
+    avatar_url TEXT,
+    specialties TEXT[],
+    created_at timestamptz DEFAULT now() NOT NULL
 );
-COMMENT ON COLUMN public.pricing_rules.days_of_week IS 'Array de dias da semana (0=Domingo, 1=Segunda, ..., 6=Sábado)';
--- 2. Remove a coluna de preço fixo da tabela de quadras
-ALTER TABLE public.quadras DROP COLUMN IF EXISTS price_per_hour;
--- 3. Habilita Row Level Security na nova tabela
-ALTER TABLE public.pricing_rules ENABLE ROW LEVEL SECURITY;
--- 4. Cria as políticas de segurança para a tabela de regras de precificação
-CREATE POLICY "Public can view pricing rules" ON public.pricing_rules
-FOR SELECT USING (true);
-CREATE POLICY "Arena owners can manage their own pricing rules" ON public.pricing_rules
-FOR ALL USING (
-    auth.uid() = (SELECT owner_id FROM public.arenas WHERE id = pricing_rules.arena_id)
+ALTER TABLE public.professores ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Arena owners can manage their own professores"
+    ON public.professores FOR ALL
+    USING (auth.uid() = (SELECT owner_id FROM public.arenas WHERE id = arena_id));
+
+-- Tabela de Alunos
+CREATE TABLE IF NOT EXISTS public.alunos (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    profile_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+    arena_id uuid NOT NULL REFERENCES public.arenas(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    phone TEXT,
+    avatar_url TEXT,
+    status TEXT NOT NULL,
+    sport TEXT,
+    plan_name TEXT,
+    monthly_fee NUMERIC,
+    join_date DATE,
+    created_at timestamptz DEFAULT now() NOT NULL
 );
+ALTER TABLE public.alunos ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Arena owners can manage their own alunos"
+    ON public.alunos FOR ALL
+    USING (auth.uid() = (SELECT owner_id FROM public.arenas WHERE id = arena_id));
+
+-- Tabela de Turmas
+CREATE TABLE IF NOT EXISTS public.turmas (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    arena_id uuid NOT NULL REFERENCES public.arenas(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    professor_id uuid REFERENCES public.professores(id) ON DELETE SET NULL,
+    quadra_id uuid REFERENCES public.quadras(id) ON DELETE SET NULL,
+    sport TEXT,
+    "daysOfWeek" INTEGER[],
+    start_time TIME,
+    end_time TIME,
+    start_date DATE,
+    end_date DATE,
+    capacity INTEGER,
+    student_ids uuid[],
+    created_at timestamptz DEFAULT now() NOT NULL
+);
+ALTER TABLE public.turmas ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Arena owners can manage their own turmas"
+    ON public.turmas FOR ALL
+    USING (auth.uid() = (SELECT owner_id FROM public.arenas WHERE id = arena_id));
+
+-- Tabela de Torneios (Eventos Públicos)
+CREATE TABLE IF NOT EXISTS public.torneios (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    arena_id uuid NOT NULL REFERENCES public.arenas(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    type TEXT,
+    status TEXT,
+    start_date DATE,
+    end_date DATE,
+    description TEXT,
+    banner_url TEXT,
+    quadras_ids uuid[],
+    start_time TIME,
+    end_time TIME,
+    categories TEXT[],
+    max_participants INTEGER,
+    registration_fee NUMERIC,
+    participants JSONB,
+    matches JSONB,
+    created_at timestamptz DEFAULT now() NOT NULL
+);
+ALTER TABLE public.torneios ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Arena owners can manage their own torneios"
+    ON public.torneios FOR ALL
+    USING (auth.uid() = (SELECT owner_id FROM public.arenas WHERE id = arena_id));
+CREATE POLICY "Public can view torneios"
+    ON public.torneios FOR SELECT
+    USING (true);
+
+-- Tabela de Eventos Privados
+CREATE TABLE IF NOT EXISTS public.eventos_privados (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    arena_id uuid NOT NULL REFERENCES public.arenas(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    type TEXT,
+    status TEXT,
+    "clientName" TEXT,
+    "clientPhone" TEXT,
+    "clientEmail" TEXT,
+    "startDate" DATE,
+    "endDate" DATE,
+    "startTime" TIME,
+    "endTime" TIME,
+    "expectedGuests" INTEGER,
+    quadras_ids uuid[],
+    "additionalSpaces" TEXT[],
+    services JSONB,
+    "totalValue" NUMERIC,
+    "depositValue" NUMERIC,
+    "paymentConditions" TEXT,
+    payments JSONB,
+    notes TEXT,
+    checklist JSONB,
+    created_at timestamptz DEFAULT now() NOT NULL
+);
+ALTER TABLE public.eventos_privados ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Arena owners can manage their own eventos privados"
+    ON public.eventos_privados FOR ALL
+    USING (auth.uid() = (SELECT owner_id FROM public.arenas WHERE id = arena_id));
+
+-- Tabela de Reservas
+CREATE TABLE IF NOT EXISTS public.reservas (
+    id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+    quadra_id uuid REFERENCES public.quadras(id) ON DELETE CASCADE,
+    profile_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+    arena_id uuid NOT NULL REFERENCES public.arenas(id) ON DELETE CASCADE,
+    date DATE NOT NULL,
+    start_time TIME NOT NULL,
+    end_time TIME NOT NULL,
+    status TEXT NOT NULL,
+    type TEXT NOT NULL,
+    "clientName" TEXT,
+    "clientPhone" TEXT,
+    notes TEXT,
+    "isRecurring" BOOLEAN DEFAULT false,
+    "recurringType" TEXT,
+    "recurringEndDate" DATE,
+    turma_id uuid REFERENCES public.turmas(id) ON DELETE SET NULL,
+    torneio_id uuid REFERENCES public.torneios(id) ON DELETE SET NULL,
+    evento_id uuid REFERENCES public.eventos_privados(id) ON DELETE SET NULL,
+    created_at timestamptz DEFAULT now() NOT NULL
+);
+ALTER TABLE public.reservas ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Arena owners can manage their own reservas"
+    ON public.reservas FOR ALL
+    USING (auth.uid() = (SELECT owner_id FROM public.arenas WHERE id = arena_id));
+CREATE POLICY "Users can see their own reservas"
+    ON public.reservas FOR SELECT
+    USING (auth.uid() = profile_id);
+CREATE POLICY "Public can view confirmed, non-private reservas"
+    ON public.reservas FOR SELECT
+    USING (status = 'confirmada' AND type != 'bloqueio');

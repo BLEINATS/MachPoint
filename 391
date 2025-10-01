@@ -1,57 +1,59 @@
 /*
-          # [Function Security] Secure handle_new_user_profile function
-          [This operation enhances the security of the handle_new_user_profile function by setting a fixed search_path. This prevents potential hijacking attacks by ensuring the function only looks for objects in trusted schemas (public, auth). It's a preventative security measure with no impact on functionality.]
+          # [Operation Name]
+          Secure Gamification Seeding Function
 
-          ## Query Description: [This operation will update the handle_new_user_profile function to improve its security. It does not alter any data and is a safe, reversible change.]
+          ## Query Description: [This operation secures the `seed_gamification_defaults` function by explicitly setting its `search_path`. This is a preventative security measure to ensure the function operates in a predictable and safe schema context, mitigating potential risks associated with mutable search paths. It does not alter any existing data or user-facing functionality.]
           
           ## Metadata:
-          - Schema-Category: ["Security", "Structural"]
-          - Impact-Level: ["Low"]
-          - Requires-Backup: [false]
-          - Reversible: [true]
+          - Schema-Category: "Security"
+          - Impact-Level: "Low"
+          - Requires-Backup: false
+          - Reversible: true
           
           ## Structure Details:
-          - Function: public.handle_new_user_profile()
+          - Function `public.seed_gamification_defaults(uuid)` will be replaced.
           
           ## Security Implications:
-          - RLS Status: [Not Applicable]
-          - Policy Changes: [No]
-          - Auth Requirements: [Superuser]
+          - RLS Status: Not Applicable
+          - Policy Changes: No
+          - Auth Requirements: None
           
           ## Performance Impact:
-          - Indexes: [No change]
-          - Triggers: [No change]
-          - Estimated Impact: [None. This is a metadata change to the function definition.]
+          - Indexes: None
+          - Triggers: None
+          - Estimated Impact: None
           */
-CREATE OR REPLACE FUNCTION public.handle_new_user_profile()
- RETURNS trigger
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path = public, auth
-AS $function$
+
+DROP FUNCTION IF EXISTS public.seed_gamification_defaults(uuid);
+
+CREATE OR REPLACE FUNCTION public.seed_gamification_defaults(p_arena_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp;
+AS $$
 BEGIN
-  INSERT INTO public.profiles (id, name, email, role, clientType)
-  VALUES (
-    NEW.id,
-    NEW.raw_user_meta_data->>'name',
-    NEW.email,
-    (NEW.raw_user_meta_data->>'role')::public.user_role,
-    (NEW.raw_user_meta_data->>'clientType')::public.client_type
-  );
-  
-  -- If the new user is an admin, create an arena for them
-  IF (NEW.raw_user_meta_data->>'role')::public.user_role = 'admin_arena' THEN
-    INSERT INTO public.arenas (owner_id, name, city, state, slug)
-    VALUES (
-      NEW.id,
-      NEW.raw_user_meta_data->>'name',
-      'Cidade', -- Placeholder
-      'UF',      -- Placeholder
-      -- Generate a simple slug from the arena name
-      lower(regexp_replace(NEW.raw_user_meta_data->>'name', '[^a-zA-Z0-9]+', '-', 'g'))
-    );
-  END IF;
-  
-  RETURN NEW;
+    -- Seed gamification_settings
+    INSERT INTO public.gamification_settings (arena_id, is_enabled, points_per_reservation, points_per_real)
+    VALUES (p_arena_id, true, 10, 1)
+    ON CONFLICT (arena_id) DO NOTHING;
+
+    -- Seed gamification_levels
+    INSERT INTO public.gamification_levels (arena_id, name, points_required, level_rank)
+    VALUES
+        (p_arena_id, 'Bronze', 0, 1),
+        (p_arena_id, 'Prata', 500, 2),
+        (p_arena_id, 'Ouro', 1500, 3),
+        (p_arena_id, 'Platina', 3000, 4)
+    ON CONFLICT (arena_id, level_rank) DO NOTHING;
+
+    -- Seed gamification_achievements
+    INSERT INTO public.gamification_achievements (arena_id, name, description, type, points_reward, icon)
+    VALUES
+        (p_arena_id, 'Primeira Reserva', 'Sua primeira reserva na arena!', 'first_reservation', 50, 'Sparkles'),
+        (p_arena_id, 'Fiel da Casa', '10 reservas completadas', 'loyalty_10', 100, 'Heart'),
+        (p_arena_id, 'Sócio-Torcedor', '50 reservas completadas', 'loyalty_50', 500, 'Gem'),
+        (p_arena_id, 'Lenda da Arena', '100 reservas completadas', 'loyalty_100', 1000, 'Crown')
+    ON CONFLICT (arena_id, type) DO NOTHING;
 END;
-$function$;
+$$;

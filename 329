@@ -1,45 +1,95 @@
--- This script replaces the seeding function with a truly idempotent version.
--- It will clean up all existing gamification data for the arena and re-seed it correctly.
-CREATE OR REPLACE FUNCTION public.seed_gamification_defaults(p_arena_id uuid)
+/*
+          # [Fix] Recriar Tipo de Transação de Gamificação e Função Dependente
+          [Este script corrige um erro de tipo de dado ausente, recriando o ENUM 'gamification_point_transaction_type' e a função 'add_gamification_points' que o utiliza.]
+
+          ## Query Description: [Este script primeiro cria um tipo de dado personalizado para transações de gamificação e, em seguida, recria a função que adiciona pontos para usar esse tipo. Esta operação é segura e não afeta dados existentes, apenas corrige a estrutura do banco de dados para permitir que as migrações continuem.]
+          
+          ## Metadata:
+          - Schema-Category: ["Structural"]
+          - Impact-Level: ["Low"]
+          - Requires-Backup: [false]
+          - Reversible: [false]
+          
+          ## Structure Details:
+          - Cria o tipo ENUM 'gamification_point_transaction_type'.
+          - Recria a função 'add_gamification_points' para usar o novo tipo.
+          
+          ## Security Implications:
+          - RLS Status: [Enabled]
+          - Policy Changes: [No]
+          - Auth Requirements: [admin]
+          
+          ## Performance Impact:
+          - Indexes: [No]
+          - Triggers: [No]
+          - Estimated Impact: [Nenhum impacto de performance esperado.]
+          */
+
+-- Step 1: Drop the function if it exists to avoid conflicts
+DROP FUNCTION IF EXISTS public.add_gamification_points(uuid, integer, text);
+
+-- Step 2: Create the ENUM type if it doesn't exist
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'gamification_point_transaction_type') THEN
+        CREATE TYPE public.gamification_point_transaction_type AS ENUM (
+            'reservation_completed',
+            'manual_adjustment',
+            'achievement_unlocked',
+            'reward_redemption'
+        );
+    END IF;
+END$$;
+
+-- Step 3: Recreate the function with the correct type
+CREATE OR REPLACE FUNCTION public.add_gamification_points(
+    p_aluno_id uuid,
+    p_points_to_add integer,
+    p_description text,
+    p_transaction_type public.gamification_point_transaction_type DEFAULT 'manual_adjustment'::public.gamification_point_transaction_type,
+    p_related_reservation_id uuid DEFAULT NULL,
+    p_related_achievement_id uuid DEFAULT NULL
+)
 RETURNS void
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
 AS $$
+DECLARE
+    v_arena_id uuid;
+    v_new_total_points integer;
 BEGIN
-    -- Clean up ALL existing data for this arena to prevent duplicates, regardless of partial state.
-    DELETE FROM public.gamification_achievements WHERE arena_id = p_arena_id;
-    DELETE FROM public.gamification_rewards WHERE arena_id = p_arena_id;
-    DELETE FROM public.gamification_levels WHERE arena_id = p_arena_id;
-    DELETE FROM public.gamification_settings WHERE arena_id = p_arena_id;
+    -- Get the arena_id from the aluno
+    SELECT arena_id INTO v_arena_id
+    FROM public.alunos
+    WHERE id = p_aluno_id;
 
-    -- Now, insert the default data.
-    -- Insert default settings
-    INSERT INTO public.gamification_settings (arena_id, is_enabled, points_per_reservation, points_per_real)
-    VALUES (p_arena_id, true, 10, 1);
+    IF v_arena_id IS NULL THEN
+        RAISE EXCEPTION 'Aluno com ID % não encontrado.', p_aluno_id;
+    END IF;
 
-    -- Insert default levels
-    INSERT INTO public.gamification_levels (id, arena_id, name, points_required, level_rank)
-    VALUES
-        (uuid_generate_v4(), p_arena_id, 'Bronze', 0, 1),
-        (uuid_generate_v4(), p_arena_id, 'Prata', 500, 2),
-        (uuid_generate_v4(), p_arena_id, 'Ouro', 1500, 3),
-        (uuid_generate_v4(), p_arena_id, 'Platina', 3000, 4),
-        (uuid_generate_v4(), p_arena_id, 'Lenda', 5000, 5);
+    -- Insert the transaction
+    INSERT INTO public.gamification_point_transactions (arena_id, aluno_id, points, type, description, related_reservation_id, related_achievement_id)
+    VALUES (v_arena_id, p_aluno_id, p_points_to_add, p_transaction_type, p_description, p_related_reservation_id, p_related_achievement_id);
 
-    -- Insert default rewards
-    INSERT INTO public.gamification_rewards (id, arena_id, title, description, points_cost, type, value, quantity, is_active)
-    VALUES
-        (uuid_generate_v4(), p_arena_id, 'Hora Grátis', 'Uma hora grátis de quadra em horário comercial', 200, 'free_hour', null, null, true),
-        (uuid_generate_v4(), p_arena_id, 'Desconto R$ 50', 'Desconto de R$ 50 em qualquer reserva', 150, 'discount', 50, null, true),
-        (uuid_generate_v4(), p_arena_id, 'Equipamento Grátis', 'Aluguel gratuito de equipamentos por 1 dia', 50, 'free_item', null, 100, true);
+    -- Update the total points on the alunos table
+    UPDATE public.alunos
+    SET gamification_points = COALESCE(gamification_points, 0) + p_points_to_add
+    WHERE id = p_aluno_id
+    RETURNING gamification_points INTO v_new_total_points;
 
-    -- Insert default achievements
-    INSERT INTO public.gamification_achievements (id, arena_id, name, description, type, points_reward, icon)
-    VALUES
-        (uuid_generate_v4(), p_arena_id, 'Primeira Reserva', 'Por fazer a primeira reserva na plataforma', 'first_reservation', 20, 'Star'),
-        (uuid_generate_v4(), p_arena_id, 'Rei da Quadra', 'Por ter jogado em todas as quadras da arena', 'play_all_courts', 100, 'Crown'),
-        (uuid_generate_v4(), p_arena_id, 'Frequência Total', 'Por jogar toda semana durante um mês', 'weekly_frequency', 50, 'Calendar'),
-        (uuid_generate_v4(), p_arena_id, 'Lealdade Nv.1', 'Por completar 10 reservas', 'loyalty_10', 30, 'Heart'),
-        (uuid_generate_v4(), p_arena_id, 'Lealdade Nv.2', 'Por completar 50 reservas', 'loyalty_50', 150, 'Heart'),
-        (uuid_generate_v4(), p_arena_id, 'Lealdade Nv.3', 'Por completar 100 reservas', 'loyalty_100', 300, 'Heart');
+    -- Update the level based on the new total points
+    UPDATE public.alunos
+    SET gamification_level_id = (
+        SELECT id
+        FROM public.gamification_levels
+        WHERE arena_id = v_arena_id
+          AND points_required <= v_new_total_points
+        ORDER BY points_required DESC
+        LIMIT 1
+    )
+    WHERE id = p_aluno_id;
 END;
 $$;
+
+GRANT EXECUTE ON FUNCTION public.add_gamification_points(uuid, integer, text, public.gamification_point_transaction_type, uuid, uuid) TO authenticated;

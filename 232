@@ -1,23 +1,31 @@
 /*
-  # [Structural] Adiciona a coluna amenities à tabela de quadras
+  # [Structural] Adiciona a funcionalidade de "Preço Padrão"
   ## Query Description:
-  Este script adiciona uma nova coluna `amenities` (do tipo text[]) à tabela `quadras`. Esta coluna é necessária para armazenar a lista de comodidades de cada quadra (ex: Wi-Fi, Vestiário). A ausência desta coluna estava causando o erro "Could not find the ''amenities'' column" ao tentar salvar uma nova quadra.
-  **Impacto:** Nenhuma quadra existente será afetada. A coluna será adicionada com um valor padrão de lista vazia ('{}').
+  Este script aprimora a tabela `pricing_rules` para suportar um sistema de preços hierárquico. Ele adiciona uma coluna booleana `is_default` para marcar uma regra como o preço base para um esporte em uma quadra. Um índice único é criado para garantir que só possa existir UMA regra padrão por combinação de quadra e esporte.
+  **Impacto:** Nenhuma regra existente será perdida. A nova coluna `is_default` será adicionada com o valor `false`. Será necessário editar suas regras para definir quais são os preços padrão.
   ## Metadata:
   - Schema-Category: "Structural"
-  - Impact-Level: "Low"
+  - Impact-Level: "Medium"
   - Requires-Backup: false
   - Reversible: true
   ## Structure Details:
-  - Tabela `quadras`: Adição da coluna `amenities` (text[]).
+  - Tabela `pricing_rules`: Adição da coluna `is_default` (boolean).
+  - Índice: Criação de um índice único para garantir a integridade dos dados de preço padrão.
   ## Security Implications:
-  - RLS Status: Sem alterações nas políticas existentes.
+  - RLS Status: Sem alterações.
   - Policy Changes: Não.
   - Auth Requirements: Sem alterações.
 */
--- Adiciona a coluna para armazenar as comodidades da quadra
-ALTER TABLE public.quadras
-ADD COLUMN amenities text[] NOT NULL DEFAULT '{}';
+
+-- Adiciona a coluna para marcar uma regra como padrão
+ALTER TABLE public.pricing_rules
+ADD COLUMN is_default boolean NOT NULL DEFAULT false;
 
 -- Adiciona um comentário para clareza
-COMMENT ON COLUMN public.quadras.amenities IS 'Lista de comodidades da quadra, como "Wi-Fi", "Vestiário", etc.';
+COMMENT ON COLUMN public.pricing_rules.is_default IS 'Se verdadeiro, esta regra é o preço padrão para o esporte, usada como fallback se nenhuma outra regra específica de horário se aplicar.';
+
+-- Cria um índice único para garantir que só possa haver uma regra padrão por quadra e por tipo de esporte.
+-- Isso previne inconsistências nos dados.
+CREATE UNIQUE INDEX unique_default_rule_per_sport_quadra
+ON public.pricing_rules (quadra_id, sport_type)
+WHERE (is_default = true);

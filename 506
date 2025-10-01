@@ -1,54 +1,42 @@
 /*
-  # [Fix] Corrigir referência à coluna 'clientName' no gatilho de notificação de reserva
+# [Fix] Recreate Notification Trigger and Function
+[This migration safely recreates the reservation notification function by first dropping the dependent trigger, updating the function with the correct column name, and then recreating the trigger. This resolves the dependency error encountered during the previous migration attempt.]
 
-  Este patch corrige um erro de digitação em uma função de gatilho (`trigger`) 
-  que é executada sempre que uma nova reserva é criada.
+## Query Description: [This operation temporarily removes the notification trigger for new reservations, updates the underlying function to fix a column name error (`"clientName"`), and then reinstalls the trigger. There is a brief moment during the migration where new reservation notifications might not be generated, but this is negligible.]
 
-  ## Descrição da Query:
-  A função `handle_new_reservation_notification` estava tentando acessar a coluna `clientname` 
-  (tudo em minúsculas) em vez de `"clientName"` (com aspas, respeitando o case). 
-  Isso causava um erro que impedia o salvamento de novas reservas.
+## Metadata:
+- Schema-Category: ["Structural"]
+- Impact-Level: ["Low"]
+- Requires-Backup: [false]
+- Reversible: [false]
 
-  Esta migração:
-  1. Remove a função antiga e com defeito.
-  2. Recria a mesma função com a referência correta à coluna (`NEW."clientName"`).
-  
-  Esta operação é segura e não afeta dados existentes, apenas corrige o comportamento 
-  para futuras inserções de reservas.
+## Structure Details:
+- Trigger: `on_new_reservation_notification` on table `reservas` (Dropped and Recreated)
+- Function: `handle_new_reservation_notification()` (Recreated)
 
-  ## Metadados:
-  - Categoria do Esquema: "Estrutural"
-  - Nível de Impacto: "Baixo"
-  - Requer Backup: false
-  - Reversível: true (recriando a versão antiga da função)
+## Security Implications:
+- RLS Status: [Enabled]
+- Policy Changes: [No]
+- Auth Requirements: [None]
 
-  ## Detalhes da Estrutura:
-  - Objeto afetado: Função `handle_new_reservation_notification()`
-  - Tipo de objeto: `FUNCTION`
-
-  ## Implicações de Segurança:
-  - Status de RLS: Sem alterações
-  - Mudanças de Política: Não
-  - Requisitos de Autenticação: A função é executada com os privilégios do definidor (`SECURITY DEFINER`), o que é comum para gatilhos que precisam inserir em tabelas como `notificacoes`.
-
-  ## Impacto no Desempenho:
-  - Índices: Sem alterações
-  - Gatilhos: A função corrigida será executada pelo mesmo gatilho de antes.
-  - Impacto Estimado: Nenhum impacto negativo. O desempenho será o mesmo da função original, mas sem o erro.
+## Performance Impact:
+- Indexes: [None]
+- Triggers: [Modified]
+- Estimated Impact: [Negligible performance impact.]
 */
 
--- Remove a função antiga se ela existir para evitar conflitos
-DROP FUNCTION IF EXISTS public.handle_new_reservation_notification();
+-- Step 1: Drop the existing trigger that depends on the function.
+DROP TRIGGER IF EXISTS on_new_reservation_notification ON public.reservas;
 
--- Recria a função com a correção
+-- Step 2: Now it's safe to replace the function.
+-- This version corrects the column name from `clientname` to `"clientName"`.
 CREATE OR REPLACE FUNCTION public.handle_new_reservation_notification()
 RETURNS TRIGGER AS $$
 BEGIN
-  -- Insere uma notificação para o administrador da arena
-  INSERT INTO public.notificacoes (arena_id, message, type, link_to)
+  INSERT INTO public.notificacoes(arena_id, message, type, link_to)
   VALUES (
     NEW.arena_id,
-    'Nova reserva de ' || NEW."clientName" || ' para ' || to_char(NEW.date, 'DD/MM') || ' às ' || NEW.start_time,
+    'Nova reserva de ' || NEW."clientName" || ' na quadra ' || (SELECT name FROM public.quadras WHERE id = NEW.quadra_id) || ' em ' || TO_CHAR(NEW.date, 'DD/MM') || ' às ' || NEW.start_time,
     'nova_reserva',
     '/reservas'
   );
@@ -56,11 +44,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Garante que o gatilho está configurado corretamente (opcional, mas bom para garantir)
--- Primeiro, remove o gatilho antigo para evitar duplicatas
-DROP TRIGGER IF EXISTS on_new_reservation_notification ON public.reservas;
-
--- Cria o gatilho para executar a função após cada nova reserva
+-- Step 3: Recreate the trigger to call the new, corrected function.
 CREATE TRIGGER on_new_reservation_notification
 AFTER INSERT ON public.reservas
 FOR EACH ROW

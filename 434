@@ -1,165 +1,83 @@
 /*
-  # [Operation Name]
-  [This operation provides a definitive fix for the reservation creation error by correcting multiple function signature mismatches. It safely drops and recreates the reservation, duplicate-checking, and profile-creation functions to ensure their parameters are perfectly aligned.]
-  ## Query Description: [This script resolves a persistent and complex error by removing several conflicting database functions and recreating them with the correct structure. This is a critical fix to restore the client reservation functionality. The operation is designed to be safe and will not affect existing data, but it modifies core application logic.]
-  ## Metadata:
-  - Schema-Category: 'Structural'
-  - Impact-Level: 'High'
-  - Requires-Backup: false
-  - Reversible: false (The old, incorrect functions will be dropped permanently)
-  ## Structure Details:
-  - Functions 'ensure_aluno_profile', 'check_duplicate_reservation', and 'create_client_reservation_atomic' will be dropped and recreated.
-  ## Security Implications:
-  - RLS Status: Unchanged
-  - Policy Changes: No
-  - Auth Requirements: Admin privileges
-  ## Performance Impact:
-  - Indexes: None
-  - Triggers: None
-  - Estimated Impact: Negligible.
+# [Security] Harden Client Cancellation Function
+[This operation enhances the security of the `handle_client_cancellation_final` function by explicitly setting its `search_path`. This is a preventative security measure and does not alter the function's cancellation logic.]
+
+## Query Description: [This operation will update an existing database function to improve its security. It is a safe, non-destructive change that has no impact on data or application functionality. No backup is required.]
+
+## Metadata:
+- Schema-Category: ["Security"]
+- Impact-Level: ["Low"]
+- Requires-Backup: [false]
+- Reversible: [true]
+
+## Structure Details:
+- Function to be updated: `public.handle_client_cancellation_final(uuid)`
+
+## Security Implications:
+- RLS Status: [Not Applicable]
+- Policy Changes: [No]
+- Auth Requirements: [Admin privileges]
+
+## Performance Impact:
+- Indexes: [None]
+- Triggers: [None]
+- Estimated Impact: [None]
 */
--- Step 1: Drop all potentially conflicting functions to ensure a clean slate.
-DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid,uuid,date,time,time,numeric,public.payment_status_enum,text,numeric,jsonb,text,text);
-DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid,uuid,date,character varying,character varying,numeric,public.payment_status_enum,character varying,numeric,jsonb,character varying,character varying);
-DROP FUNCTION IF EXISTS public.check_duplicate_reservation(uuid, uuid, date, time, time);
-DROP FUNCTION IF EXISTS public.check_duplicate_reservation(uuid, date, time, time, uuid);
-DROP FUNCTION IF EXISTS public.ensure_aluno_profile(uuid, uuid);
-DROP FUNCTION IF EXISTS public.ensure_aluno_profile(uuid, uuid, text, text);
-
--- Step 2: Recreate 'ensure_aluno_profile' to handle new client creation correctly.
-CREATE OR REPLACE FUNCTION public.ensure_aluno_profile(
-    p_profile_id uuid,
-    p_arena_id uuid,
-    p_name text,
-    p_phone text
-)
-RETURNS uuid
+CREATE OR REPLACE FUNCTION public.handle_client_cancellation_final(p_reserva_id uuid)
+RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-    v_aluno_id uuid;
+    v_reserva RECORD;
+    v_aluno RECORD;
+    v_credit_amount numeric := 0;
+    v_hours_until_reservation integer;
 BEGIN
-    -- Check if an aluno profile already exists for this profile_id and arena_id
-    SELECT id INTO v_aluno_id
-    FROM public.alunos
-    WHERE profile_id = p_profile_id AND arena_id = p_arena_id
-    LIMIT 1;
+    -- Get reservation details, ensuring it belongs to the calling user
+    SELECT * INTO v_reserva FROM public.reservas WHERE id = p_reserva_id AND profile_id = auth.uid();
 
-    -- If it exists, return the existing aluno_id
-    IF v_aluno_id IS NOT NULL THEN
-        RETURN v_aluno_id;
+    -- Check if reservation exists and is confirmed
+    IF v_reserva IS NULL THEN
+        RAISE EXCEPTION 'Reserva não encontrada, não pertence a você ou não está em um estado cancelável.';
     END IF;
 
-    -- If not, create a new aluno profile using the provided name and phone
-    INSERT INTO public.alunos (profile_id, arena_id, name, phone, status, join_date, plan_name)
-    VALUES (p_profile_id, p_arena_id, p_name, p_phone, 'ativo', CURRENT_DATE, 'Avulso')
-    RETURNING id INTO v_aluno_id;
-
-    RETURN v_aluno_id;
-END;
-$$;
-
--- Step 3: Recreate 'check_duplicate_reservation' with the correct signature.
-CREATE OR REPLACE FUNCTION public.check_duplicate_reservation(
-    p_arena_id uuid,
-    p_quadra_id uuid,
-    p_date date,
-    p_start_time time,
-    p_end_time time
-)
-RETURNS boolean
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-    v_end_time time;
-BEGIN
-    -- Handle overnight bookings (e.g., ends at 00:00)
-    v_end_time := p_end_time;
-    IF p_end_time <= p_start_time THEN
-        v_end_time := '23:59:59';
+    IF v_reserva.status <> 'confirmada' THEN
+        RAISE EXCEPTION 'Apenas reservas confirmadas podem ser canceladas.';
     END IF;
 
-    RETURN EXISTS (
-        SELECT 1
-        FROM public.reservas
-        WHERE
-            arena_id = p_arena_id AND
-            quadra_id = p_quadra_id AND
-            date = p_date AND
-            status <> 'cancelada' AND
-            -- Check for time overlap: (StartA < EndB) AND (EndA > StartB)
-            (start_time < v_end_time AND end_time > p_start_time)
-    );
-END;
-$$;
-
--- Step 4: Recreate the main function 'create_client_reservation_atomic' ensuring it calls helpers correctly.
-CREATE OR REPLACE FUNCTION public.create_client_reservation_atomic(
-    p_arena_id uuid,
-    p_quadra_id uuid,
-    p_date date,
-    p_start_time time,
-    p_end_time time,
-    p_total_price numeric,
-    p_payment_status public.payment_status_enum,
-    p_sport_type text,
-    p_credit_to_use numeric,
-    p_rented_items jsonb,
-    p_client_name text,
-    p_client_phone text
-)
-RETURNS uuid
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-    v_profile_id uuid := auth.uid();
-    v_aluno_id uuid;
-    v_reserva_id uuid;
-    v_gamification_enabled boolean;
-BEGIN
-    -- Ensure an 'aluno' profile exists for this user in this arena
-    v_aluno_id := ensure_aluno_profile(v_profile_id, p_arena_id, p_client_name, p_client_phone);
-
-    -- Check for duplicate reservations
-    IF check_duplicate_reservation(p_arena_id, p_quadra_id, p_date, p_start_time, p_end_time) THEN
-        RAISE EXCEPTION 'Horário indisponível. Já existe uma reserva neste período.';
+    -- Get client profile
+    SELECT * INTO v_aluno FROM public.alunos WHERE profile_id = auth.uid() AND arena_id = v_reserva.arena_id;
+    IF v_aluno IS NULL THEN
+        RAISE EXCEPTION 'Perfil de cliente não encontrado para esta arena.';
     END IF;
 
-    -- Insert the new reservation
-    INSERT INTO public.reservas (
-        arena_id, quadra_id, profile_id, client_name, client_phone, date, start_time, end_time,
-        total_price, payment_status, sport_type, credit_used, rented_items, type, status,
-        created_by_name
-    )
-    VALUES (
-        p_arena_id, p_quadra_id, v_profile_id, p_client_name, p_client_phone, p_date, p_start_time, p_end_time,
-        p_total_price, p_payment_status, p_sport_type, p_credit_to_use, p_rented_items, 'avulsa', 'confirmada',
-        p_client_name
-    )
-    RETURNING id INTO v_reserva_id;
+    -- Calculate hours until reservation
+    v_hours_until_reservation := EXTRACT(EPOCH FROM (v_reserva.date + v_reserva.start_time - now())) / 3600;
 
-    -- Deduct credit if used
-    IF p_credit_to_use > 0 THEN
-        UPDATE public.alunos
-        SET credit_balance = credit_balance - p_credit_to_use
-        WHERE id = v_aluno_id;
+    -- Calculate credit based on a simple policy (24h = 100%, 12h = 50%)
+    IF v_hours_until_reservation >= 24 THEN
+        v_credit_amount := v_reserva.total_price;
+    ELSIF v_hours_until_reservation >= 12 THEN
+        v_credit_amount := v_reserva.total_price * 0.5;
+    ELSE
+        v_credit_amount := 0;
+    END IF;
 
+    -- Update reservation status
+    UPDATE public.reservas
+    SET status = 'cancelada'
+    WHERE id = p_reserva_id;
+
+    -- Add credit if applicable
+    IF v_credit_amount > 0 THEN
+        -- Use the add_credit_to_aluno function to handle the credit update
+        PERFORM public.add_credit_to_aluno(v_aluno.id, v_reserva.arena_id, v_credit_amount);
+
+        -- Log the credit transaction
         INSERT INTO public.credit_transactions (aluno_id, arena_id, amount, type, description, related_reservation_id)
-        VALUES (v_aluno_id, p_arena_id, -p_credit_to_use, 'reservation_payment', 'Pagamento da reserva #' || substr(v_reserva_id::text, 1, 8), v_reserva_id);
+        VALUES (v_aluno.id, v_reserva.arena_id, v_credit_amount, 'cancellation_credit', 'Crédito por cancelamento da reserva #' || substr(p_reserva_id::text, 1, 8), p_reserva_id);
     END IF;
-
-    -- Add gamification points if the system is active
-    SELECT is_enabled INTO v_gamification_enabled FROM public.gamification_settings WHERE arena_id = p_arena_id;
-    IF v_gamification_enabled THEN
-        PERFORM add_gamification_points(v_aluno_id, 1, 'Reserva criada', 'reservation_completed', v_reserva_id, p_arena_id);
-    END IF;
-
-    RETURN v_reserva_id;
 END;
 $$;

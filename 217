@@ -1,61 +1,52 @@
 /*
-          # [Function] check_duplicate_reservation (version 3)
-          [This function checks for overlapping reservations. This version replaces the `OVERLAPS` operator with a manual comparison (`start_time < p_end_time AND end_time > p_start_time`) to correctly handle adjacent (back-to-back) reservations, preventing them from being flagged as conflicts.]
+# [Fix] Recreate Missing Function: create_my_aluno_profile
+[This script recreates the `create_my_aluno_profile` function, which appears to be missing from the database, causing other migration scripts to fail. This function allows a logged-in user to create their own client/student profile within a specific arena.]
 
-          ## Query Description: [This operation replaces the `check_duplicate_reservation` function to fix a logic error in how it detects time conflicts. The previous version incorrectly blocked valid back-to-back reservations. This is a safe, low-risk change that only affects server-side validation logic.]
-          
-          ## Metadata:
-          - Schema-Category: ["Structural"]
-          - Impact-Level: ["Low"]
-          - Requires-Backup: [false]
-          - Reversible: [true]
-          
-          ## Structure Details:
-          - Function: `check_duplicate_reservation(uuid, uuid, date, time, time, uuid)`
-          
-          ## Security Implications:
-          - RLS Status: [N/A]
-          - Policy Changes: [No]
-          - Auth Requirements: [N/A]
-          
-          ## Performance Impact:
-          - Indexes: [N/A]
-          - Triggers: [N/A]
-          - Estimated Impact: [None. The logic is equivalent in performance for this use case.]
-          */
-CREATE OR REPLACE FUNCTION public.check_duplicate_reservation(
-    p_arena_id uuid,
-    p_quadra_id uuid,
-    p_date date,
-    p_start_time time,
-    p_end_time time,
-    p_exclude_reserva_id uuid DEFAULT NULL
-)
-RETURNS boolean
+## Query Description: [This operation safely creates or replaces a database function. It has no impact on existing data and is designed to fix a migration error. It is a safe, structural change.]
+
+## Metadata:
+- Schema-Category: ["Structural"]
+- Impact-Level: ["Low"]
+- Requires-Backup: [false]
+- Reversible: [true]
+
+## Structure Details:
+- Function `public.create_my_aluno_profile(uuid)` will be created or replaced.
+
+## Security Implications:
+- RLS Status: [Not Applicable]
+- Policy Changes: [No]
+- Auth Requirements: [The function uses the caller's authentication context (`auth.uid()`) to create a profile for themselves.]
+
+## Performance Impact:
+- Indexes: [Not Applicable]
+- Triggers: [Not Applicable]
+- Estimated Impact: [None]
+*/
+
+CREATE OR REPLACE FUNCTION public.create_my_aluno_profile(p_arena_id uuid)
+RETURNS void
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
 AS $$
-DECLARE
-    v_conflict_exists boolean;
 BEGIN
-    SELECT EXISTS (
-        SELECT 1
-        FROM public.reservas
-        WHERE
-            arena_id = p_arena_id AND
-            quadra_id = p_quadra_id AND
-            date = p_date AND
-            status <> 'cancelada' AND
-            (p_exclude_reserva_id IS NULL OR id <> p_exclude_reserva_id) AND
-            -- Manual overlap check to correctly handle adjacent bookings
-            start_time < p_end_time AND
-            end_time > p_start_time
-    )
-    INTO v_conflict_exists;
-
-    IF v_conflict_exists THEN
-        RAISE EXCEPTION 'Conflito de horário: Já existe uma reserva para esta quadra neste horário.';
-    END IF;
-
-    RETURN v_conflict_exists;
+  -- Ensure an 'aluno' profile exists for the current user in the specified arena.
+  -- This is typically called when a user follows a new arena.
+  INSERT INTO public.alunos (arena_id, profile_id, name, email, phone, status, plan_name, join_date)
+  SELECT
+    p_arena_id,
+    p.id,
+    p.name,
+    p.email,
+    p.phone,
+    'ativo'::public.aluno_status_enum,
+    'Avulso',
+    CURRENT_DATE
+  FROM public.profiles p
+  WHERE p.id = auth.uid()
+  -- Use ON CONFLICT to do nothing if a profile already exists for this user/arena pair.
+  -- This makes the function safe to call multiple times.
+  ON CONFLICT (arena_id, profile_id) DO NOTHING;
 END;
 $$;

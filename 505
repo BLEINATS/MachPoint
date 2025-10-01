@@ -1,52 +1,67 @@
 /*
-# [Operation Name]
-Patch para Corrigir Erro de Reserva
+  # [Fix] Corrigir referência à coluna 'clientName' no gatilho de notificação de reserva
 
-## Query Description: [Este script aplica uma correção temporária para resolver um erro persistente ao salvar reservas. Ele adiciona uma coluna `is_active` à tabela de configurações de gamificação e a mantém sincronizada com a coluna correta `is_enabled`. Isso garante que qualquer parte do sistema que ainda use o nome antigo da coluna funcione corretamente, desbloqueando a funcionalidade de criação de reservas. Esta é uma medida de compatibilidade e não afeta os dados existentes.]
+  Este patch corrige um erro de digitação em uma função de gatilho (`trigger`) 
+  que é executada sempre que uma nova reserva é criada.
 
-## Metadata:
-- Schema-Category: "Structural"
-- Impact-Level: "Low"
-- Requires-Backup: false
-- Reversible: true
+  ## Descrição da Query:
+  A função `handle_new_reservation_notification` estava tentando acessar a coluna `clientname` 
+  (tudo em minúsculas) em vez de `"clientName"` (com aspas, respeitando o case). 
+  Isso causava um erro que impedia o salvamento de novas reservas.
 
-## Structure Details:
-- Tabela afetada: `public.gamification_settings`
-- Adiciona a coluna: `is_active` (BOOLEAN)
-- Cria a função de gatilho: `public.sync_gamification_is_active()`
-- Cria o gatilho: `on_gamification_settings_sync`
+  Esta migração:
+  1. Remove a função antiga e com defeito.
+  2. Recria a mesma função com a referência correta à coluna (`NEW."clientName"`).
+  
+  Esta operação é segura e não afeta dados existentes, apenas corrige o comportamento 
+  para futuras inserções de reservas.
 
-## Security Implications:
-- RLS Status: Não alterado
-- Policy Changes: Não
-- Auth Requirements: N/A
+  ## Metadados:
+  - Categoria do Esquema: "Estrutural"
+  - Nível de Impacto: "Baixo"
+  - Requer Backup: false
+  - Reversível: true (recriando a versão antiga da função)
 
-## Performance Impact:
-- Indexes: Nenhum
-- Triggers: Adiciona um gatilho leve na tabela `gamification_settings`. O impacto no desempenho é insignificante, pois esta tabela é raramente atualizada.
-- Estimated Impact: Mínimo
+  ## Detalhes da Estrutura:
+  - Objeto afetado: Função `handle_new_reservation_notification()`
+  - Tipo de objeto: `FUNCTION`
+
+  ## Implicações de Segurança:
+  - Status de RLS: Sem alterações
+  - Mudanças de Política: Não
+  - Requisitos de Autenticação: A função é executada com os privilégios do definidor (`SECURITY DEFINER`), o que é comum para gatilhos que precisam inserir em tabelas como `notificacoes`.
+
+  ## Impacto no Desempenho:
+  - Índices: Sem alterações
+  - Gatilhos: A função corrigida será executada pelo mesmo gatilho de antes.
+  - Impacto Estimado: Nenhum impacto negativo. O desempenho será o mesmo da função original, mas sem o erro.
 */
 
--- Adiciona a coluna 'is_active' se ela não existir, para evitar erros em execuções repetidas.
-ALTER TABLE public.gamification_settings ADD COLUMN IF NOT EXISTS is_active BOOLEAN;
+-- Remove a função antiga se ela existir para evitar conflitos
+DROP FUNCTION IF EXISTS public.handle_new_reservation_notification();
 
--- Sincroniza o valor da nova coluna com a coluna correta existente.
-UPDATE public.gamification_settings SET is_active = is_enabled;
-
--- Cria uma função de gatilho para manter as colunas 'is_active' e 'is_enabled' sincronizadas.
-CREATE OR REPLACE FUNCTION public.sync_gamification_is_active()
+-- Recria a função com a correção
+CREATE OR REPLACE FUNCTION public.handle_new_reservation_notification()
 RETURNS TRIGGER AS $$
 BEGIN
-    -- Garante que a coluna 'is_active' sempre reflita o valor de 'is_enabled'.
-    NEW.is_active = NEW.is_enabled;
-    RETURN NEW;
+  -- Insere uma notificação para o administrador da arena
+  INSERT INTO public.notificacoes (arena_id, message, type, link_to)
+  VALUES (
+    NEW.arena_id,
+    'Nova reserva de ' || NEW."clientName" || ' para ' || to_char(NEW.date, 'DD/MM') || ' às ' || NEW.start_time,
+    'nova_reserva',
+    '/reservas'
+  );
+  RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Remove o gatilho antigo, se existir, para garantir uma substituição limpa.
-DROP TRIGGER IF EXISTS on_gamification_settings_sync ON public.gamification_settings;
+-- Garante que o gatilho está configurado corretamente (opcional, mas bom para garantir)
+-- Primeiro, remove o gatilho antigo para evitar duplicatas
+DROP TRIGGER IF EXISTS on_new_reservation_notification ON public.reservas;
 
--- Cria o gatilho que executa a função de sincronização antes de qualquer inserção ou atualização.
-CREATE TRIGGER on_gamification_settings_sync
-BEFORE INSERT OR UPDATE ON public.gamification_settings
-FOR EACH ROW EXECUTE FUNCTION public.sync_gamification_is_active();
+-- Cria o gatilho para executar a função após cada nova reserva
+CREATE TRIGGER on_new_reservation_notification
+AFTER INSERT ON public.reservas
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_new_reservation_notification();

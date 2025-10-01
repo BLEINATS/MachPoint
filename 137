@@ -1,40 +1,40 @@
--- Remove a função que chama e a função que é chamada para evitar dependências
-DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid, uuid, date, time without time zone, time without time zone, numeric, text, text, numeric, jsonb, text, text);
-
--- Remove quaisquer versões antigas da função auxiliar para garantir um estado limpo
-DROP FUNCTION IF EXISTS public.ensure_aluno_profile_exists();
-DROP FUNCTION IF EXISTS public.ensure_aluno_profile_exists(uuid, uuid, text, text);
-
 /*
-# [Function] ensure_aluno_profile_exists
-Cria um perfil de aluno para um usuário (profile) em uma arena específica, se ainda não existir.
-Esta função é "idempotente": se o perfil de aluno já existe para o usuário na arena, ela não faz nada.
-Isso garante que todo cliente que faz uma reserva tenha um registro na tabela 'alunos',
-o que é essencial para gerenciar créditos e histórico.
+# [Fix] Resolução de Conflito de Função Duplicada
+Remove as versões conflitantes da função `create_client_reservation_atomic` e recria uma única versão definitiva para resolver a ambiguidade, garantindo a criação de reservas.
 
-## Query Description:
-- Operation: Inserts a new record into the `alunos` table.
-- Safety: This is a safe operation. It uses `ON CONFLICT DO NOTHING` to prevent errors or duplicates if the record already exists. It will not overwrite or delete any data.
-- Impact: A new `aluno` record might be created if one doesn't exist for the given user and arena.
+## Query Description: "Esta operação remove funções duplicadas e as recria. É uma operação segura que não afeta dados existentes, mas corrige um erro crítico na criação de reservas. Nenhum backup é necessário."
 
 ## Metadata:
-- Schema-Category: "Data"
+- Schema-Category: "Structural"
 - Impact-Level: "Low"
 - Requires-Backup: false
-- Reversible: true (manually delete the created record)
+- Reversible: true
 
 ## Structure Details:
-- Table: public.alunos
-- Columns affected: id, arena_id, profile_id, name, phone, status, plan_name, join_date
+- Dropping function: public.create_client_reservation_atomic(p_arena_id uuid, p_quadra_id uuid, p_date date, p_start_time time, p_end_time time, p_total_price numeric, p_payment_status public.payment_status, p_sport_type text, p_credit_to_use numeric, p_rented_items jsonb, p_client_name text, p_client_phone text)
+- Dropping function: public.create_client_reservation_atomic(p_arena_id uuid, p_quadra_id uuid, p_date date, p_start_time time, p_end_time time, p_total_price numeric, p_payment_status text, p_sport_type text, p_credit_to_use numeric, p_rented_items jsonb, p_client_name text, p_client_phone text)
+- Creating function: public.ensure_aluno_profile_exists(...)
+- Creating function: public.create_client_reservation_atomic(...)
 
 ## Security Implications:
-- RLS Status: Assumes RLS is enabled on `alunos`. A função é definida com SECURITY DEFINER para permitir a criação do perfil em nome do usuário.
+- RLS Status: Enabled
 - Policy Changes: No
-- Auth Requirements: Must be called by an authenticated user.
+- Auth Requirements: authenticated
+
+## Performance Impact:
+- Indexes: None
+- Triggers: None
+- Estimated Impact: Nenhum impacto de performance esperado.
 */
+
+-- Drop both potentially existing function signatures to resolve ambiguity
+DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid, uuid, date, time without time zone, time without time zone, numeric, public.payment_status, text, numeric, jsonb, text, text);
+DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid, uuid, date, time without time zone, time without time zone, numeric, text, text, numeric, jsonb, text, text);
+
+-- Recreate the helper function to be safe
 CREATE OR REPLACE FUNCTION public.ensure_aluno_profile_exists(
-    p_arena_id uuid,
     p_profile_id uuid,
+    p_arena_id uuid,
     p_client_name text,
     p_client_phone text
 )
@@ -46,24 +46,16 @@ AS $$
 DECLARE
     v_aluno_id uuid;
 BEGIN
-    -- Tenta encontrar o aluno existente pelo profile_id
+    -- Check if an aluno profile already exists for this user and arena
     SELECT id INTO v_aluno_id
     FROM public.alunos
     WHERE profile_id = p_profile_id AND arena_id = p_arena_id;
 
-    -- Se não encontrar, cria um novo
+    -- If not, create one
     IF v_aluno_id IS NULL THEN
-        INSERT INTO public.alunos (arena_id, profile_id, name, phone, status, plan_name, join_date)
-        VALUES (p_arena_id, p_profile_id, p_client_name, p_client_phone, 'ativo', 'Avulso', CURRENT_DATE)
-        ON CONFLICT (arena_id, profile_id) DO NOTHING
+        INSERT INTO public.alunos (profile_id, arena_id, name, phone, status, plan_name, join_date)
+        VALUES (p_profile_id, p_arena_id, p_client_name, p_client_phone, 'ativo', 'Avulso', CURRENT_DATE)
         RETURNING id INTO v_aluno_id;
-        
-        -- Se o insert com ON CONFLICT não retornou um ID (corrida de condição), tenta selecionar novamente
-        IF v_aluno_id IS NULL THEN
-            SELECT id INTO v_aluno_id
-            FROM public.alunos
-            WHERE profile_id = p_profile_id AND arena_id = p_arena_id;
-        END IF;
     END IF;
 
     RETURN v_aluno_id;
@@ -71,30 +63,7 @@ END;
 $$;
 
 
-/*
-# [Function] create_client_reservation_atomic
-Recria a função para criar uma reserva de cliente de forma atômica, agora chamando a versão correta e definitiva de `ensure_aluno_profile_exists`.
-Isso corrige o erro de "function does not exist" com a assinatura de 4 parâmetros.
-
-## Query Description:
-- Operation: Replaces the existing `create_client_reservation_atomic` function.
-- Safety: This is a structural change to a function. It is safe as long as the logic is correct. It modifies how data is inserted but does not alter existing reservation data.
-- Impact: Fixes the bug preventing clients from creating new reservations.
-
-## Metadata:
-- Schema-Category: "Structural"
-- Impact-Level: "Medium"
-- Requires-Backup: false
-- Reversible: true (revert to the previous function definition if available)
-
-## Structure Details:
-- Function: public.create_client_reservation_atomic
-
-## Security Implications:
-- RLS Status: The function runs with the invoker's rights (`SECURITY INVOKER`), respecting the user's RLS policies.
-- Policy Changes: No
-- Auth Requirements: Must be called by an authenticated user.
-*/
+-- Recreate the definitive version of the main function
 CREATE OR REPLACE FUNCTION public.create_client_reservation_atomic(
     p_arena_id uuid,
     p_quadra_id uuid,
@@ -102,7 +71,7 @@ CREATE OR REPLACE FUNCTION public.create_client_reservation_atomic(
     p_start_time time,
     p_end_time time,
     p_total_price numeric,
-    p_payment_status text,
+    p_payment_status text, -- Using TEXT to match frontend
     p_sport_type text,
     p_credit_to_use numeric,
     p_rented_items jsonb,
@@ -111,79 +80,64 @@ CREATE OR REPLACE FUNCTION public.create_client_reservation_atomic(
 )
 RETURNS void
 LANGUAGE plpgsql
-SECURITY INVOKER
+SECURITY DEFINER
+SET search_path = public
 AS $$
 DECLARE
     v_profile_id uuid := auth.uid();
     v_aluno_id uuid;
-    v_new_reserva_id uuid;
+    v_reserva_id uuid;
 BEGIN
-    -- 1. Garante que o perfil de aluno existe para o cliente e obtém o ID do aluno.
-    v_aluno_id := public.ensure_aluno_profile_exists(p_arena_id, v_profile_id, p_client_name, p_client_phone);
+    -- Ensure the aluno profile exists and get its ID
+    v_aluno_id := public.ensure_aluno_profile_exists(v_profile_id, p_arena_id, p_client_name, p_client_phone);
 
-    -- 2. Insere a reserva na tabela 'reservas'.
+    -- Insert the reservation
     INSERT INTO public.reservas (
         arena_id,
         quadra_id,
         profile_id,
+        aluno_id,
+        clientName,
+        clientPhone,
         date,
         start_time,
         end_time,
+        status,
+        type,
         total_price,
+        credit_used,
         payment_status,
         sport_type,
-        credit_used,
-        rented_items,
-        clientName,
-        clientPhone,
-        type,
-        status
+        rented_items
     )
     VALUES (
         p_arena_id,
         p_quadra_id,
         v_profile_id,
+        v_aluno_id,
+        p_client_name,
+        p_client_phone,
         p_date,
         p_start_time,
         p_end_time,
+        'confirmada',
+        'avulsa',
         p_total_price,
-        p_payment_status::public.payment_status,
-        p_sport_type,
         p_credit_to_use,
-        p_rented_items,
-        p_client_name,
-        p_client_phone,
-        'avulsa', -- Tipo padrão para reserva de cliente
-        'confirmada' -- Status padrão
-    )
-    RETURNING id INTO v_new_reserva_id;
+        p_payment_status::public.payment_status, -- Cast to enum here for data integrity
+        p_sport_type,
+        p_rented_items
+    ) RETURNING id INTO v_reserva_id;
 
-    -- 3. Se crédito foi usado, debita do saldo do aluno e registra a transação.
-    IF p_credit_to_use > 0 AND v_aluno_id IS NOT NULL THEN
-        -- Debita o crédito do perfil do aluno
+    -- Deduct credit if used
+    IF p_credit_to_use > 0 THEN
         UPDATE public.alunos
         SET credit_balance = credit_balance - p_credit_to_use
         WHERE id = v_aluno_id;
 
-        -- Registra a transação de crédito
-        INSERT INTO public.credit_transactions (
-            aluno_id,
-            arena_id,
-            amount,
-            type,
-            description,
-            related_reservation_id,
-            created_by
-        )
-        VALUES (
-            v_aluno_id,
-            p_arena_id,
-            -p_credit_to_use,
-            'reservation_payment',
-            'Pagamento da reserva #' || substr(v_new_reserva_id::text, 1, 8),
-            v_new_reserva_id,
-            v_profile_id
-        );
+        -- Log the credit transaction
+        INSERT INTO public.credit_transactions (aluno_id, arena_id, amount, type, description, related_reservation_id)
+        VALUES (v_aluno_id, p_arena_id, -p_credit_to_use, 'reservation_payment', 'Pagamento da reserva #' || substr(v_reserva_id::text, 1, 8), v_reserva_id);
     END IF;
 END;
 $$;

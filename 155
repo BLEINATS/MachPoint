@@ -1,46 +1,34 @@
 /*
-# [Fix] Recreate is_arena_admin function
-This operation drops and recreates the 'is_arena_admin' function to resolve a signature change error.
+# [SECURITY] Patch Search Path for Gamification Functions
+This migration enhances security by explicitly setting the `search_path` for gamification-related functions. This prevents potential vulnerabilities where a function could be tricked into executing malicious code from an untrusted schema.
 
-## Query Description: [This operation fixes a function definition error by first removing the old version and then creating the correct one. It is a safe, non-destructive operation that ensures the function for checking arena administration rights works as intended.]
+## Query Description:
+This operation alters existing functions to set a secure `search_path`. This ensures that the functions do not accidentally execute code from untrusted schemas. This is a non-destructive security enhancement.
 
 ## Metadata:
-- Schema-Category: ["Structural"]
-- Impact-Level: ["Low"]
-- Requires-Backup: [false]
-- Reversible: [false]
+- Schema-Category: "Security"
+- Impact-Level: "Low"
+- Requires-Backup: false
+- Reversible: true (by resetting the search_path)
 
 ## Structure Details:
-- Drops the function `public.is_arena_admin(uuid)`.
-- Recreates the function `public.is_arena_admin(uuid)` with a corrected parameter name and security settings.
+- Functions being altered:
+  - `public.handle_reservation_completion()`
+  - `public.add_gamification_points(uuid, integer, text)`
 
 ## Security Implications:
-- RLS Status: [No change]
-- Policy Changes: [No]
-- Auth Requirements: [None for migration, function requires auth context to run]
+- RLS Status: Unchanged
+- Policy Changes: No
+- Auth Requirements: None for this migration.
 
 ## Performance Impact:
-- Indexes: [No change]
-- Triggers: [No change]
-- Estimated Impact: [None]
+- Indexes: None
+- Triggers: None
+- Estimated Impact: Negligible performance impact.
 */
 
--- Drop the existing function to allow for signature changes
-DROP FUNCTION IF EXISTS public.is_arena_admin(uuid);
+-- Sets the search path for the trigger function that handles logic after a reservation is completed.
+ALTER FUNCTION public.handle_reservation_completion() SET search_path = public;
 
--- Recreate the function with the correct parameter name and security settings
-CREATE OR REPLACE FUNCTION public.is_arena_admin(p_arena_id uuid)
-RETURNS boolean
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = ''
-AS $$
-BEGIN
-  -- Check if the currently authenticated user is the owner of the specified arena
-  RETURN EXISTS (
-    SELECT 1
-    FROM public.arenas
-    WHERE id = p_arena_id AND owner_id = auth.uid()
-  );
-END;
-$$;
+-- Sets the search path for the function that manually adds or removes gamification points.
+ALTER FUNCTION public.add_gamification_points(uuid, integer, text) SET search_path = public;

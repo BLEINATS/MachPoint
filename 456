@@ -1,26 +1,26 @@
 /*
           # [Operation Name]
-          Fix Client Reservation Function Ambiguity
+          Security Hardening: Set search_path for handle_new_user_profile
 
-          ## Query Description: [This operation removes a duplicate, incorrect version of the function used to create client reservations. An older version of the function was causing a conflict, preventing the system from choosing the correct one to execute. Removing the outdated version will resolve the error and allow client reservations to be created successfully again. This change is safe and does not affect any stored data.]
+          ## Query Description: [This operation enhances security by setting a fixed `search_path` for the `handle_new_user_profile` function. This prevents potential hijacking attacks by ensuring the function does not use a mutable search path. This change has no impact on existing data or application functionality and is a recommended security best practice.]
           
           ## Metadata:
-          - Schema-Category: ["Structural"]
+          - Schema-Category: ["Security"]
           - Impact-Level: ["Low"]
           - Requires-Backup: [false]
-          - Reversible: [false]
+          - Reversible: [true]
           
           ## Structure Details:
-          - Removes the function `public.create_client_reservation_atomic(uuid, uuid, text, text, text, numeric, public.payment_status_enum, text, numeric, jsonb, text, text)`.
+          - Function `public.handle_new_user_profile()` will be altered.
           
           ## Security Implications:
-          - RLS Status: [Enabled]
+          - RLS Status: [Not Applicable]
           - Policy Changes: [No]
-          - Auth Requirements: [Authenticated user]
+          - Auth Requirements: [None]
           
           ## Performance Impact:
-          - Indexes: [None]
-          - Triggers: [None]
-          - Estimated Impact: [None. This is a metadata change to resolve a function signature conflict.]
+          - Indexes: [No Change]
+          - Triggers: [No Change]
+          - Estimated Impact: [None]
           */
-DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid, uuid, text, text, text, numeric, public.payment_status_enum, text, numeric, jsonb, text, text);
+ALTER FUNCTION public.handle_new_user_profile() SET search_path = '';

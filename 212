@@ -1,94 +1,139 @@
-/*
-          # [Operation Name]
-          Fix Gamification Points Update Function
+-- Drop conflicting/old functions first to ensure a clean slate.
+-- The specific signatures are taken from past error messages.
+DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid,uuid,date,character varying,character varying,numeric,public.payment_status_enum,character varying,numeric,jsonb,character varying,character varying);
+DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid,uuid,date,"time", "time",numeric,public.payment_status_enum,text,numeric,jsonb,text,text);
+DROP FUNCTION IF EXISTS public.ensure_aluno_profile(uuid,uuid,text,text);
+DROP FUNCTION IF EXISTS public.ensure_aluno_profile(uuid,uuid);
 
-          ## Query Description: [This operation will correct a syntax error in the function responsible for updating a user's gamification points and level. It safely removes the old trigger and function, then recreates them with the correct logic. This ensures that points and levels are calculated correctly after every transaction.]
-          
-          ## Metadata:
-          - Schema-Category: ["Structural"]
-          - Impact-Level: ["Low"]
-          - Requires-Backup: [false]
-          - Reversible: [false]
-          
-          ## Structure Details:
-          - Drops and recreates the 'on_gamification_transaction_change' trigger.
-          - Drops and recreates the 'update_aluno_gamification_points' function.
-          
-          ## Security Implications:
-          - RLS Status: [Not Applicable]
-          - Policy Changes: [No]
-          - Auth Requirements: [None]
-          
-          ## Performance Impact:
-          - Indexes: [No change]
-          - Triggers: [Recreated]
-          - Estimated Impact: [Negligible. This is a corrective action for a non-functional trigger.]
-          */
--- First, drop the dependent trigger
-DROP TRIGGER IF EXISTS on_gamification_transaction_change ON public.gamification_point_transactions;
-
--- Then, drop the existing function
-DROP FUNCTION IF EXISTS public.update_aluno_gamification_points();
-
--- Now, recreate the function with the correct syntax
-CREATE OR REPLACE FUNCTION public.update_aluno_gamification_points()
-RETURNS TRIGGER AS $$
+-- Recreate ensure_aluno_profile with the correct signature and logic.
+CREATE OR REPLACE FUNCTION public.ensure_aluno_profile(
+    p_profile_id uuid,
+    p_arena_id uuid,
+    p_name text,
+    p_phone text
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 DECLARE
-    v_aluno_id UUID;
-    v_total_points INT;
-    v_current_level_id UUID;
-    v_new_level_id UUID;
-    v_new_level_name TEXT;
+    v_aluno_id uuid;
 BEGIN
-    -- Determine the aluno_id from the inserted/updated/deleted row
-    IF TG_OP = 'DELETE' THEN
-        v_aluno_id := OLD.aluno_id;
-    ELSE
-        v_aluno_id := NEW.aluno_id;
-    END IF;
-
-    -- Recalculate the total points for the aluno
-    SELECT COALESCE(SUM(points), 0)
-    INTO v_total_points
-    FROM public.gamification_point_transactions
-    WHERE aluno_id = v_aluno_id;
-
-    -- Get the current level of the aluno
-    SELECT gamification_level_id
-    INTO v_current_level_id
+    -- Try to find an existing aluno record for this profile and arena
+    SELECT id INTO v_aluno_id
     FROM public.alunos
-    WHERE id = v_aluno_id;
+    WHERE profile_id = p_profile_id AND arena_id = p_arena_id;
 
-    -- Find the new correct level based on the new total points
-    SELECT id, name
-    INTO v_new_level_id, v_new_level_name
-    FROM public.gamification_levels
-    WHERE arena_id = (SELECT arena_id FROM public.alunos WHERE id = v_aluno_id LIMIT 1)
-    AND points_required <= v_total_points
-    ORDER BY points_required DESC
-    LIMIT 1;
-
-    -- Update the aluno's total points and level
-    UPDATE public.alunos
-    SET 
-        gamification_points = v_total_points,
-        gamification_level_id = v_new_level_id
-    WHERE id = v_aluno_id;
-
-    -- If the level has changed, create a notification
-    IF v_new_level_id IS DISTINCT FROM v_current_level_id AND v_new_level_id IS NOT NULL THEN
-        INSERT INTO public.notificacoes (profile_id, arena_id, message, type)
-        SELECT profile_id, arena_id, 'Parabéns! Você subiu para o nível ' || v_new_level_name || '!', 'gamification_level_up'
-        FROM public.alunos
-        WHERE id = v_aluno_id;
+    -- If not found, create a new one
+    IF v_aluno_id IS NULL THEN
+        INSERT INTO public.alunos (profile_id, arena_id, name, phone, status, join_date, plan_name)
+        VALUES (p_profile_id, p_arena_id, p_name, p_phone, 'ativo', CURRENT_DATE, 'Avulso')
+        RETURNING id INTO v_aluno_id;
     END IF;
 
-    RETURN NULL; -- result is ignored since this is an AFTER trigger
+    RETURN v_aluno_id;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$;
 
--- Finally, recreate the trigger
-CREATE TRIGGER on_gamification_transaction_change
-AFTER INSERT OR UPDATE OR DELETE ON public.gamification_point_transactions
-FOR EACH ROW
-EXECUTE FUNCTION public.update_aluno_gamification_points();
+-- Recreate create_client_reservation_atomic with the correct calls and logic.
+CREATE OR REPLACE FUNCTION public.create_client_reservation_atomic(
+    p_arena_id uuid,
+    p_quadra_id uuid,
+    p_date date,
+    p_start_time time,
+    p_end_time time,
+    p_total_price numeric,
+    p_payment_status public.payment_status_enum,
+    p_sport_type text,
+    p_credit_to_use numeric,
+    p_rented_items jsonb,
+    p_client_name text,
+    p_client_phone text
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_reserva_id uuid;
+    v_aluno_id uuid;
+    v_gamification_is_enabled boolean;
+    v_points_per_real integer;
+    v_points_per_reservation integer;
+    v_points_to_add integer;
+BEGIN
+    -- Ensure an aluno profile exists for the user in this arena
+    v_aluno_id := ensure_aluno_profile(auth.uid(), p_arena_id, p_client_name, p_client_phone);
+
+    -- Check for duplicate reservations
+    IF check_duplicate_reservation(p_quadra_id, p_date, p_start_time, p_end_time, null) THEN
+        RAISE EXCEPTION 'Horário já reservado.';
+    END IF;
+
+    -- Insert the reservation
+    INSERT INTO public.reservas (
+        arena_id,
+        quadra_id,
+        profile_id,
+        aluno_id,
+        date,
+        start_time,
+        end_time,
+        total_price,
+        payment_status,
+        sport_type,
+        credit_used,
+        rented_items,
+        clientName,
+        clientPhone,
+        created_by_name,
+        type,
+        status
+    )
+    VALUES (
+        p_arena_id,
+        p_quadra_id,
+        auth.uid(),
+        v_aluno_id,
+        p_date,
+        p_start_time,
+        p_end_time,
+        p_total_price,
+        p_payment_status,
+        p_sport_type,
+        p_credit_to_use,
+        p_rented_items,
+        p_client_name,
+        p_client_phone,
+        p_client_name,
+        'avulsa',
+        'confirmada'
+    )
+    RETURNING id INTO v_reserva_id;
+
+    -- Handle gamification points
+    SELECT is_enabled, points_per_real, points_per_reservation
+    INTO v_gamification_is_enabled, v_points_per_real, v_points_per_reservation
+    FROM public.gamification_settings
+    WHERE arena_id = p_arena_id;
+
+    IF v_gamification_is_enabled THEN
+        v_points_to_add := v_points_per_reservation + floor(p_total_price * v_points_per_real);
+        
+        IF v_points_to_add > 0 THEN
+            PERFORM add_gamification_points(
+                v_aluno_id,
+                v_points_to_add,
+                'Pontos por nova reserva',
+                'reservation_completed',
+                v_reserva_id,
+                p_arena_id
+            );
+        END IF;
+    END IF;
+
+    RETURN v_reserva_id;
+END;
+$$;

@@ -1,7 +1,7 @@
 /*
   # [Operation Name]
-  [This operation provides a definitive fix for the reservation creation error by correcting multiple function signature mismatches. It safely drops and recreates the reservation, duplicate-checking, and profile-creation functions to ensure their parameters are perfectly aligned.]
-  ## Query Description: [This script resolves a persistent and complex error by removing several conflicting database functions and recreating them with the correct structure. This is a critical fix to restore the client reservation functionality. The operation is designed to be safe and will not affect existing data, but it modifies core application logic.]
+  [This operation provides a definitive fix for the 'function is not unique' error by removing all conflicting versions of the reservation functions and recreating them with the correct, unambiguous signatures.]
+  ## Query Description: [This script resolves a persistent and complex error by dropping multiple conflicting database functions and recreating them with the correct structure. This is a critical fix to restore the client reservation functionality. The operation is designed to be safe and will not affect existing data, but it modifies core application logic.]
   ## Metadata:
   - Schema-Category: 'Structural'
   - Impact-Level: 'High'
@@ -18,7 +18,6 @@
   - Triggers: None
   - Estimated Impact: Negligible.
 */
-
 -- Step 1: Drop all known conflicting function signatures to ensure a clean slate.
 DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid,uuid,date,time,time,numeric,public.payment_status_enum,text,numeric,jsonb,text,text);
 DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid,uuid,date,character varying,character varying,numeric,public.payment_status_enum,character varying,numeric,jsonb,character varying,character varying);

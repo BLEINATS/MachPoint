@@ -1,51 +1,60 @@
 /*
-          # [Structural] Recria a função create_my_aluno_profile
-          [Esta operação recria a função 'create_my_aluno_profile' que estava ausente, causando erros em outras migrações. A função é essencial para que um cliente que segue uma arena possa criar seu próprio perfil de 'aluno' (cliente) dentro daquela arena, permitindo que ele faça reservas.]
+          # [Fix] Recreate Missing Profile Creation Function
+          [This script recreates the essential function `handle_new_user_profile` and its associated trigger. This function is responsible for automatically creating a user profile in the `public.profiles` table whenever a new user signs up through Supabase Auth. The previous error indicated this function was missing, breaking the user creation flow.]
 
-          ## Query Description: [Cria ou substitui a função para garantir que ela exista e esteja correta. A operação não afeta dados existentes e é segura de ser executada. Ela corrige um erro de "função não existe" que impedia a aplicação de outras migrações.]
+          ## Query Description: [This operation is safe and foundational. It ensures that new user accounts are correctly set up in the application's public schema, which is a standard and required practice for Supabase projects. There is no risk to existing data.]
           
           ## Metadata:
-          - Schema-Category: "Structural"
-          - Impact-Level: "Low"
-          - Requires-Backup: false
-          - Reversible: false
+          - Schema-Category: ["Structural"]
+          - Impact-Level: ["Low"]
+          - Requires-Backup: [false]
+          - Reversible: [true]
           
           ## Structure Details:
-          - Function: public.create_my_aluno_profile(p_arena_id uuid)
+          - Creates or replaces the function `public.handle_new_user_profile`.
+          - Creates or replaces the trigger `on_auth_user_created` on the `auth.users` table.
+          - Ensures the `public.user_role` enum type exists.
           
           ## Security Implications:
-          - RLS Status: Not Applicable
-          - Policy Changes: No
-          - Auth Requirements: authenticated
+          - RLS Status: [Not Applicable]
+          - Policy Changes: [No]
+          - Auth Requirements: [None]
           
           ## Performance Impact:
-          - Indexes: None
-          - Triggers: None
-          - Estimated Impact: [Nenhum impacto de performance esperado.]
+          - Indexes: [None]
+          - Triggers: [Adds a trigger to `auth.users`, which has a negligible performance impact on user creation.]
+          - Estimated Impact: [Low]
           */
-CREATE OR REPLACE FUNCTION public.create_my_aluno_profile(p_arena_id uuid)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  v_profile_id uuid := auth.uid();
-  v_name text;
-  v_email text;
-  v_phone text;
-BEGIN
-  -- Obter dados do perfil do usuário autenticado
-  SELECT name, email, phone
-  INTO v_name, v_email, v_phone
-  FROM public.profiles
-  WHERE id = v_profile_id;
 
-  -- Inserir na tabela de alunos se não existir um perfil para essa arena
-  INSERT INTO public.alunos (arena_id, profile_id, name, email, phone, status, plan_name, join_date)
-  VALUES (p_arena_id, v_profile_id, v_name, v_email, v_phone, 'ativo', 'Avulso', NOW())
-  ON CONFLICT (arena_id, profile_id) DO NOTHING;
-END;
+-- Step 1: Ensure the user_role enum type exists for profile creation.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
+        CREATE TYPE public.user_role AS ENUM ('cliente', 'admin_arena');
+    END IF;
+END$$;
+
+
+-- Step 2: Create or replace the function to handle new user profile creation.
+create or replace function public.handle_new_user_profile()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.profiles (id, name, email, role)
+  values (
+    new.id,
+    new.raw_user_meta_data->>'name',
+    new.email,
+    (new.raw_user_meta_data->>'role')::public.user_role
+  );
+  return new;
+end;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.create_my_aluno_profile(uuid) TO authenticated;
+-- Step 3: Create or replace the trigger on the auth.users table.
+-- This ensures the function is called automatically after a new user signs up.
+create or replace trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user_profile();

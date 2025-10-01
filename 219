@@ -1,98 +1,91 @@
 /*
-          # Criação da Tabela de Perfis e Gatilho de Sincronização
+          # Criação da Tabela de Quadras e Políticas de Segurança
+          Este script cria a tabela `quadras` para armazenar informações detalhadas sobre cada quadra da arena. Também implementa políticas de segurança (RLS) para garantir que apenas os proprietários das arenas possam gerenciar suas respectivas quadras.
 
-          Este script cria a tabela `profiles` para armazenar dados públicos dos usuários e configura um gatilho para popular automaticamente essa tabela sempre que um novo usuário for criado no sistema de autenticação do Supabase.
-
-          ## Query Description: 
-          - **Criação da Tabela `profiles`**: Armazena informações adicionais do usuário que não devem ficar na tabela `auth.users`, como nome, avatar e tipo de conta (role). A coluna `id` é uma chave estrangeira que referencia `auth.users.id`, garantindo a integridade dos dados.
-          - **Criação da Função `handle_new_user`**: Esta função é acionada após a criação de um novo usuário. Ela insere uma nova linha na tabela `public.profiles`, copiando o `id` e o `email` do novo usuário e extraindo metadados (como `role` e `name`) que foram passados durante o `signUp`.
-          - **Criação do Gatilho `on_auth_user_created`**: Associa a função `handle_new_user` ao evento de inserção na tabela `auth.users`. Isso automatiza a criação de perfis.
-          - **Habilitação de RLS**: Ativa a Segurança em Nível de Linha (RLS) na tabela `profiles` para garantir que os dados dos usuários sejam protegidos.
-
+          ## Query Description: [Este script é seguro e estrutural. Ele adiciona a tabela `quadras` e políticas de RLS. Não há risco de perda de dados existentes, pois a tabela é nova. A segurança de dados por arena (multi-tenancy) é o foco principal destas políticas.]
+          
           ## Metadata:
           - Schema-Category: "Structural"
-          - Impact-Level: "Medium"
+          - Impact-Level: "Low"
           - Requires-Backup: false
-          - Reversible: true (com a remoção manual do gatilho, função e tabela)
+          - Reversible: true
           
           ## Structure Details:
-          - **Tabela Adicionada**: `public.profiles`
-          - **Função Adicionada**: `public.handle_new_user()`
-          - **Gatilho Adicionado**: `on_auth_user_created` na tabela `auth.users`
+          - Tabela criada: `public.quadras`
+          - Colunas: id, arena_id, name, sport_type, status, capacity, price_per_hour, location, description, floor_type, is_covered, has_lighting, comodidades (jsonb), rules, horarios (jsonb), booking_interval_minutes, photos (text[]), created_at.
+          - Relacionamentos: Chave estrangeira de `quadras.arena_id` para `arenas.id`.
           
           ## Security Implications:
-          - RLS Status: Habilitado para `public.profiles`. Políticas de segurança precisarão ser criadas para permitir que os usuários acessem e modifiquem seus próprios perfis.
-          - Policy Changes: Não
-          - Auth Requirements: Acesso para criar tabelas, funções e gatilhos.
+          - RLS Status: Enabled
+          - Policy Changes: Yes
+          - Policies Adicionadas:
+            - `Allow authenticated read access`: Permite que qualquer usuário logado veja as quadras (para páginas públicas).
+            - `Allow owners to insert courts`: Permite que donos de arena criem quadras apenas para suas arenas.
+            - `Allow owners to update their own courts`: Permite que donos de arena atualizem apenas suas próprias quadras.
+            - `Allow owners to delete their own courts`: Permite que donos de arena excluam apenas suas próprias quadras.
+          - Auth Requirements: Autenticação via Supabase Auth é necessária para todas as operações de escrita.
           
           ## Performance Impact:
-          - Indexes: Chave primária em `profiles.id` é criada automaticamente.
-          - Triggers: Adiciona um pequeno overhead na criação de usuários, o que é desprezível.
-          - Estimated Impact: Baixo.
+          - Indexes: Chave primária em `id` e chave estrangeira em `arena_id` são indexadas automaticamente.
+          - Triggers: Nenhum.
+          - Estimated Impact: Baixo. A performance de leitura pode ser otimizada adicionando índices em colunas frequentemente filtradas no futuro, se necessário.
           */
 
--- 1. Create public.profiles table
-CREATE TABLE public.profiles (
-  id UUID NOT NULL PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  name VARCHAR(255),
-  avatar_url VARCHAR(255),
-  role VARCHAR(50) DEFAULT 'cliente'::character varying,
-  arena_id UUID,
-  client_type VARCHAR(50),
-  birth_date DATE,
-  gender VARCHAR(50),
-  created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-  updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+-- Cria a tabela 'quadras'
+CREATE TABLE public.quadras (
+    id uuid NOT NULL DEFAULT gen_random_uuid(),
+    arena_id uuid NOT NULL,
+    name text NOT NULL,
+    sport_type text,
+    status text NOT NULL DEFAULT 'ativa'::text,
+    capacity integer NOT NULL DEFAULT 4,
+    price_per_hour numeric NOT NULL DEFAULT 0,
+    location text,
+    description text,
+    floor_type text,
+    is_covered boolean NOT NULL DEFAULT false,
+    has_lighting boolean NOT NULL DEFAULT false,
+    comodidades jsonb NOT NULL DEFAULT '{}'::jsonb,
+    rules text,
+    horarios jsonb NOT NULL DEFAULT '{}'::jsonb,
+    booking_interval_minutes integer NOT NULL DEFAULT 60,
+    photos text[] NOT NULL DEFAULT ARRAY[]::text[],
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT quadras_pkey PRIMARY KEY (id),
+    CONSTRAINT quadras_arena_id_fkey FOREIGN KEY (arena_id) REFERENCES public.arenas(id) ON DELETE CASCADE
 );
-COMMENT ON TABLE public.profiles IS 'Stores public profile information for each user.';
 
--- 2. Create a function to handle new user creation
-CREATE OR REPLACE FUNCTION public.handle_new_user()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER SET search_path = public
-AS $$
-BEGIN
-  INSERT INTO public.profiles (id, name, role, client_type, arena_id)
-  VALUES (
-    NEW.id,
-    NEW.raw_user_meta_data->>'name',
-    NEW.raw_user_meta_data->>'role',
-    NEW.raw_user_meta_data->>'clientType',
-    (NEW.raw_user_meta_data->>'arena_id')::UUID
-  );
-  RETURN NEW;
-END;
-$$;
+-- Adiciona comentários para clareza
+COMMENT ON TABLE public.quadras IS 'Armazena as informações das quadras de cada arena.';
+COMMENT ON COLUMN public.quadras.booking_interval_minutes IS 'Duração padrão da reserva em minutos';
+COMMENT ON COLUMN public.quadras.photos IS 'Array de URLs das fotos da quadra';
+COMMENT ON COLUMN public.quadras.comodidades IS 'Objeto JSON com as comodidades disponíveis (ex: vestiario, chuveiro)';
+COMMENT ON COLUMN public.quadras.horarios IS 'Objeto JSON com os horários de funcionamento';
 
--- 3. Create a trigger to call the function on new user signup
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+-- Habilita Row Level Security
+ALTER TABLE public.quadras ENABLE ROW LEVEL SECURITY;
 
--- 4. Enable Row Level Security (RLS) on the profiles table
-ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
-
--- 5. Create policies for profiles table
-
--- Policy: Allow users to read their own profile
-CREATE POLICY "Allow individual read access"
-ON public.profiles
+-- Permite que usuários autenticados leiam todas as quadras (para páginas públicas)
+CREATE POLICY "Allow authenticated read access" ON public.quadras
 FOR SELECT
-USING (auth.uid() = id);
+TO authenticated
+USING (true);
 
--- Policy: Allow users to update their own profile
-CREATE POLICY "Allow individual update access"
-ON public.profiles
+-- Permite que donos de arenas insiram quadras apenas em suas próprias arenas
+CREATE POLICY "Allow owners to insert courts" ON public.quadras
+FOR INSERT
+TO authenticated
+WITH CHECK (auth.uid() = (SELECT owner_id FROM public.arenas WHERE id = arena_id));
+
+-- Permite que donos de arenas atualizem apenas suas próprias quadras
+CREATE POLICY "Allow owners to update their own courts" ON public.quadras
 FOR UPDATE
-USING (auth.uid() = id)
-WITH CHECK (auth.uid() = id);
+TO authenticated
+USING (auth.uid() = (SELECT owner_id FROM public.arenas WHERE id = arena_id))
+WITH CHECK (auth.uid() = (SELECT owner_id FROM public.arenas WHERE id = arena_id));
 
--- Grant usage on the public schema to anon and authenticated roles
-GRANT USAGE ON SCHEMA public TO anon, authenticated;
-
--- Grant select permission on the profiles table to anon and authenticated roles
-GRANT SELECT ON TABLE public.profiles TO anon, authenticated;
-
--- Grant insert, update, delete permissions on the profiles table to the authenticated role
-GRANT INSERT, UPDATE, DELETE ON TABLE public.profiles TO authenticated;
+-- Permite que donos de arenas deletem apenas suas próprias quadras
+CREATE POLICY "Allow owners to delete their own courts" ON public.quadras
+FOR DELETE
+TO authenticated
+USING (auth.uid() = (SELECT owner_id FROM public.arenas WHERE id = arena_id));

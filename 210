@@ -1,55 +1,74 @@
-/*
-          # [Function Security] Secure handle_new_user_profile Function
-          [This operation secures the handle_new_user_profile function by setting a fixed search_path, preventing potential hijacking vulnerabilities.]
+-- Drop the trigger first to remove dependency
+DROP TRIGGER IF EXISTS on_gamification_transaction_change ON public.gamification_point_transactions;
 
-          ## Query Description: [This script temporarily removes the trigger that automatically creates a user profile, updates the underlying function to make it more secure, and then recreates the trigger. This is a safe, non-destructive operation.]
-          
-          ## Metadata:
-          - Schema-Category: ["Security"]
-          - Impact-Level: ["Low"]
-          - Requires-Backup: [false]
-          - Reversible: [true]
-          
-          ## Structure Details:
-          - Function `public.handle_new_user_profile` will be updated.
-          - Trigger `on_auth_user_created` on table `auth.users` will be temporarily dropped and recreated.
-          
-          ## Security Implications:
-          - RLS Status: [No Change]
-          - Policy Changes: [No]
-          - Auth Requirements: [Admin privileges required to run this script.]
-          
-          ## Performance Impact:
-          - Indexes: [No Change]
-          - Triggers: [Recreated]
-          - Estimated Impact: [Negligible. This is a one-time structural change with no impact on query performance.]
-          */
-
--- Drop the existing trigger to allow function replacement
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+-- Drop the existing function
+DROP FUNCTION IF EXISTS public.update_aluno_gamification_points();
 
 -- Recreate the function with security settings
-CREATE OR REPLACE FUNCTION public.handle_new_user_profile()
-RETURNS trigger
+CREATE OR REPLACE FUNCTION public.update_aluno_gamification_points()
+RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp;
 AS $$
+DECLARE
+    v_total_points INT;
+    v_current_level_id UUID;
+    v_new_level_id UUID;
+    v_new_level_name TEXT;
+    v_aluno_id UUID;
 BEGIN
-  INSERT INTO public.profiles (id, name, email, role, clientType)
-  VALUES (
-    NEW.id,
-    NEW.raw_user_meta_data ->> 'name',
-    NEW.email,
-    (NEW.raw_user_meta_data ->> 'role')::public.user_role,
-    (NEW.raw_user_meta_data ->> 'clientType')::public.client_type
-  );
-  RETURN NEW;
+    -- Determine which ID to use based on the operation
+    IF TG_OP = 'DELETE' THEN
+        v_aluno_id := OLD.aluno_id;
+    ELSE
+        v_aluno_id := NEW.aluno_id;
+    END IF;
+
+    -- Recalculate the total points for the aluno
+    SELECT COALESCE(SUM(points), 0)
+    INTO v_total_points
+    FROM public.gamification_point_transactions
+    WHERE aluno_id = v_aluno_id;
+
+    -- Get the current level of the aluno
+    SELECT gamification_level_id
+    INTO v_current_level_id
+    FROM public.alunos
+    WHERE id = v_aluno_id;
+
+    -- Find the new correct level based on the new total points
+    SELECT id, name
+    INTO v_new_level_id, v_new_level_name
+    FROM public.gamification_levels
+    WHERE arena_id = (SELECT arena_id FROM public.alunos WHERE id = v_aluno_id LIMIT 1)
+      AND points_required <= v_total_points
+    ORDER BY points_required DESC
+    LIMIT 1;
+
+    -- Update the aluno's total points and level
+    UPDATE public.alunos
+    SET 
+        gamification_points = v_total_points,
+        gamification_level_id = v_new_level_id
+    WHERE id = v_aluno_id;
+
+    -- If the level has changed, create a notification
+    IF v_new_level_id IS DISTINCT FROM v_current_level_id AND v_new_level_id IS NOT NULL THEN
+        INSERT INTO public.notificacoes (profile_id, arena_id, message, type)
+        SELECT profile_id, arena_id, 'Parabéns! Você subiu para o nível ' || v_new_level_name || '!', 'gamification_level_up'
+        FROM public.alunos
+        WHERE id = v_aluno_id AND profile_id IS NOT NULL;
+    END IF;
+
+    RETURN NULL; -- result is ignored since this is an AFTER trigger
 END;
 $$;
 
 -- Recreate the trigger
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW
-  EXECUTE FUNCTION public.handle_new_user_profile();
+CREATE TRIGGER on_gamification_transaction_change
+AFTER INSERT OR UPDATE OR DELETE ON public.gamification_point_transactions
+FOR EACH ROW EXECUTE FUNCTION public.update_aluno_gamification_points();
+
+-- Grant execute permission
+GRANT EXECUTE ON FUNCTION public.update_aluno_gamification_points() TO authenticated;

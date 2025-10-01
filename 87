@@ -1,66 +1,75 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, AlertTriangle } from 'lucide-react';
-import Button from '../Forms/Button';
+import { CheckCircle, AlertTriangle, Info, X } from 'lucide-react';
+import { ToastMessage } from '../../context/ToastContext';
 
-interface ConfirmationModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onConfirm: () => void;
-  title: string;
-  message: React.ReactNode;
-  confirmText?: string;
-  cancelText?: string;
-  icon?: React.ReactNode;
+interface ToastProps {
+  message: ToastMessage;
+  onDismiss: (id: string) => void;
 }
 
-const ConfirmationModal: React.FC<ConfirmationModalProps> = ({
-  isOpen,
-  onClose,
-  onConfirm,
-  title,
-  message,
-  confirmText = 'Confirmar',
-  cancelText = 'Cancelar',
-  icon = <AlertTriangle className="h-10 w-10 text-red-500" />,
-}) => {
+const icons = {
+  success: <CheckCircle className="h-6 w-6 text-green-500" />,
+  error: <AlertTriangle className="h-6 w-6 text-red-500" />,
+  info: <Info className="h-6 w-6 text-blue-500" />,
+};
+
+const Toast: React.FC<ToastProps> = ({ message, onDismiss }) => {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      onDismiss(message.id);
+    }, 5000);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [message.id, onDismiss]);
+
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50" onClick={onClose}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.8, y: 50 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.8, y: 50 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            className="bg-white dark:bg-brand-gray-900 rounded-2xl w-full max-w-md shadow-2xl text-center p-8 relative"
-            onClick={e => e.stopPropagation()}
-          >
-            <button onClick={onClose} className="absolute top-4 right-4 p-1 rounded-full hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
-              <X className="h-5 w-5 text-brand-gray-500" />
-            </button>
-            <div className="mx-auto flex items-center justify-center h-20 w-20 rounded-full bg-red-100 dark:bg-red-900/50 mb-6">
-              {icon}
-            </div>
-            <h3 className="text-2xl font-bold text-brand-gray-900 dark:text-white">
-              {title}
-            </h3>
-            <div className="text-brand-gray-600 dark:text-brand-gray-400 mt-4 text-sm">
-              {message}
-            </div>
-            <div className="mt-8 flex justify-center gap-4">
-              <Button onClick={onClose} variant="outline" className="w-full" size="lg">
-                {cancelText}
-              </Button>
-              <Button onClick={onConfirm} className="w-full bg-red-600 hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600 focus:ring-red-500" size="lg">
-                {confirmText}
-              </Button>
-            </div>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
+    <motion.div
+      layout
+      initial={{ opacity: 0, y: 50, scale: 0.3 }}
+      animate={{ opacity: 1, y: 0, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.5, transition: { duration: 0.2 } }}
+      className="mb-4 flex w-full max-w-sm items-start space-x-4 rounded-lg bg-white dark:bg-brand-gray-800 p-4 shadow-lg ring-1 ring-black ring-opacity-5"
+    >
+      <div className="flex-shrink-0">{icons[message.type]}</div>
+      <div className="flex-1">
+        <p className="text-sm font-medium text-brand-gray-900 dark:text-white">{message.message}</p>
+      </div>
+      <div className="flex-shrink-0">
+        <button
+          onClick={() => onDismiss(message.id)}
+          className="inline-flex rounded-md bg-white dark:bg-brand-gray-800 text-brand-gray-400 hover:text-brand-gray-500 focus:outline-none focus:ring-2 focus:ring-brand-blue-500 focus:ring-offset-2"
+        >
+          <span className="sr-only">Close</span>
+          <X className="h-5 w-5" />
+        </button>
+      </div>
+    </motion.div>
   );
 };
 
-export default ConfirmationModal;
+interface ToastContainerProps {
+  messages: ToastMessage[];
+  onDismiss: (id: string) => void;
+}
+
+const ToastContainer: React.FC<ToastContainerProps> = ({ messages, onDismiss }) => {
+  return (
+    <div
+      aria-live="assertive"
+      className="pointer-events-none fixed inset-0 z-50 flex items-end px-4 py-6 sm:items-start sm:p-6"
+    >
+      <div className="flex w-full flex-col items-center space-y-4 sm:items-end">
+        <AnimatePresence>
+          {messages.map(message => (
+            <Toast key={message.id} message={message} onDismiss={onDismiss} />
+          ))}
+        </AnimatePresence>
+      </div>
+    </div>
+  );
+};
+
+export default ToastContainer;

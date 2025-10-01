@@ -1,111 +1,52 @@
 /*
-# [Critical] Definitive Fix for Gamification Triggers
-This migration corrects a persistent bug in multiple database functions related to the gamification system that was preventing reservations from being saved correctly. It replaces two functions, ensuring they reference the correct column (`is_enabled`) in the gamification settings and hardens their security by setting a fixed `search_path`.
+# [Operation Name]
+Patch para Corrigir Erro de Reserva
 
-## Query Description:
-- **Operation:** Replaces the `handle_reservation_completion` and `update_aluno_gamification_points` functions.
-- **Impact:** This is a non-destructive operation that only modifies function code. It fixes the bug that was causing reservation creations to fail. Existing data is safe.
-- **Risks:** Low risk. The change is isolated to the function's logic.
-- **Safety:** It is safe to run this migration. No backup is strictly required for this change, but regular backups are always recommended.
+## Query Description: [Este script aplica uma correção temporária para resolver um erro persistente ao salvar reservas. Ele adiciona uma coluna `is_active` à tabela de configurações de gamificação e a mantém sincronizada com a coluna correta `is_enabled`. Isso garante que qualquer parte do sistema que ainda use o nome antigo da coluna funcione corretamente, desbloqueando a funcionalidade de criação de reservas. Esta é uma medida de compatibilidade e não afeta os dados existentes.]
 
 ## Metadata:
 - Schema-Category: "Structural"
 - Impact-Level: "Low"
 - Requires-Backup: false
-- Reversible: true (by restoring the previous function definitions)
+- Reversible: true
 
 ## Structure Details:
-- Function `public.handle_reservation_completion` will be dropped and recreated with the correct logic.
-- Function `public.update_aluno_gamification_points` will be created/recreated with the correct logic.
+- Tabela afetada: `public.gamification_settings`
+- Adiciona a coluna: `is_active` (BOOLEAN)
+- Cria a função de gatilho: `public.sync_gamification_is_active()`
+- Cria o gatilho: `on_gamification_settings_sync`
 
 ## Security Implications:
-- RLS Status: Not affected.
-- Policy Changes: No.
-- Auth Requirements: The functions are defined to run with the privileges of the user that calls them (`SECURITY INVOKER`).
-- **Security Hardening:** Both functions' `search_path` is explicitly set to `public`, mitigating potential risks associated with mutable search paths (as pointed out by security advisories).
+- RLS Status: Não alterado
+- Policy Changes: Não
+- Auth Requirements: N/A
 
 ## Performance Impact:
-- Indexes: None.
-- Triggers: The functions are called by triggers, but the triggers themselves are not modified.
-- Estimated Impact: Negligible performance impact. The fix is a simple column name change.
+- Indexes: Nenhum
+- Triggers: Adiciona um gatilho leve na tabela `gamification_settings`. O impacto no desempenho é insignificante, pois esta tabela é raramente atualizada.
+- Estimated Impact: Mínimo
 */
-CREATE OR REPLACE FUNCTION public.handle_reservation_completion()
+
+-- Adiciona a coluna 'is_active' se ela não existir, para evitar erros em execuções repetidas.
+ALTER TABLE public.gamification_settings ADD COLUMN IF NOT EXISTS is_active BOOLEAN;
+
+-- Sincroniza o valor da nova coluna com a coluna correta existente.
+UPDATE public.gamification_settings SET is_active = is_enabled;
+
+-- Cria uma função de gatilho para manter as colunas 'is_active' e 'is_enabled' sincronizadas.
+CREATE OR REPLACE FUNCTION public.sync_gamification_is_active()
 RETURNS TRIGGER AS $$
-DECLARE
-    v_gamification_is_enabled BOOLEAN;
-    v_points_per_real INT;
-    v_points_per_reservation INT;
-    v_points_to_add INT;
 BEGIN
-    -- Check if gamification is enabled for the arena
-    SELECT is_enabled, points_per_real, points_per_reservation
-    INTO v_gamification_is_enabled, v_points_per_real, v_points_per_reservation
-    FROM public.gamification_settings
-    WHERE arena_id = NEW.arena_id;
-
-    -- If gamification is not enabled or no settings found, exit
-    IF NOT FOUND OR v_gamification_is_enabled IS NOT TRUE THEN
-        RETURN NEW;
-    END IF;
-
-    -- Only award points if the reservation status is changing to 'realizada'
-    IF NEW.status = 'realizada' AND OLD.status <> 'realizada' THEN
-        -- Calculate points based on price and a flat rate per reservation
-        v_points_to_add := (NEW.total_price * v_points_per_real) + v_points_per_reservation;
-
-        -- Ensure we have points to add
-        IF v_points_to_add > 0 AND NEW.profile_id IS NOT NULL THEN
-            -- Add points to the user's gamification score
-            UPDATE public.alunos
-            SET gamification_points = COALESCE(gamification_points, 0) + v_points_to_add
-            WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id;
-
-            -- Log the transaction if the user was updated
-            IF FOUND THEN
-                INSERT INTO public.gamification_point_transactions(arena_id, aluno_id, points, type, description, related_reservation_id)
-                SELECT NEW.arena_id, id, v_points_to_add, 'reservation_completed', 'Pontos por reserva concluída', NEW.id
-                FROM public.alunos
-                WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id;
-            END IF;
-        END IF;
-    END IF;
-
+    -- Garante que a coluna 'is_active' sempre reflita o valor de 'is_enabled'.
+    NEW.is_active = NEW.is_enabled;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY INVOKER;
+$$ LANGUAGE plpgsql;
 
-ALTER FUNCTION public.handle_reservation_completion() SET search_path = public;
+-- Remove o gatilho antigo, se existir, para garantir uma substituição limpa.
+DROP TRIGGER IF EXISTS on_gamification_settings_sync ON public.gamification_settings;
 
-
-CREATE OR REPLACE FUNCTION public.update_aluno_gamification_points()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_gamification_settings RECORD;
-    v_points_to_add INT;
-BEGIN
-    -- Check if the reservation is being marked as 'realizada'
-    IF NEW.status = 'realizada' AND OLD.status <> 'realizada' THEN
-        -- Get gamification settings for the arena
-        SELECT is_enabled, points_per_reservation, points_per_real
-        INTO v_gamification_settings
-        FROM public.gamification_settings
-        WHERE arena_id = NEW.arena_id;
-
-        -- Proceed only if gamification is enabled
-        IF FOUND AND v_gamification_settings.is_enabled THEN
-            -- Calculate points
-            v_points_to_add := v_gamification_settings.points_per_reservation + (NEW.total_price * v_gamification_settings.points_per_real);
-
-            IF v_points_to_add > 0 AND NEW.profile_id IS NOT NULL THEN
-                -- Update aluno's points
-                UPDATE public.alunos
-                SET gamification_points = COALESCE(gamification_points, 0) + v_points_to_add
-                WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id;
-            END IF;
-        END IF;
-    END IF;
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY INVOKER;
-
-ALTER FUNCTION public.update_aluno_gamification_points() SET search_path = public;
+-- Cria o gatilho que executa a função de sincronização antes de qualquer inserção ou atualização.
+CREATE TRIGGER on_gamification_settings_sync
+BEFORE INSERT OR UPDATE ON public.gamification_settings
+FOR EACH ROW EXECUTE FUNCTION public.sync_gamification_is_active();

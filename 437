@@ -1,56 +1,28 @@
 /*
-          # [SECURITY] Secure New User Trigger
-          [This operation secures the function responsible for creating a user profile after signup by explicitly setting its search_path. It also recreates the trigger that calls it.]
+          # [Security Enhancement] Set Search Path for Functions
+          [This operation enhances security by setting a fixed search_path for several database functions, mitigating potential risks associated with mutable search paths.]
 
-          ## Query Description: [This operation will briefly drop and recreate the trigger and function that automatically create a user's profile. This is a safe, standard procedure to apply security settings and should not impact existing users or data. No backup is required.]
-          
+          ## Query Description: [This operation alters existing database functions to explicitly define their search path. This is a safe, non-destructive security best practice that prevents certain types of SQL injection attacks. It does not affect user data or application functionality.]
+
           ## Metadata:
-          - Schema-Category: ["Security", "Structural"]
+          - Schema-Category: ["Security", "Safe"]
           - Impact-Level: ["Low"]
-          - Requires-Backup: [false]
-          - Reversible: [true]
-          
+          - Requires-Backup: false
+          - Reversible: true
+
           ## Structure Details:
-          - Function: `public.handle_new_user_profile()`
-          - Trigger: `on_auth_user_created` on `auth.users`
-          
+          - Functions affected: public.add_gamification_points, public.handle_client_cancellation_final
+
           ## Security Implications:
-          - RLS Status: [Not Applicable]
+          - RLS Status: [No Change]
           - Policy Changes: [No]
           - Auth Requirements: [None]
-          
+
           ## Performance Impact:
-          - Indexes: [None]
-          - Triggers: [Modified]
-          - Estimated Impact: [Negligible. The trigger is only fired on new user creation.]
+          - Indexes: [No Change]
+          - Triggers: [No Change]
+          - Estimated Impact: [None. This is a metadata change that improves security without performance overhead.]
           */
+ALTER FUNCTION public.add_gamification_points(p_aluno_id uuid, p_points_to_add integer, p_description text) SET search_path = public;
 
--- Drop the existing trigger first to remove dependency
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
-
--- Drop the function
-DROP FUNCTION IF EXISTS public.handle_new_user_profile();
-
--- Recreate the function with security settings
-CREATE OR REPLACE FUNCTION public.handle_new_user_profile()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-BEGIN
-  INSERT INTO public.profiles (id, email, name, role)
-  VALUES (
-    NEW.id,
-    NEW.email,
-    NEW.raw_user_meta_data->>'name',
-    (NEW.raw_user_meta_data->>'role')::public.user_role
-  );
-  RETURN NEW;
-END;
-$$;
-
--- Recreate the trigger
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW
-  EXECUTE FUNCTION public.handle_new_user_profile();
+ALTER FUNCTION public.handle_client_cancellation_final(p_reserva_id uuid) SET search_path = public;

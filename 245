@@ -1,53 +1,54 @@
 /*
-# [Feature] Sistema de Aluguel de Itens
-[Este script prepara o banco de dados para suportar o aluguel de itens (raquetes, bolas, etc.) junto com as reservas.]
-## Query Description: [Esta operação adiciona uma nova tabela `rental_items` para o catálogo de itens e uma coluna `rented_items` (JSONB) na tabela `reservas` para registrar os itens alugados. Não há perda de dados, apenas adição de novas estruturas.]
+# [Refactor] Sistema de Crédito para Clientes
+[Este script refatora o sistema de crédito para associá-lo diretamente aos registros de 'alunos' (clientes), em vez de 'profiles' (usuários), tornando-o independente da necessidade de um cliente ter uma conta de usuário.]
+
+## Query Description: [Esta operação adiciona uma coluna `credit_balance` à tabela `alunos` e uma coluna `aluno_id` à tabela `credit_transactions`. Ela também cria uma nova função `add_credit_to_aluno` para gerenciar o saldo de forma segura. Nenhuma perda de dados está prevista.]
+
 ## Metadata:
 - Schema-Category: ["Structural"]
-- Impact-Level: ["Low"]
-- Requires-Backup: [false]
-- Reversible: [true]
-## Structure Details:
-- Tabela Adicionada: `public.rental_items`
-- Coluna Adicionada: `rented_items` em `public.reservas`
-## Security Implications:
-- RLS Status: [Enabled]
-- Policy Changes: [Yes]
-- Auth Requirements: [As políticas de RLS garantirão que apenas o dono da arena possa gerenciar os itens de aluguel.]
-## Performance Impact:
-- Indexes: [Added on foreign keys]
-- Triggers: [None]
-- Estimated Impact: [Baixo. Novas tabelas e colunas com índices não devem impactar o desempenho existente.]
+- Impact-Level: ["Medium"]
+- Requires-Backup: [true]
+- Reversible: [false]
 */
--- Passo 1: Criar a tabela para os itens de aluguel
-CREATE TABLE IF NOT EXISTS public.rental_items (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    arena_id UUID NOT NULL REFERENCES public.arenas(id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    price NUMERIC(10, 2) NOT NULL DEFAULT 0,
-    stock INT NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
--- Passo 2: Habilitar RLS e criar índices
-ALTER TABLE public.rental_items ENABLE ROW LEVEL SECURITY;
-CREATE INDEX IF NOT EXISTS idx_rental_items_arena_id ON public.rental_items(arena_id);
--- Passo 3: Adicionar a coluna para armazenar itens alugados na reserva
-ALTER TABLE public.reservas
-ADD COLUMN IF NOT EXISTS rented_items JSONB;
--- Passo 4: Definir políticas de segurança para a nova tabela
--- Permite que donos de arena gerenciem (leiam, insiram, atualizem, excluam) seus próprios itens.
-CREATE POLICY "Allow arena owners to manage their rental items"
-ON public.rental_items
-FOR ALL
-USING (
-  EXISTS (
-    SELECT 1
-    FROM public.arenas
-    WHERE public.arenas.id = public.rental_items.arena_id AND public.arenas.owner_id = auth.uid()
-  )
-);
--- Permite que qualquer pessoa leia os itens de uma arena (para exibir no modal de reserva).
-CREATE POLICY "Allow anyone to read rental items"
-ON public.rental_items
-FOR SELECT
-USING (true);
+
+-- Passo 1: Adicionar saldo de crédito à tabela de alunos
+ALTER TABLE public.alunos
+ADD COLUMN IF NOT EXISTS credit_balance NUMERIC(10, 2) NOT NULL DEFAULT 0;
+
+-- Passo 2: Modificar a tabela de transações de crédito para incluir referência ao aluno
+ALTER TABLE public.credit_transactions
+ADD COLUMN IF NOT EXISTS aluno_id UUID REFERENCES public.alunos(id) ON DELETE SET NULL;
+
+-- Passo 3: Criar a nova função RPC para adicionar crédito ao aluno de forma segura
+CREATE OR REPLACE FUNCTION public.add_credit_to_aluno(aluno_id_to_update uuid, arena_id_to_check uuid, amount_to_add numeric)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  is_owner boolean;
+  aluno_arena_id uuid;
+BEGIN
+  -- Verifica se o chamador é o dono da arena
+  SELECT EXISTS (
+    SELECT 1 FROM arenas WHERE id = arena_id_to_check AND owner_id = auth.uid()
+  ) INTO is_owner;
+
+  IF NOT is_owner THEN
+    RAISE EXCEPTION 'Permissão negada: Você não é o dono desta arena.';
+  END IF;
+
+  -- Verifica se o aluno pertence à arena especificada
+  SELECT arena_id FROM alunos WHERE id = aluno_id_to_update INTO aluno_arena_id;
+
+  IF aluno_arena_id IS NULL OR aluno_arena_id <> arena_id_to_check THEN
+    RAISE EXCEPTION 'Permissão negada: Aluno não pertence à arena especificada.';
+  END IF;
+
+  -- Atualiza o saldo de crédito do aluno
+  UPDATE public.alunos
+  SET credit_balance = credit_balance + amount_to_add
+  WHERE id = aluno_id_to_update;
+END;
+$$;

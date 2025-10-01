@@ -1,98 +1,48 @@
 /*
-          # [Operation Name]
-          Secure `update_aluno_gamification_points` Function
+  # [Operation Name]
+  [This operation secures the 'add_credit_to_aluno' function by setting a fixed search_path, mitigating a security advisory.]
+  ## Query Description: [This script safely drops and recreates a database function to apply security best practices. It modifies the function's definition to prevent potential search_path hijacking vulnerabilities, without altering its core logic or impacting existing data. This is a low-risk, preventative security enhancement.]
+  ## Metadata:
+  - Schema-Category: 'Security'
+  - Impact-Level: 'Low'
+  - Requires-Backup: false
+  - Reversible: true
+  ## Structure Details:
+  - Function 'add_credit_to_aluno' will be dropped and recreated.
+  ## Security Implications:
+  - RLS Status: Unchanged
+  - Policy Changes: No
+  - Auth Requirements: Admin privileges
+  ## Performance Impact:
+  - Indexes: None
+  - Triggers: None
+  - Estimated Impact: Negligible. This change only affects the function's security context.
+*/
+DROP FUNCTION IF EXISTS public.add_credit_to_aluno(uuid, uuid, numeric);
 
-          ## Query Description: [This operation secures the `update_aluno_gamification_points` trigger function by setting a fixed `search_path` and defining it as `SECURITY DEFINER`. This prevents potential security vulnerabilities related to path manipulation and ensures the function runs with consistent permissions. It also re-establishes the trigger that depends on it. This change is safe and does not affect existing data.]
-          
-          ## Metadata:
-          - Schema-Category: "Security"
-          - Impact-Level: "Low"
-          - Requires-Backup: false
-          - Reversible: true
-          
-          ## Structure Details:
-          - Function: `public.update_aluno_gamification_points()`
-          - Trigger: `on_gamification_transaction_change` on `public.gamification_point_transactions`
-          
-          ## Security Implications:
-          - RLS Status: Not changed
-          - Policy Changes: No
-          - Auth Requirements: None
-          
-          ## Performance Impact:
-          - Indexes: None
-          - Triggers: Recreated
-          - Estimated Impact: None
-          */
-
--- Drop the dependent trigger first
-DROP TRIGGER IF EXISTS on_gamification_transaction_change ON public.gamification_point_transactions;
-
--- Drop the function
-DROP FUNCTION IF EXISTS public.update_aluno_gamification_points();
-
--- Recreate the function with the correct syntax and security settings
-CREATE OR REPLACE FUNCTION public.update_aluno_gamification_points()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_aluno_id UUID;
-    v_total_points INT;
-    v_current_level_id UUID;
-    v_new_level_id UUID;
+CREATE OR REPLACE FUNCTION public.add_credit_to_aluno(
+    aluno_id_to_update uuid,
+    arena_id_to_check uuid,
+    amount_to_add numeric
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 BEGIN
-    -- Determine the aluno_id from the triggering table
-    IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN
-        v_aluno_id := NEW.aluno_id;
-    ELSIF TG_OP = 'DELETE' THEN
-        v_aluno_id := OLD.aluno_id;
-    END IF;
-
-    -- Calculate the new total points for the aluno
-    SELECT COALESCE(SUM(points), 0)
-    INTO v_total_points
-    FROM public.gamification_point_transactions
-    WHERE aluno_id = v_aluno_id;
-
-    -- Get the current level of the aluno
-    SELECT gamification_level_id
-    INTO v_current_level_id
-    FROM public.alunos
-    WHERE id = v_aluno_id;
-
-    -- Find the new correct level based on the total points
-    SELECT id
-    INTO v_new_level_id
-    FROM public.gamification_levels
-    WHERE arena_id = (SELECT arena_id FROM public.alunos WHERE id = v_aluno_id LIMIT 1)
-    AND points_required &lt;= v_total_points
-    ORDER BY points_required DESC
-    LIMIT 1;
-
-    -- Update the aluno's total points and level
-    UPDATE public.alunos
-    SET
-        gamification_points = v_total_points,
-        gamification_level_id = v_new_level_id
-    WHERE id = v_aluno_id;
-
-    -- If the level changed, create a notification
-    IF v_new_level_id IS DISTINCT FROM v_current_level_id THEN
-        INSERT INTO public.notificacoes (profile_id, arena_id, message, type)
-        SELECT
-            profile_id,
-            arena_id,
-            'Parabéns! Você alcançou o nível ' || (SELECT name FROM public.gamification_levels WHERE id = v_new_level_id) || '!',
-            'gamification_level_up'
+    -- Check if the aluno belongs to the specified arena
+    IF NOT EXISTS (
+        SELECT 1
         FROM public.alunos
-        WHERE id = v_aluno_id;
+        WHERE id = aluno_id_to_update AND arena_id = arena_id_to_check
+    ) THEN
+        RAISE EXCEPTION 'Aluno não pertence à arena especificada.';
     END IF;
 
-    RETURN NULL; -- result is ignored since this is an AFTER trigger
+    -- Update the credit balance
+    UPDATE public.alunos
+    SET credit_balance = COALESCE(credit_balance, 0) + amount_to_add
+    WHERE id = aluno_id_to_update;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = 'public';
-
--- Recreate the trigger
-CREATE TRIGGER on_gamification_transaction_change
-AFTER INSERT OR UPDATE OR DELETE ON public.gamification_point_transactions
-FOR EACH ROW
-EXECUTE FUNCTION public.update_aluno_gamification_points();
+$$;

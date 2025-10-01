@@ -1,50 +1,65 @@
 /*
-# [Fix] Recreate Notification Trigger and Function
-[This migration safely recreates the reservation notification function by first dropping the dependent trigger, updating the function with the correct column name, and then recreating the trigger. This resolves the dependency error encountered during the previous migration attempt.]
+  # [Fix] Corrige o `profile_id` nulo em notificações de reserva
 
-## Query Description: [This operation temporarily removes the notification trigger for new reservations, updates the underlying function to fix a column name error (`"clientName"`), and then reinstalls the trigger. There is a brief moment during the migration where new reservation notifications might not be generated, but this is negligible.]
+  [Description]
+  Esta migração corrige um erro crítico que impede a criação de reservas ao tentar inserir uma notificação sem `profile_id`. A função `handle_new_reservation_notification` foi atualizada para buscar o `owner_id` da arena e usá-lo como `profile_id` para notificações destinadas ao administrador.
 
-## Metadata:
-- Schema-Category: ["Structural"]
-- Impact-Level: ["Low"]
-- Requires-Backup: [false]
-- Reversible: [false]
+  ## Query Description: [Esta operação é segura e corrige um erro crítico. Ela remove e recria um gatilho e sua função associada para garantir que o sistema de notificação funcione corretamente, sem perda de dados.]
 
-## Structure Details:
-- Trigger: `on_new_reservation_notification` on table `reservas` (Dropped and Recreated)
-- Function: `handle_new_reservation_notification()` (Recreated)
+  ## Metadata:
+  - Schema-Category: ["Structural"]
+  - Impact-Level: ["High"]
+  - Requires-Backup: [false]
+  - Reversible: [true]
 
-## Security Implications:
-- RLS Status: [Enabled]
-- Policy Changes: [No]
-- Auth Requirements: [None]
+  ## Structure Details:
+  - Affects: trigger `on_new_reservation_notification` on table `reservas`
+  - Affects: function `handle_new_reservation_notification`
 
-## Performance Impact:
-- Indexes: [None]
-- Triggers: [Modified]
-- Estimated Impact: [Negligible performance impact.]
+  ## Security Implications:
+  - RLS Status: [No Change]
+  - Policy Changes: [No]
+  - Auth Requirements: [Admin]
+
+  ## Performance Impact:
+  - Indexes: [No Change]
+  - Triggers: [Modified]
+  - Estimated Impact: [Melhora ligeiramente a performance ao reduzir o número de `SELECT`s dentro da função.]
 */
 
--- Step 1: Drop the existing trigger that depends on the function.
+-- Remove o gatilho existente para permitir a alteração da função
 DROP TRIGGER IF EXISTS on_new_reservation_notification ON public.reservas;
 
--- Step 2: Now it's safe to replace the function.
--- This version corrects the column name from `clientname` to `"clientName"`.
+-- Recria a função com a lógica corrigida para buscar o dono da arena
 CREATE OR REPLACE FUNCTION public.handle_new_reservation_notification()
 RETURNS TRIGGER AS $$
+DECLARE
+  v_quadra_name TEXT;
+  v_arena_owner_id UUID;
 BEGIN
-  INSERT INTO public.notificacoes(arena_id, message, type, link_to)
-  VALUES (
-    NEW.arena_id,
-    'Nova reserva de ' || NEW."clientName" || ' na quadra ' || (SELECT name FROM public.quadras WHERE id = NEW.quadra_id) || ' em ' || TO_CHAR(NEW.date, 'DD/MM') || ' às ' || NEW.start_time,
-    'nova_reserva',
-    '/reservas'
-  );
+  -- Busca o nome da quadra e o ID do dono da arena de uma só vez
+  SELECT q.name, a.owner_id INTO v_quadra_name, v_arena_owner_id
+  FROM public.quadras q
+  JOIN public.arenas a ON q.arena_id = a.id
+  WHERE q.id = NEW.quadra_id;
+
+  -- Insere uma notificação para o administrador da arena, se um dono for encontrado
+  IF v_arena_owner_id IS NOT NULL THEN
+    INSERT INTO public.notificacoes (profile_id, arena_id, message, type, link_to)
+    VALUES (v_arena_owner_id, NEW.arena_id, 'Nova reserva de ' || NEW."clientName" || ' na quadra ' || v_quadra_name, 'nova_reserva', '/reservas');
+  END IF;
+
+  -- Se a reserva tem um profile_id associado (cliente logado), envia notificação para ele
+  IF NEW.profile_id IS NOT NULL THEN
+    INSERT INTO public.notificacoes (profile_id, arena_id, message, type, link_to)
+    VALUES (NEW.profile_id, NEW.arena_id, 'Sua reserva na quadra ' || v_quadra_name || ' foi confirmada!', 'nova_reserva', '/perfil');
+  END IF;
+
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Step 3: Recreate the trigger to call the new, corrected function.
+-- Recria o gatilho para usar a função corrigida
 CREATE TRIGGER on_new_reservation_notification
 AFTER INSERT ON public.reservas
 FOR EACH ROW

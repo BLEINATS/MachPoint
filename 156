@@ -1,34 +1,41 @@
 /*
-# [SECURITY] Patch Search Path for Gamification Functions
-This migration enhances security by explicitly setting the `search_path` for gamification-related functions. This prevents potential vulnerabilities where a function could be tricked into executing malicious code from an untrusted schema.
+  # [Function Security] Secure add_credit_to_aluno function
+  [This operation secures the 'add_credit_to_aluno' function by setting a fixed search_path, preventing potential hijacking attacks.]
 
-## Query Description:
-This operation alters existing functions to set a secure `search_path`. This ensures that the functions do not accidentally execute code from untrusted schemas. This is a non-destructive security enhancement.
-
-## Metadata:
-- Schema-Category: "Security"
-- Impact-Level: "Low"
-- Requires-Backup: false
-- Reversible: true (by resetting the search_path)
-
-## Structure Details:
-- Functions being altered:
-  - `public.handle_reservation_completion()`
-  - `public.add_gamification_points(uuid, integer, text)`
-
-## Security Implications:
-- RLS Status: Unchanged
-- Policy Changes: No
-- Auth Requirements: None for this migration.
-
-## Performance Impact:
-- Indexes: None
-- Triggers: None
-- Estimated Impact: Negligible performance impact.
+  ## Query Description: [This operation redefines an existing function to enhance security. It is a non-destructive change and does not affect existing data. No backup is required.]
+  
+  ## Metadata:
+  - Schema-Category: ["Security"]
+  - Impact-Level: ["Low"]
+  - Requires-Backup: [false]
+  - Reversible: [true]
+  
+  ## Structure Details:
+  - Function: public.add_credit_to_aluno(uuid, uuid, numeric)
+  
+  ## Security Implications:
+  - RLS Status: [Not Applicable]
+  - Policy Changes: [No]
+  - Auth Requirements: [service_role]
+  
+  ## Performance Impact:
+  - Indexes: [Not Applicable]
+  - Triggers: [Not Applicable]
+  - Estimated Impact: [None]
 */
-
--- Sets the search path for the trigger function that handles logic after a reservation is completed.
-ALTER FUNCTION public.handle_reservation_completion() SET search_path = public;
-
--- Sets the search path for the function that manually adds or removes gamification points.
-ALTER FUNCTION public.add_gamification_points(uuid, integer, text) SET search_path = public;
+CREATE OR REPLACE FUNCTION public.add_credit_to_aluno(
+    aluno_id_to_update uuid,
+    arena_id_to_check uuid,
+    amount_to_add numeric
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = 'public'
+AS $$
+BEGIN
+    UPDATE public.alunos
+    SET credit_balance = COALESCE(credit_balance, 0) + amount_to_add
+    WHERE id = aluno_id_to_update AND arena_id = arena_id_to_check;
+END;
+$$;

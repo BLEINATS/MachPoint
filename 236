@@ -1,37 +1,24 @@
 /*
-  # [Structural] Aprimoramento da Tabela de Regras de Precificação
-  ## Query Description: 
-  Este script adiciona mais flexibilidade ao sistema de preços, permitindo valores distintos para clientes avulsos e mensais, além de um controle de ativação para cada regra.
-  - A coluna `price` será RENOMEADA para `price_single` para representar o valor de hora avulsa.
-  - Uma nova coluna `price_monthly` será ADICIONADA para o valor de hora de planos mensais.
-  - Uma nova coluna `is_active` (booleana) será ADICIONADA para permitir ativar/desativar regras.
-  **Impacto:** Os preços existentes serão mantidos como "preço avulso". Novas regras precisarão ter ambos os preços preenchidos. Nenhuma reserva existente será afetada.
+  # [Structural] Torna o E-mail de Alunos Opcional
+  ## Query Description:
+  Este script modifica a tabela `alunos` para tornar o campo `email` opcional. Atualmente, ele é obrigatório, o que força o sistema a criar um e-mail temporário ("placeholder-...") ao cadastrar um cliente durante uma reserva. Esta alteração permitirá que o campo fique em branco. O script também limpará os e-mails temporários existentes, definindo-os como nulos.
+  **Impacto:** O campo de e-mail não será mais obrigatório ao criar um novo aluno. Os e-mails temporários existentes serão removidos.
   ## Metadata:
   - Schema-Category: "Structural"
-  - Impact-Level: "Medium"
+  - Impact-Level: "Low"
   - Requires-Backup: false
-  - Reversible: false
+  - Reversible: true
   ## Structure Details:
-  - Tabela `pricing_rules`: 
-    - Renomeia `price` para `price_single`.
-    - Adiciona a coluna `price_monthly` (numeric).
-    - Adiciona a coluna `is_active` (boolean).
+  - Tabela `alunos`: A coluna `email` passará a aceitar valores nulos.
   ## Security Implications:
-  - RLS Status: Sem alterações nas políticas existentes.
+  - RLS Status: Sem alterações.
   - Policy Changes: Não.
-  - Auth Requirements: Apenas o dono da arena pode modificar as regras.
+  - Auth Requirements: Sem alterações.
 */
+-- Passo 1: Remover a restrição NOT NULL da coluna de e-mail
+ALTER TABLE public.alunos ALTER COLUMN email DROP NOT NULL;
 
--- Renomeia a coluna de preço existente para preço avulso
-ALTER TABLE public.pricing_rules RENAME COLUMN price TO price_single;
-
--- Adiciona a coluna para preço de mensalistas, com valor padrão 0
-ALTER TABLE public.pricing_rules ADD COLUMN price_monthly numeric NOT NULL DEFAULT 0;
-
--- Adiciona a coluna para ativar/desativar a regra, com valor padrão true (ativa)
-ALTER TABLE public.pricing_rules ADD COLUMN is_active boolean NOT NULL DEFAULT true;
-
--- Adiciona comentários para clareza no schema
-COMMENT ON COLUMN public.pricing_rules.price_single IS 'Preço por hora para reserva avulsa.';
-COMMENT ON COLUMN public.pricing_rules.price_monthly IS 'Preço por hora para clientes com plano mensal.';
-COMMENT ON COLUMN public.pricing_rules.is_active IS 'Indica se a regra de preço está ativa.';
+-- Passo 2: Limpar os e-mails temporários existentes, definindo-os como NULL
+UPDATE public.alunos
+SET email = NULL
+WHERE email LIKE 'placeholder-%@matchplay.com';

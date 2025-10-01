@@ -1,61 +1,75 @@
 /*
-          # [Fix] Corrige o tipo de retorno da função `check_duplicate_reservation`
-          [Este script corrige um erro de migração que impede a alteração de uma função existente. A função antiga é removida e recriada com a assinatura e o tipo de retorno corretos, garantindo que a verificação de reservas duplicadas funcione como esperado.]
+# [DATABASE] Fix Notification Function Conflict
+This operation resolves a conflict by removing old notification functions and ensuring the correct one is in place.
 
-          ## Query Description: [Esta operação remove e recria uma função do banco de dados. Não há impacto direto nos dados existentes, mas é um passo necessário para corrigir a lógica de verificação de conflitos de horário. A função antiga está impedindo atualizações.]
-          
-          ## Metadata:
-          - Schema-Category: ["Structural"]
-          - Impact-Level: ["Low"]
-          - Requires-Backup: [false]
-          - Reversible: [false]
-          
-          ## Structure Details:
-          - Function `check_duplicate_reservation`
-          
-          ## Security Implications:
-          - RLS Status: [Not Applicable]
-          - Policy Changes: [No]
-          - Auth Requirements: [None]
-          
-          ## Performance Impact:
-          - Indexes: [No change]
-          - Triggers: [No change]
-          - Estimated Impact: [Nenhum impacto de performance esperado.]
-          */
+## Query Description: [This operation will drop outdated functions (`handle_new_notification`) that are causing errors and recreate the current, correct function (`handle_new_reservation_notification`) used by the system. This is a safe cleanup operation to ensure database stability.]
 
--- Remove a função antiga com a assinatura incorreta
-DROP FUNCTION IF EXISTS public.check_duplicate_reservation(uuid, date, time without time zone, time without time zone, uuid);
+## Metadata:
+- Schema-Category: ["Structural"]
+- Impact-Level: ["Low"]
+- Requires-Backup: [false]
+- Reversible: [false]
 
--- Recria a função com a lógica e o tipo de retorno corretos
-CREATE OR REPLACE FUNCTION public.check_duplicate_reservation(
-    p_arena_id uuid,
-    p_quadra_id uuid,
-    p_date date,
-    p_start_time time without time zone,
-    p_end_time time without time zone,
-    p_reserva_id_to_exclude uuid DEFAULT NULL
-)
-RETURNS boolean
+## Structure Details:
+- Drops old `handle_new_notification` function.
+- Recreates the `handle_new_reservation_notification` function and its trigger.
+
+## Security Implications:
+- RLS Status: [Not Applicable]
+- Policy Changes: [No]
+- Auth Requirements: [Not Applicable]
+
+## Performance Impact:
+- Indexes: [No change]
+- Triggers: [Recreated]
+- Estimated Impact: [None]
+*/
+
+-- Drop the old, problematic function if it exists
+DROP FUNCTION IF EXISTS public.handle_new_notification();
+
+-- Recreate the correct function and trigger to ensure consistency
+
+-- 1. Create the function to be called by the trigger
+CREATE OR REPLACE FUNCTION public.handle_new_reservation_notification()
+RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
-DECLARE
-    v_conflict_exists boolean;
 BEGIN
-    SELECT EXISTS (
-        SELECT 1
-        FROM public.reservas r
-        WHERE
-            r.arena_id = p_arena_id AND
-            r.quadra_id = p_quadra_id AND
-            r.date = p_date AND
-            r.status <> 'cancelada' AND
-            (p_reserva_id_to_exclude IS NULL OR r.id <> p_reserva_id_to_exclude) AND
-            (r.start_time, r.end_time) OVERLAPS (p_start_time, p_end_time)
-    ) INTO v_conflict_exists;
+    -- Insert a notification for the arena admin
+    INSERT INTO public.notificacoes (arena_id, message, type, link_to)
+    VALUES (
+        NEW.arena_id,
+        'Nova reserva de ' || COALESCE(NEW.clientName, 'Cliente') || ' na quadra ' || (SELECT name FROM quadras WHERE id = NEW.quadra_id) || ' para ' || to_char(NEW.date, 'DD/MM') || ' às ' || NEW.start_time,
+        'nova_reserva',
+        '/reservas'
+    );
 
-    RETURN v_conflict_exists;
+    -- If the reservation is made by a client with a profile, notify them too
+    IF NEW.profile_id IS NOT NULL THEN
+        INSERT INTO public.notificacoes (profile_id, arena_id, message, type, link_to)
+        VALUES (
+            NEW.profile_id,
+            NEW.arena_id,
+            'Sua reserva na quadra ' || (SELECT name FROM quadras WHERE id = NEW.quadra_id) || ' para ' || to_char(NEW.date, 'DD/MM') || ' foi confirmada!',
+            'nova_reserva',
+            '/perfil'
+        );
+    END IF;
+
+    RETURN NEW;
 END;
 $$;
+
+-- 2. Drop the existing trigger to avoid conflicts
+DROP TRIGGER IF EXISTS on_new_reservation_send_notification ON public.reservas;
+
+-- 3. Recreate the trigger to call the function
+CREATE TRIGGER on_new_reservation_send_notification
+AFTER INSERT ON public.reservas
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_new_reservation_notification();
+
+GRANT EXECUTE ON FUNCTION public.handle_new_reservation_notification() TO authenticated;

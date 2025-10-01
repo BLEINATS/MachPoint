@@ -1,112 +1,122 @@
+-- 1. Drop existing functions to avoid conflicts
+DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid,uuid,date,time without time zone,time without time zone,numeric,text,text,numeric,jsonb,text,text);
+DROP FUNCTION IF EXISTS public.ensure_aluno_profile_exists(uuid, uuid, text, text);
+
+-- 2. Recreate ensure_aluno_profile_exists function correctly
 /*
-  ## MIGRATION: Definitive Fix for Client Reservation Creation
-  ### Description:
-  This migration provides a definitive fix for the persistent "function not found" and "permission denied" errors when a client creates a reservation. It cleans up all previous, conflicting function versions and creates a single, robust, and secure function to handle the entire process.
-  ### Changes:
-  1.  **Drops all old versions**: Removes `create_reservation_with_credit`, `..._v2`, and `..._v3` to prevent any further conflicts or schema cache issues.
-  2.  **Ensures ENUM type exists**: Creates the `reservation_status` type if it's missing.
-  3.  **Creates `create_client_reservation` function**:
-      - This is a new, clean function.
-      - It runs with `SECURITY INVOKER`, using the permissions of the logged-in user, which is the correct and secure approach.
-      - It safely finds or creates the client's profile (`aluno`) for the arena.
-      - It validates and applies credit from the user's balance.
-      - It creates the reservation and credit transaction in a single operation.
-  4.  **Grants Permissions**: Explicitly grants `EXECUTE` permission to all authenticated users.
+# [Function] ensure_aluno_profile_exists
+Cria um perfil de 'aluno' para um usuário (profile) em uma arena específica, se ainda não existir.
+Isso garante que todo cliente que faz uma reserva tenha um registro na tabela 'alunos',
+o que é essencial para gerenciar créditos e planos.
 */
-
--- 1. Drop all old, conflicting functions to ensure a clean slate.
-DROP FUNCTION IF EXISTS public.create_reservation_with_credit(uuid,uuid,uuid,text,text,date,time,time,text,text,numeric,numeric,text,text,text,boolean,text,date,jsonb);
-DROP FUNCTION IF EXISTS public.create_reservation_with_credit_v2(uuid,uuid,uuid,text,text,date,time,time,text,text,numeric,numeric,text,text,text,boolean,text,date,jsonb);
-DROP FUNCTION IF EXISTS public.create_reservation_with_credit_v2(uuid,uuid,uuid,text,text,date,time,time,public.reservation_status,text,numeric,numeric,text,text,text,boolean,text,date,jsonb);
-DROP FUNCTION IF EXISTS public.create_reservation_with_credit_v3(uuid,uuid,uuid,text,text,date,time,time,text,text,numeric,numeric,text,text,text,boolean,text,date,jsonb);
-DROP FUNCTION IF EXISTS public.create_reservation_with_credit_v3(uuid,uuid,uuid,text,text,date,time,time,public.reservation_status,text,numeric,numeric,text,text,text,boolean,text,date,jsonb);
-
--- 2. Ensure the reservation_status type exists.
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'reservation_status') THEN
-        CREATE TYPE public.reservation_status AS ENUM ('confirmada', 'pendente', 'cancelada');
-    END IF;
-END$$;
-
--- 3. Create the new, definitive function.
-CREATE OR REPLACE FUNCTION public.create_client_reservation(
+CREATE OR REPLACE FUNCTION public.ensure_aluno_profile_exists(
+    p_profile_id uuid,
     p_arena_id uuid,
-    p_quadra_id uuid,
     p_client_name text,
-    p_client_phone text,
-    p_date date,
-    p_start_time time,
-    p_end_time time,
-    p_status public.reservation_status,
-    p_type text,
-    p_total_price numeric,
-    p_credit_to_use numeric,
-    p_payment_status text,
-    p_sport_type text,
-    p_notes text,
-    p_is_recurring boolean,
-    p_recurring_type text,
-    p_recurring_end_date date,
-    p_rented_items jsonb
+    p_client_phone text
 )
-RETURNS uuid -- Return the new reservation ID
+RETURNS void
 LANGUAGE plpgsql
-SECURITY INVOKER -- IMPORTANT: Run as the user calling it.
+SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-    v_aluno_id uuid;
-    v_profile_id uuid := auth.uid(); -- Get the current user's ID
-    v_new_reserva_id uuid;
-    v_final_payment_status text;
-    v_current_credit_balance numeric;
+    v_aluno_exists boolean;
 BEGIN
-    -- 1. Ensure the user has an 'aluno' profile for this arena.
-    v_aluno_id := public.get_or_create_client_profile(p_arena_id, v_profile_id);
-
-    IF v_aluno_id IS NULL THEN
-        RAISE EXCEPTION 'Failed to find or create a client profile for this arena.';
+    -- Check if an 'aluno' profile already exists for this user in this arena
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.alunos
+        WHERE profile_id = p_profile_id AND arena_id = p_arena_id
+    ) INTO v_aluno_exists;
+    -- If it doesn't exist, create one
+    IF NOT v_aluno_exists THEN
+        INSERT INTO public.alunos (profile_id, arena_id, name, phone, status, plan_name, join_date)
+        VALUES (p_profile_id, p_arena_id, p_client_name, p_client_phone, 'ativo', 'Avulso', CURRENT_DATE);
     END IF;
-
-    -- 2. Handle credit usage
-    v_final_payment_status := p_payment_status;
-
-    IF p_credit_to_use > 0 THEN
-        SELECT credit_balance INTO v_current_credit_balance FROM public.alunos WHERE id = v_aluno_id;
-        
-        IF coalesce(v_current_credit_balance, 0) < p_credit_to_use THEN
-            RAISE EXCEPTION 'Insufficient credit balance.';
-        END IF;
-
-        UPDATE public.alunos
-        SET credit_balance = coalesce(credit_balance, 0) - p_credit_to_use
-        WHERE id = v_aluno_id;
-
-        INSERT INTO public.credit_transactions (aluno_id, arena_id, amount, type, description, profile_id)
-        VALUES (v_aluno_id, p_arena_id, -p_credit_to_use, 'reservation_payment', 'Pagamento de reserva', v_profile_id);
-
-        IF p_credit_to_use >= p_total_price THEN
-            v_final_payment_status := 'pago';
-        END IF;
-    END IF;
-
-    -- 3. Insert the new reservation
-    INSERT INTO public.reservas (
-        arena_id, quadra_id, profile_id, clientName, clientPhone, date, start_time, end_time,
-        status, type, total_price, credit_used, payment_status, sport_type, notes,
-        isRecurring, recurringType, recurringEndDate, rented_items, aluno_id
-    )
-    VALUES (
-        p_arena_id, p_quadra_id, v_profile_id, p_client_name, p_client_phone, p_date, p_start_time, p_end_time,
-        p_status, p_type, p_total_price, p_credit_to_use, v_final_payment_status, p_sport_type, p_notes,
-        p_is_recurring, p_recurring_type, p_recurring_end_date, p_rented_items, v_aluno_id
-    )
-    RETURNING id INTO v_new_reserva_id;
-
-    RETURN v_new_reserva_id;
 END;
 $$;
 
--- 4. Grant execute permission to authenticated users
-GRANT EXECUTE ON FUNCTION public.create_client_reservation(uuid,uuid,text,text,date,time,time,public.reservation_status,text,numeric,numeric,text,text,text,boolean,text,date,jsonb) TO authenticated;
+-- 3. Recreate create_client_reservation_atomic function with correct type casting
+/*
+# [Function] create_client_reservation_atomic
+Cria uma reserva de cliente de forma atômica. Esta versão corrige o erro de tipo no parâmetro 'payment_status',
+aceitando texto e convertendo-o para o tipo 'payment_status' do banco de dados.
+*/
+CREATE OR REPLACE FUNCTION public.create_client_reservation_atomic(
+    p_arena_id uuid,
+    p_quadra_id uuid,
+    p_date date,
+    p_start_time time,
+    p_end_time time,
+    p_total_price numeric,
+    p_payment_status text, -- Changed to TEXT
+    p_sport_type text,
+    p_credit_to_use numeric,
+    p_rented_items jsonb,
+    p_client_name text,
+    p_client_phone text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_profile_id uuid := auth.uid();
+    v_aluno_id uuid;
+BEGIN
+    -- Step 1: Ensure an 'aluno' profile exists for the authenticated user.
+    PERFORM public.ensure_aluno_profile_exists(v_profile_id, p_arena_id, p_client_name, p_client_phone);
+    -- Step 2: Get the corresponding 'aluno' ID for credit transactions.
+    SELECT id INTO v_aluno_id
+    FROM public.alunos
+    WHERE profile_id = v_profile_id AND arena_id = p_arena_id
+    LIMIT 1;
+    -- Step 3: Insert the reservation with the correct 'profile_id'.
+    INSERT INTO public.reservas (
+        arena_id,
+        quadra_id,
+        profile_id,
+        date,
+        start_time,
+        end_time,
+        status,
+        type,
+        total_price,
+        payment_status, -- This column is of type payment_status
+        sport_type,
+        credit_used,
+        rented_items,
+        "clientName",
+        "clientPhone"
+    )
+    VALUES (
+        p_arena_id,
+        p_quadra_id,
+        v_profile_id,
+        p_date,
+        p_start_time,
+        p_end_time,
+        'confirmada',
+        'avulsa',
+        p_total_price,
+        p_payment_status::public.payment_status, -- Cast TEXT to payment_status
+        p_sport_type,
+        p_credit_to_use,
+        p_rented_items,
+        p_client_name,
+        p_client_phone
+    );
+    -- Step 4: If credit was used, deduct it from the aluno's balance.
+    IF p_credit_to_use > 0 AND v_aluno_id IS NOT NULL THEN
+        UPDATE public.alunos
+        SET credit_balance = credit_balance - p_credit_to_use
+        WHERE id = v_aluno_id;
+    END IF;
+END;
+$$;
+
+-- Grant usage to authenticated users
+GRANT EXECUTE ON FUNCTION public.create_client_reservation_atomic(uuid,uuid,date,time,time,numeric,text,text,numeric,jsonb,text,text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.ensure_aluno_profile_exists(uuid, uuid, text, text) TO authenticated;

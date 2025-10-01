@@ -1,194 +1,108 @@
-import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { X, Save, Trophy, Calendar, Clock, LayoutGrid, Info, Users, DollarSign } from 'lucide-react';
-import { Evento, Quadra, EventoTipo, EventoStatus } from '../../types';
-import Button from '../Forms/Button';
-import Input from '../Forms/Input';
+import React from 'react';
+import { Evento, EventoStatus, EventoTipo } from '../../types';
+import { Calendar, Clock, Users, DollarSign, Trophy, CheckCircle, PlayCircle, Ban, LayoutGrid } from 'lucide-react';
 import { format } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
+import { parseDateStringAsLocal } from '../../utils/dateUtils';
 
-interface EventModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onSave: (evento: Omit<Evento, 'id' | 'arena_id' | 'created_at'> | Evento) => void;
-  initialData: Evento | null;
-  quadras: Quadra[];
+interface EventOverviewTabProps {
+  evento: Evento;
 }
 
-const EventModal: React.FC<EventModalProps> = ({ isOpen, onClose, onSave, initialData, quadras }) => {
-  const [formData, setFormData] = useState({
-    name: '',
-    type: 'torneio' as EventoTipo,
-    status: 'planejado' as EventoStatus,
-    start_date: format(new Date(), 'yyyy-MM-dd'),
-    end_date: format(new Date(), 'yyyy-MM-dd'),
-    description: '',
-    quadras_ids: [] as string[],
-    start_time: '08:00',
-    end_time: '18:00',
-    categories: '',
-    max_participants: 8,
-    registration_fee: 0,
-  });
+const StatCard: React.FC<{ icon: React.ElementType, label: string, value: string | number, color: string }> = ({ icon: Icon, label, value, color }) => (
+  <div className="bg-white dark:bg-brand-gray-800 rounded-lg shadow-md p-6 border border-brand-gray-200 dark:border-brand-gray-700">
+    <div className="flex items-center">
+      <div className={`p-3 rounded-lg mr-4 ${color.replace('text-', 'bg-').replace('-500', '-100')} dark:${color.replace('text-', 'bg-').replace('-500', '-900/50')}`}>
+        <Icon className={`h-6 w-6 ${color}`} />
+      </div>
+      <div>
+        <p className="text-sm font-medium text-brand-gray-600 dark:text-brand-gray-400">{label}</p>
+        <p className="text-2xl font-bold text-brand-gray-900 dark:text-white">{value}</p>
+      </div>
+    </div>
+  </div>
+);
 
-  const isEditing = !!initialData;
+const getStatusProps = (status: EventoStatus) => {
+  switch (status) {
+    case 'planejado': return { icon: Calendar, color: 'text-blue-500', label: 'Planejado' };
+    case 'inscricoes_abertas': return { icon: CheckCircle, color: 'text-green-500', label: 'Inscrições Abertas' };
+    case 'em_andamento': return { icon: PlayCircle, color: 'text-yellow-500', label: 'Em Andamento' };
+    case 'concluido': return { icon: Trophy, color: 'text-purple-500', label: 'Concluído' };
+    case 'cancelado': return { icon: Ban, color: 'text-red-500', label: 'Cancelado' };
+    default: return { icon: Calendar, color: 'text-gray-500', label: 'Desconhecido' };
+  }
+};
 
-  useEffect(() => {
-    if (!isOpen) return;
-
-    if (initialData) {
-      setFormData({
-        name: initialData.name,
-        type: initialData.type,
-        status: initialData.status,
-        start_date: initialData.start_date,
-        end_date: initialData.end_date,
-        description: initialData.description,
-        quadras_ids: initialData.quadras_ids,
-        start_time: initialData.start_time,
-        end_time: initialData.end_time,
-        categories: initialData.categories.join(', '),
-        max_participants: initialData.max_participants,
-        registration_fee: initialData.registration_fee,
-      });
-    } else {
-      setFormData({
-        name: '', type: 'torneio', status: 'planejado',
-        start_date: format(new Date(), 'yyyy-MM-dd'),
-        end_date: format(new Date(), 'yyyy-MM-dd'),
-        description: '', quadras_ids: [],
-        start_time: '08:00', end_time: '18:00',
-        categories: '', max_participants: 8, registration_fee: 0,
-      });
-    }
-  }, [initialData, isOpen]);
-
-  const handleSave = () => {
-    const dataToSave = {
-      ...formData,
-      categories: formData.categories.split(',').map(c => c.trim()).filter(Boolean),
-      max_participants: Number(formData.max_participants),
-      registration_fee: Number(formData.registration_fee),
+const getTypeLabel = (type: EventoTipo): string => {
+    const labels: Record<EventoTipo, string> = {
+        torneio: "Torneio",
+        campeonato: "Campeonato",
+        clinica: "Clínica",
+        evento_especial: "Evento Especial",
     };
+    return labels[type] || "Evento";
+};
 
-    if (isEditing && initialData) {
-      onSave({ ...initialData, ...dataToSave });
-    } else {
-      onSave(dataToSave);
-    }
-  };
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
-  };
-
-  const handleQuadraToggle = (quadraId: string) => {
-    setFormData(prev => {
-      const quadras_ids = prev.quadras_ids.includes(quadraId)
-        ? prev.quadras_ids.filter(id => id !== quadraId)
-        : [...prev.quadras_ids, quadraId];
-      return { ...prev, quadras_ids };
-    });
-  };
+const EventOverviewTab: React.FC<EventOverviewTabProps> = ({ evento }) => {
+  const statusProps = getStatusProps(evento.status);
+  const startDate = parseDateStringAsLocal(evento.start_date);
+  const endDate = parseDateStringAsLocal(evento.end_date);
+  const dateString = isNaN(startDate.getTime()) ? "Data a definir" : 
+    format(startDate, 'dd/MM/yyyy') + (
+      !isNaN(endDate.getTime()) && startDate.getTime() !== endDate.getTime() 
+      ? ` a ${format(endDate, 'dd/MM/yyyy')}` 
+      : ''
+    );
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50" onClick={onClose}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.9 }}
-            className="bg-white dark:bg-brand-gray-900 rounded-lg w-full max-w-3xl shadow-xl flex flex-col max-h-[90vh]"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex justify-between items-center p-6 border-b border-brand-gray-200 dark:border-brand-gray-700">
-              <h3 className="text-xl font-semibold text-brand-gray-900 dark:text-white">
-                {isEditing ? 'Editar Evento' : 'Criar Novo Evento'}
-              </h3>
-              <button onClick={onClose} className="p-1 rounded-full hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
-                <X className="h-5 w-5 text-brand-gray-500" />
-              </button>
-            </div>
+    <div className="space-y-8">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <StatCard icon={statusProps.icon} label="Status" value={statusProps.label} color={statusProps.color} />
+        <StatCard icon={Users} label="Inscritos" value={`${evento.participants.length} / ${evento.max_participants}`} color="text-blue-500" />
+        <StatCard icon={DollarSign} label="Taxa" value={evento.registration_fee.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} color="text-green-500" />
+        <StatCard icon={Trophy} label="Tipo" value={getTypeLabel(evento.type)} color="text-purple-500" />
+      </div>
 
-            <div className="p-6 space-y-6 overflow-y-auto">
-              {/* Informações Básicas */}
-              <Input label="Nome do Evento" name="name" value={formData.name} onChange={handleChange} icon={<Trophy className="h-4 w-4 text-brand-gray-400"/>} placeholder="Ex: Torneio de Verão" required />
-              
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+      <div className="bg-white dark:bg-brand-gray-800 rounded-lg shadow-md p-6 border border-brand-gray-200 dark:border-brand-gray-700">
+        <h3 className="text-xl font-semibold mb-4">Detalhes do Evento</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-4 text-sm">
+            <div className="flex items-start">
+                <Calendar className="h-5 w-5 mr-3 mt-1 text-brand-gray-400" />
                 <div>
-                  <label className="block text-sm font-medium text-brand-gray-700 dark:text-brand-gray-300 mb-1">Tipo de Evento</label>
-                  <select name="type" value={formData.type} onChange={handleChange} className="w-full form-select rounded-md border-brand-gray-300 dark:border-brand-gray-600 bg-white dark:bg-brand-gray-800 text-brand-gray-900 dark:text-white focus:border-brand-blue-500 focus:ring-brand-blue-500">
-                    <option value="torneio">Torneio</option>
-                    <option value="campeonato">Campeonato</option>
-                    <option value="clinica">Clínica</option>
-                    <option value="evento_especial">Evento Especial</option>
-                  </select>
+                    <p className="font-medium text-brand-gray-600 dark:text-brand-gray-400">Data</p>
+                    <p className="font-semibold text-brand-gray-800 dark:text-brand-gray-200">{dateString}</p>
                 </div>
+            </div>
+            <div className="flex items-start">
+                <Clock className="h-5 w-5 mr-3 mt-1 text-brand-gray-400" />
                 <div>
-                  <label className="block text-sm font-medium text-brand-gray-700 dark:text-brand-gray-300 mb-1">Status</label>
-                  <select name="status" value={formData.status} onChange={handleChange} className="w-full form-select rounded-md border-brand-gray-300 dark:border-brand-gray-600 bg-white dark:bg-brand-gray-800 text-brand-gray-900 dark:text-white focus:border-brand-blue-500 focus:ring-brand-blue-500">
-                    <option value="planejado">Planejado</option>
-                    <option value="inscricoes_abertas">Inscrições Abertas</option>
-                    <option value="em_andamento">Em Andamento</option>
-                    <option value="concluido">Concluído</option>
-                    <option value="cancelado">Cancelado</option>
-                  </select>
+                    <p className="font-medium text-brand-gray-600 dark:text-brand-gray-400">Horário</p>
+                    <p className="font-semibold text-brand-gray-800 dark:text-brand-gray-200">{evento.start_time} - {evento.end_time}</p>
                 </div>
-              </div>
-
-              {/* Inscrições */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-                <Input label="Máx. de Inscritos" name="max_participants" type="number" value={formData.max_participants.toString()} onChange={handleChange} icon={<Users className="h-4 w-4 text-brand-gray-400"/>} />
-                <Input label="Taxa de Inscrição (R$)" name="registration_fee" type="number" value={formData.registration_fee.toString()} onChange={handleChange} icon={<DollarSign className="h-4 w-4 text-brand-gray-400"/>} />
-                <Input label="Categorias" name="categories" value={formData.categories} onChange={handleChange} placeholder="Mista, Masculino A (separar por vírgula)" />
-              </div>
-
-              {/* Datas e Horários */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                <Input label="Data de Início" name="start_date" type="date" value={formData.start_date} onChange={handleChange} icon={<Calendar className="h-4 w-4 text-brand-gray-400"/>} />
-                <Input label="Data de Fim" name="end_date" type="date" value={formData.end_date} onChange={handleChange} icon={<Calendar className="h-4 w-4 text-brand-gray-400"/>} />
-                <Input label="Horário de Início" name="start_time" type="time" value={formData.start_time} onChange={handleChange} icon={<Clock className="h-4 w-4 text-brand-gray-400"/>} />
-                <Input label="Horário de Fim" name="end_time" type="time" value={formData.end_time} onChange={handleChange} icon={<Clock className="h-4 w-4 text-brand-gray-400"/>} />
-              </div>
-
-              {/* Quadras */}
-              <div>
-                <label className="block text-sm font-medium text-brand-gray-700 dark:text-brand-gray-300 mb-2">Quadras a serem utilizadas</label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                  {quadras.map(quadra => (
-                    <label key={quadra.id} className={`flex items-center p-3 rounded-lg border cursor-pointer transition-colors ${formData.quadras_ids.includes(quadra.id) ? 'bg-blue-50 dark:bg-blue-900/50 border-blue-300 dark:border-blue-700' : 'bg-white dark:bg-brand-gray-800 border-brand-gray-200 dark:border-brand-gray-700'}`}>
-                      <input
-                        type="checkbox"
-                        checked={formData.quadras_ids.includes(quadra.id)}
-                        onChange={() => handleQuadraToggle(quadra.id)}
-                        className="h-4 w-4 rounded text-brand-blue-600 border-brand-gray-300 focus:ring-brand-blue-500"
-                      />
-                      <span className="ml-3 text-sm font-medium text-brand-gray-800 dark:text-brand-gray-200">{quadra.name}</span>
-                    </label>
-                  ))}
+            </div>
+             <div className="flex items-start">
+                <LayoutGrid className="h-5 w-5 mr-3 mt-1 text-brand-gray-400" />
+                <div>
+                    <p className="font-medium text-brand-gray-600 dark:text-brand-gray-400">Quadras</p>
+                    <p className="font-semibold text-brand-gray-800 dark:text-brand-gray-200">{evento.quadras_ids.length} quadra(s) reservada(s)</p>
                 </div>
-              </div>
-              
-              <div className="rounded-lg p-4 bg-blue-50 dark:bg-brand-blue-500/10 border border-blue-200 dark:border-brand-blue-500/20">
-                <h5 className="font-medium mb-2 flex items-center text-blue-900 dark:text-blue-200"><Info className="h-4 w-4 mr-2" />Atenção</h5>
-                <p className="text-sm text-blue-700 dark:text-blue-300">
-                  Ao salvar, as quadras selecionadas serão bloqueadas no Hub de Reservas durante os dias e horários definidos para este evento.
-                </p>
-              </div>
             </div>
-
-            <div className="p-6 mt-auto border-t border-brand-gray-200 dark:border-brand-gray-700 flex justify-end gap-3">
-              <Button variant="outline" onClick={onClose}>Cancelar</Button>
-              <Button onClick={handleSave}>
-                <Save className="h-4 w-4 mr-2"/> {isEditing ? 'Salvar Alterações' : 'Criar Evento'}
-              </Button>
+             <div className="flex items-start">
+                <Trophy className="h-5 w-5 mr-3 mt-1 text-brand-gray-400" />
+                <div>
+                    <p className="font-medium text-brand-gray-600 dark:text-brand-gray-400">Categorias</p>
+                    <div className="flex flex-wrap gap-2 mt-1">
+                        {evento.categories.map(cat => (
+                            <span key={cat} className="px-2 py-0.5 text-xs rounded-full bg-brand-gray-100 dark:bg-brand-gray-700 text-brand-gray-700 dark:text-brand-gray-300">{cat}</span>
+                        ))}
+                    </div>
+                </div>
             </div>
-          </motion.div>
         </div>
-      )}
-    </AnimatePresence>
+      </div>
+    </div>
   );
 };
 
-export default EventModal;
+export default EventOverviewTab;

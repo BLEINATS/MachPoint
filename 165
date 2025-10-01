@@ -1,89 +1,64 @@
 /*
-  ## Description
-  This migration continues to improve database security by setting a fixed `search_path` for several trigger functions.
-  This is a preventative measure against potential security vulnerabilities, as recommended by Supabase security advisories.
-  It does not change the functionality of the application.
-*/
+          # [Schema Security] Fix Function Search Path (Batch 5)
+          [This operation enhances security by explicitly setting the search_path for several database functions, mitigating potential risks identified by Supabase security advisories.]
 
--- Secure the trigger function that handles reservation completion and gamification points
-CREATE OR REPLACE FUNCTION public.handle_reservation_completion()
-RETURNS TRIGGER
+          ## Query Description: [This operation will alter existing database functions to set a fixed search_path. This is a safe, non-destructive change that improves security by preventing potential hijacking of function calls. It has no impact on existing data or application functionality.]
+          
+          ## Metadata:
+          - Schema-Category: ["Security", "Safe"]
+          - Impact-Level: ["Low"]
+          - Requires-Backup: [false]
+          - Reversible: [true]
+          
+          ## Structure Details:
+          - Functions being altered:
+            - `add_credit_to_aluno`
+            - `handle_new_user`
+          
+          ## Security Implications:
+          - RLS Status: [No Change]
+          - Policy Changes: [No]
+          - Auth Requirements: [None]
+          
+          ## Performance Impact:
+          - Indexes: [No Change]
+          - Triggers: [No Change]
+          - Estimated Impact: [None. This is a security and stability improvement with no performance overhead.]
+          */
+
+-- Fix for function: add_credit_to_aluno
+CREATE OR REPLACE FUNCTION public.add_credit_to_aluno(aluno_id_to_update uuid, arena_id_to_check uuid, amount_to_add numeric)
+RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = 'public'
 AS $$
-DECLARE
-  v_settings gamification_settings;
-  v_points_to_add int;
-  v_aluno_id uuid;
 BEGIN
-  -- Only run on update when status changes to 'realizada'
-  IF (TG_OP = 'UPDATE' AND NEW.status = 'realizada' AND OLD.status <> 'realizada') THEN
-    -- Find the corresponding aluno_id from the profile_id
-    SELECT id INTO v_aluno_id
-    FROM public.alunos
-    WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id;
-
-    -- Only proceed if there is a student profile and a reservation price
-    IF v_aluno_id IS NOT NULL AND NEW.total_price IS NOT NULL AND NEW.total_price > 0 THEN
-      -- Get gamification settings for the arena
-      SELECT * INTO v_settings
-      FROM public.gamification_settings
-      WHERE arena_id = NEW.arena_id AND is_enabled = true;
-
-      -- If gamification is enabled for the arena
-      IF FOUND THEN
-        v_points_to_add := 0;
-        
-        -- Add points per reservation
-        IF v_settings.points_per_reservation > 0 THEN
-          v_points_to_add := v_points_to_add + v_settings.points_per_reservation;
-        END IF;
-
-        -- Add points per real spent
-        IF v_settings.points_per_real > 0 THEN
-          v_points_to_add := v_points_to_add + floor(NEW.total_price * v_settings.points_per_real);
-        END IF;
-
-        -- If there are points to add, call the function
-        IF v_points_to_add > 0 THEN
-          PERFORM add_gamification_points(
-            v_aluno_id,
-            v_points_to_add,
-            'Pontos por reserva concluída'
-          );
-        END IF;
-      END IF;
-    END IF;
-  END IF;
-  
-  RETURN NEW;
+  UPDATE public.alunos
+  SET credit_balance = credit_balance + amount_to_add
+  WHERE id = aluno_id_to_update AND arena_id = arena_id_to_check;
 END;
 $$;
 
--- Secure the trigger function that handles new reservation notifications
-CREATE OR REPLACE FUNCTION public.handle_new_reservation_notification()
-RETURNS TRIGGER
+-- Fix for function: handle_new_user
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = 'public'
 AS $$
 DECLARE
-    v_quadra_name text;
+  v_role TEXT;
+  v_name TEXT;
+  v_client_type TEXT;
 BEGIN
-    -- Notify the arena admin when a new reservation is created
-    IF (TG_OP = 'INSERT') THEN
-        SELECT name INTO v_quadra_name FROM public.quadras WHERE id = NEW.quadra_id;
+  v_role := new.raw_user_meta_data->>'role';
+  v_name := new.raw_user_meta_data->>'name';
+  v_client_type := new.raw_user_meta_data->>'clientType';
 
-        INSERT INTO public.notificacoes (arena_id, message, type, link_to)
-        VALUES (
-            NEW.arena_id,
-            'Nova reserva de ' || COALESCE(NEW.clientName, 'Cliente') || ' na quadra ' || COALESCE(v_quadra_name, 'N/A'),
-            'nova_reserva',
-            '/reservas'
-        );
-    END IF;
-
-    RETURN NEW;
+  INSERT INTO public.profiles (id, email, name, role, clientType)
+  VALUES (new.id, new.email, v_name, v_role, v_client_type);
+  
+  RETURN new;
 END;
 $$;

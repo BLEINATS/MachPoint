@@ -1,62 +1,26 @@
 /*
-          # [Function: client_cancel_reservation_by_id_v4]
-          [This function allows a client to cancel their own reservation by providing the reservation ID. It correctly identifies the calling user even inside a SECURITY DEFINER context.]
+# [Security] Grant execute on ensure_my_aluno_profile
+[This migration explicitly grants execute permission on the 'ensure_my_aluno_profile' function to the 'authenticated' role. This is a safeguard to ensure the function is callable by logged-in users, which might resolve schema cache or permission issues.]
 
-          ## Query Description: [This operation creates a new, more secure database function `client_cancel_reservation_by_id_v4`. It fixes a critical permission bug by using `auth.jwt()` to correctly identify the user calling the function. This is the definitive fix for the cancellation permission errors.]
-          
-          ## Metadata:
-          - Schema-Category: ["Safe"]
-          - Impact-Level: ["Low"]
-          - Requires-Backup: [false]
-          - Reversible: [true]
-          
-          ## Structure Details:
-          [Function: public.client_cancel_reservation_by_id_v4(p_reserva_id uuid)]
-          
-          ## Security Implications:
-          - RLS Status: [N/A for function, but interacts with RLS on tables]
-          - Policy Changes: [No]
-          - Auth Requirements: [Authenticated user]
-          
-          ## Performance Impact:
-          - Indexes: [N/A]
-          - Triggers: [N/A]
-          - Estimated Impact: [Low]
-          */
-create or replace function public.client_cancel_reservation_by_id_v4(p_reserva_id uuid)
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  v_reserva public.reservas;
-  v_caller_id uuid;
-begin
-  -- Get the current user's ID from the JWT
-  v_caller_id := (auth.jwt()->>'sub')::uuid;
+## Query Description: [Grants the 'authenticated' role permission to execute the specified function. This is a non-destructive operation that enhances security configuration.]
 
-  if v_caller_id is null then
-    raise exception 'Authentication required';
-  end if;
+## Metadata:
+- Schema-Category: ["Security"]
+- Impact-Level: ["Low"]
+- Requires-Backup: [false]
+- Reversible: [true]
 
-  -- Find the reservation and check ownership
-  select * into v_reserva from public.reservas where id = p_reserva_id;
+## Structure Details:
+- Affects function: public.ensure_my_aluno_profile
 
-  if not found then
-    raise exception 'Reservation not found';
-  end if;
+## Security Implications:
+- RLS Status: [N/A]
+- Policy Changes: [No]
+- Auth Requirements: [Authenticated user]
 
-  -- Check if the current user is the owner of the reservation
-  if v_reserva.profile_id != v_caller_id then
-    raise exception 'Permission denied: You are not the owner of this reservation.';
-  end if;
-
-  -- Update the reservation status to 'cancelada'
-  update public.reservas
-  set status = 'cancelada'
-  where id = p_reserva_id;
-end;
-$$;
-
-grant execute on function public.client_cancel_reservation_by_id_v4(uuid) to authenticated;
+## Performance Impact:
+- Indexes: [None]
+- Triggers: [None]
+- Estimated Impact: [None]
+*/
+GRANT EXECUTE ON FUNCTION public.ensure_my_aluno_profile(uuid, uuid) TO authenticated;

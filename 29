@@ -1,119 +1,123 @@
-import React, { useState, useMemo, useRef, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Arena } from '../../types';
-import { ChevronsUpDown, Check, PlusCircle, Search, Building } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { X, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { Reserva } from '../../types';
+import Button from '../Forms/Button';
+import { format, differenceInHours } from 'date-fns';
+import { ptBR } from 'date-fns/locale';
+import { parseDateStringAsLocal } from '../../utils/dateUtils';
 
-interface ArenaSelectorProps {
-  arenas: Arena[];
-  selectedArena: Arena | null;
-  onSelect: (arena: Arena) => void;
+interface ClientCancellationModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onConfirm: (reservaId: string) => void;
+  reserva: Reserva;
+  policyText?: string | null;
 }
 
-const ArenaSelector: React.FC<ArenaSelectorProps> = ({ arenas, selectedArena, onSelect }) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const [search, setSearch] = useState('');
-  const navigate = useNavigate();
-  const dropdownRef = useRef<HTMLDivElement>(null);
+const ClientCancellationModal: React.FC<ClientCancellationModalProps> = ({ isOpen, onClose, onConfirm, reserva, policyText }) => {
 
-  const filteredArenas = useMemo(() => {
-    return arenas.filter(arena =>
-      arena.name.toLowerCase().includes(search.toLowerCase())
-    );
-  }, [arenas, search]);
+  const cancellationInfo = useMemo(() => {
+    const reservaDate = parseDateStringAsLocal(reserva.date);
+    const [hours, minutes] = reserva.start_time.split(':').map(Number);
+    reservaDate.setHours(hours, minutes, 0, 0);
+    const reservaStartDateTime = reservaDate;
+    
+    const hoursUntilReservation = differenceInHours(reservaStartDateTime, new Date());
+    const originalPrice = reserva.total_price || 0;
 
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
+    if (hoursUntilReservation >= 24) {
+      return {
+        policy: 'Cancelamento com +24h',
+        creditPercentage: 100,
+        creditAmount: originalPrice,
+        message: 'Você receberá 100% do valor pago como crédito.',
+        color: 'text-green-500',
+      };
+    }
+    
+    if (hoursUntilReservation >= 12) {
+      return {
+        policy: 'Cancelamento entre 12h e 24h',
+        creditPercentage: 50,
+        creditAmount: originalPrice * 0.5,
+        message: 'Você receberá 50% do valor pago como crédito.',
+        color: 'text-yellow-500',
+      };
+    }
+
+    return {
+      policy: 'Cancelamento com -12h',
+      creditPercentage: 0,
+      creditAmount: 0,
+      message: 'Nenhum crédito será concedido para cancelamentos com menos de 12 horas de antecedência.',
+      color: 'text-red-500',
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [reserva]);
 
-  const handleSelect = (arena: Arena) => {
-    onSelect(arena);
-    setIsOpen(false);
-    setSearch('');
-  };
-
-  const handleAddNew = () => {
-    navigate('/arenas');
-    setIsOpen(false);
+  const handleConfirm = () => {
+    onConfirm(reserva.id);
   };
 
   return (
-    <div className="relative w-full md:max-w-xs" ref={dropdownRef}>
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-full flex items-center justify-between bg-white dark:bg-brand-gray-800 border border-brand-gray-300 dark:border-brand-gray-600 rounded-lg shadow-sm px-4 py-3 text-left focus:outline-none focus:ring-2 focus:ring-brand-blue-500"
-      >
-        <span className="flex items-center">
-          {selectedArena ? (
-            <>
-              <img src={selectedArena.main_image || `https://avatar.vercel.sh/${selectedArena.id}.svg`} alt={selectedArena.name} className="w-6 h-6 rounded-full mr-3 object-cover" />
-              <span className="font-medium text-brand-gray-900 dark:text-white truncate">{selectedArena.name}</span>
-            </>
-          ) : (
-            <>
-              <Building className="w-5 h-5 mr-3 text-brand-gray-500" />
-              <span className="text-brand-gray-500">Selecione uma arena</span>
-            </>
-          )}
-        </span>
-        <ChevronsUpDown className="h-5 w-5 text-brand-gray-400" />
-      </button>
-
-      <AnimatePresence>
-        {isOpen && (
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50" onClick={onClose}>
           <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="absolute z-10 mt-1 w-full bg-white dark:bg-brand-gray-800 shadow-lg rounded-lg border border-brand-gray-200 dark:border-brand-gray-700 overflow-hidden"
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9 }}
+            className="bg-white dark:bg-brand-gray-900 rounded-lg w-full max-w-lg shadow-xl flex flex-col"
+            onClick={e => e.stopPropagation()}
           >
-            <div className="p-2">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-brand-gray-400" />
-                <input
-                  type="text"
-                  placeholder="Buscar arena..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="w-full form-input bg-brand-gray-100 dark:bg-brand-gray-900 border-transparent focus:border-brand-blue-500 focus:ring-brand-blue-500 rounded-md pl-9 py-2 text-sm"
-                />
-              </div>
-            </div>
-            <ul className="max-h-60 overflow-y-auto p-2">
-              {filteredArenas.map(arena => (
-                <li
-                  key={arena.id}
-                  onClick={() => handleSelect(arena)}
-                  className="flex items-center justify-between p-3 rounded-md cursor-pointer hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700"
-                >
-                  <span className="flex items-center">
-                    <img src={arena.main_image || `https://avatar.vercel.sh/${arena.id}.svg`} alt={arena.name} className="w-6 h-6 rounded-full mr-3 object-cover" />
-                    <span className="font-medium text-sm text-brand-gray-800 dark:text-brand-gray-200">{arena.name}</span>
-                  </span>
-                  {selectedArena?.id === arena.id && <Check className="h-5 w-5 text-brand-blue-500" />}
-                </li>
-              ))}
-            </ul>
-            <div className="border-t border-brand-gray-200 dark:border-brand-gray-700 p-2">
-              <button
-                onClick={handleAddNew}
-                className="w-full flex items-center p-3 rounded-md text-sm font-medium text-brand-blue-600 dark:text-brand-blue-400 hover:bg-blue-50 dark:hover:bg-brand-blue-500/10"
-              >
-                <PlusCircle className="h-5 w-5 mr-3" />
-                Seguir nova arena
+            <div className="flex justify-between items-center p-6 border-b border-brand-gray-200 dark:border-brand-gray-700">
+              <h3 className="text-xl font-semibold text-brand-gray-900 dark:text-white flex items-center">
+                <AlertTriangle className="h-5 w-5 mr-3 text-yellow-500" />
+                Cancelar Reserva
+              </h3>
+              <button onClick={onClose} className="p-1 rounded-full hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
+                <X className="h-5 w-5 text-brand-gray-500" />
               </button>
             </div>
+
+            <div className="p-6 space-y-4">
+              <p className="text-brand-gray-600 dark:text-brand-gray-400">
+                Você está cancelando sua reserva para o dia <strong className="text-brand-gray-800 dark:text-white">{format(parseDateStringAsLocal(reserva.date), 'dd/MM/yyyy', { locale: ptBR })}</strong> às <strong className="text-brand-gray-800 dark:text-white">{reserva.start_time.slice(0,5)}</strong>.
+              </p>
+              
+              <div className={`p-4 rounded-lg border-l-4 ${cancellationInfo.color.replace('text-', 'border-')} ${cancellationInfo.color.replace('text-', 'bg-').replace('-500', '-50')} dark:${cancellationInfo.color.replace('text-', 'bg-').replace('-500', '-900/50')}`}>
+                <h4 className={`font-bold ${cancellationInfo.color}`}>{cancellationInfo.policy}</h4>
+                <p className="text-sm text-brand-gray-700 dark:text-brand-gray-300 mt-1">{cancellationInfo.message}</p>
+              </div>
+
+              <div className="text-center py-4">
+                <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400">Crédito a ser gerado em sua conta:</p>
+                <p className="text-3xl font-bold text-green-600 dark:text-green-400">
+                  {cancellationInfo.creditAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                </p>
+              </div>
+
+              {policyText && (
+                <div className="p-4 rounded-lg bg-brand-gray-50 dark:bg-brand-gray-800 border border-brand-gray-200 dark:border-brand-gray-700">
+                    <h5 className="font-semibold text-sm mb-2 flex items-center"><ShieldCheck className="h-4 w-4 mr-2 text-brand-gray-500" /> Política Completa da Arena</h5>
+                    <div className="text-xs text-brand-gray-500 dark:text-brand-gray-400 max-h-24 overflow-y-auto whitespace-pre-wrap">
+                        {policyText}
+                    </div>
+                </div>
+              )}
+            </div>
+
+            <div className="p-6 mt-auto border-t border-brand-gray-200 dark:border-brand-gray-700 flex justify-end gap-3">
+              <Button variant="outline" onClick={onClose}>Voltar</Button>
+              <Button onClick={handleConfirm} className="bg-red-600 hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600 focus:ring-red-500">
+                Confirmar Cancelamento
+              </Button>
+            </div>
           </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+        </div>
+      )}
+    </AnimatePresence>
   );
 };
 
-export default ArenaSelector;
+export default ClientCancellationModal;

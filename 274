@@ -1,63 +1,47 @@
 /*
-          # [Operation Name]
-          Cleanup and Recreate RLS Policies for 'reservas' Table
+# [Function] Definitive Fix for Client Reservation Cancellation
+[This operation creates a new, simplified, and secure function for clients to cancel their own reservations. This new function, 'cancel_my_booking', is designed to be robust and avoid any potential schema cache issues by using a clean name and relying on the table's Row-Level Security (RLS) policies for permission checks, which is the standard and safest method.]
 
-          ## Query Description: [This operation will reset and correctly configure the security policies for the reservations table. It first removes any existing, potentially conflicting policies for authenticated users and then re-creates them idempotently. This ensures that clients can create, view, and cancel their own reservations without permission errors, while preventing conflicts during migration.]
-          
-          ## Metadata:
-          - Schema-Category: ["Security"]
-          - Impact-Level: ["Low"]
-          - Requires-Backup: [false]
-          - Reversible: [true]
-          
-          ## Structure Details:
-          - Affects RLS policies on the 'public.reservas' table.
-          
-          ## Security Implications:
-          - RLS Status: [Enabled]
-          - Policy Changes: [Yes]
-          - Auth Requirements: [Authenticated User]
-          
-          ## Performance Impact:
-          - Indexes: [No change]
-          - Triggers: [No change]
-          - Estimated Impact: [None]
-          */
+## Query Description: [This operation will create a new database function and drop the previous one. It is a safe operation that will not affect existing data. It is the definitive fix for the persistent cancellation error.]
 
--- Drop all potentially conflicting policies for the 'authenticated' role on 'reservas' table first.
-DROP POLICY IF EXISTS "Allow clients to view their own reservations" ON public.reservas;
-DROP POLICY IF EXISTS "Allow clients to create their own reservations" ON public.reservas;
-DROP POLICY IF EXISTS "Allow clients to update their own reservations" ON public.reservas;
-DROP POLICY IF EXISTS "Allow clients to delete their own reservations" ON public.reservas;
-DROP POLICY IF EXISTS "Allow clients full access to their own reservations" ON public.reservas;
+## Metadata:
+- Schema-Category: ["Structural"]
+- Impact-Level: ["Low"]
+- Requires-Backup: [false]
+- Reversible: [false]
 
--- Re-create the correct policies.
+## Structure Details:
+- Function `public.cancel_my_booking` will be created.
+- Function `public.client_cancel_reservation_by_id_v3` will be dropped.
 
--- 1. SELECT: Users can read their own reservations.
-CREATE POLICY "Allow clients to view their own reservations"
-ON public.reservas
-FOR SELECT
-TO authenticated
-USING (auth.uid() = profile_id);
+## Security Implications:
+- RLS Status: [Enabled]
+- Policy Changes: [No]
+- Auth Requirements: [Authenticated User]
 
--- 2. INSERT: Users can create reservations for themselves.
-CREATE POLICY "Allow clients to create their own reservations"
-ON public.reservas
-FOR INSERT
-TO authenticated
-WITH CHECK (auth.uid() = profile_id);
+## Performance Impact:
+- Indexes: [N/A]
+- Triggers: [N/A]
+- Estimated Impact: [None]
+*/
 
--- 3. UPDATE: Users can update (e.g., cancel) their own reservations.
-CREATE POLICY "Allow clients to update their own reservations"
-ON public.reservas
-FOR UPDATE
-TO authenticated
-USING (auth.uid() = profile_id)
-WITH CHECK (auth.uid() = profile_id);
+-- Drop the previous version to avoid conflicts
+DROP FUNCTION IF EXISTS public.client_cancel_reservation_by_id_v3(uuid);
 
--- 4. DELETE: Users can delete their own reservations.
-CREATE POLICY "Allow clients to delete their own reservations"
-ON public.reservas
-FOR DELETE
-TO authenticated
-USING (auth.uid() = profile_id);
+-- Create the new, definitive function that relies on RLS policies
+CREATE OR REPLACE FUNCTION public.cancel_my_booking(booking_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  -- The RLS policy on the 'reservas' table will handle the permission check.
+  -- This function just needs to execute the update. If the user doesn't have
+  -- permission according to the RLS policy, this UPDATE will fail.
+  UPDATE public.reservas
+  SET status = 'cancelada'
+  WHERE id = booking_id;
+END;
+$$;
+
+-- Grant execute permission to authenticated users
+GRANT EXECUTE ON FUNCTION public.cancel_my_booking(uuid) TO authenticated;

@@ -1,117 +1,117 @@
--- 1. Create the notifications table
-CREATE TABLE public.notificacoes (
-    id uuid NOT NULL DEFAULT gen_random_uuid(),
-    arena_id uuid NOT NULL,
-    profile_id uuid NOT NULL,
-    message text NOT NULL,
-    is_read boolean NOT NULL DEFAULT false,
-    link_to text,
-    type text,
-    created_at timestamp with time zone NOT NULL DEFAULT now(),
-    CONSTRAINT notificacoes_pkey PRIMARY KEY (id),
-    CONSTRAINT notificacoes_arena_id_fkey FOREIGN KEY (arena_id) REFERENCES public.arenas(id) ON DELETE CASCADE,
-    CONSTRAINT notificacoes_profile_id_fkey FOREIGN KEY (profile_id) REFERENCES public.profiles(id) ON DELETE CASCADE
+/*
+  # [Estrutura da Tabela de Arenas]
+  Cria a tabela 'arenas' para armazenar todas as configurações e dados específicos de cada arena, estabelecendo a base do sistema multi-tenant.
+  ## Query Description: [Este script cria a tabela 'arenas' com todos os campos necessários para o perfil da arena (endereço, contatos, políticas, etc.). Ele também cria uma função 'slugify' para gerar URLs amigáveis, e um gatilho (trigger) que cria automaticamente uma nova arena quando um usuário do tipo 'admin_arena' se cadastra. Políticas de Segurança em Nível de Linha (RLS) são ativadas para garantir que um administrador só possa editar sua própria arena, mas que os dados públicos possam ser visualizados por todos.]
+  ## Metadata:
+  - Schema-Category: "Structural"
+  - Impact-Level: "Medium"
+  - Requires-Backup: false
+  - Reversible: true
+  ## Structure Details:
+  - Tabela afetada: `public.arenas` (será criada)
+  - Tabela afetada: `public.profiles` (será adicionada uma Foreign Key)
+  - Função afetada: `public.slugify` (será criada)
+  - Função afetada: `public.handle_new_admin_user` (será criada)
+  - Gatilho afetado: Em `auth.users` (será criado)
+  ## Security Implications:
+  - RLS Status: Será ativado na tabela `public.arenas`.
+  - Policy Changes: Sim, serão criadas políticas de acesso para a tabela `public.arenas`.
+  - Auth Requirements: Acesso de administrador para executar.
+  ## Performance Impact:
+  - Indexes: Chaves primárias e índices de chave estrangeira serão criados.
+  - Triggers: Um novo gatilho será adicionado à tabela `auth.users`. O impacto é mínimo.
+  - Estimated Impact: Baixo.
+*/
+-- 1. Função para criar slugs amigáveis a partir de um texto
+CREATE OR REPLACE FUNCTION public.slugify(
+  v TEXT
+) RETURNS TEXT AS $$
+BEGIN
+  -- 1. Remove acentos
+  v := translate(v,
+    'áàâãäåāăąçćčďđéèêëēĕėęěğǵḧîïíīįìłḿñńǹňôöòóœøōõőṕŕřßśšşșťțûüùúūǘůűųẃẍÿýžźż',
+    'aaaaaaaaacccddeeeeeeeegghiiiiiilmnnnnoooooooooprrsssssttuuuuuuuuuwxyyzzz'
+  );
+  -- 2. Converte para minúsculas
+  v := lower(v);
+  -- 3. Substitui caracteres não alfanuméricos por hífen
+  v := regexp_replace(v, '[^a-z0-9]+', '-', 'g');
+  -- 4. Remove hífens do início e do fim
+  v := regexp_replace(v, '^-+|-+$', '', 'g');
+  RETURN v;
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+-- 2. Criação da tabela de Arenas
+CREATE TABLE public.arenas (
+  id uuid NOT NULL DEFAULT gen_random_uuid(),
+  created_at timestamp with time zone DEFAULT now(),
+  owner_id uuid NOT NULL REFERENCES auth.users(id),
+  name text NOT NULL,
+  slug text UNIQUE NOT NULL,
+  logo_url text,
+  cnpj_cpf text,
+  responsible_name text,
+  contact_phone text,
+  public_email text,
+  cep text,
+  address text,
+  number text,
+  neighborhood text,
+  city text,
+  state text,
+  google_maps_link text,
+  cancellation_policy text,
+  terms_of_use text,
+  CONSTRAINT arenas_pkey PRIMARY KEY (id)
 );
--- 2. Enable RLS and create policies
-ALTER TABLE public.notificacoes ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users can view their own notifications" ON public.notificacoes
-    FOR SELECT USING (auth.uid() = profile_id);
-CREATE POLICY "Users can update their own notifications" ON public.notificacoes
-    FOR UPDATE USING (auth.uid() = profile_id) WITH CHECK (auth.uid() = profile_id);
--- 3. Create function to handle new reservation notifications
-CREATE OR REPLACE FUNCTION public.handle_new_reservation_notification()
-RETURNS TRIGGER
+COMMENT ON TABLE public.arenas IS 'Armazena os dados de configuração de cada arena.';
+-- 3. Adiciona a chave estrangeira na tabela de perfis
+ALTER TABLE public.profiles
+ADD CONSTRAINT profiles_arena_id_fkey
+FOREIGN KEY (arena_id) REFERENCES public.arenas(id) ON DELETE SET NULL;
+-- 4. Função para criar uma arena automaticamente para um novo admin
+CREATE OR REPLACE FUNCTION public.handle_new_admin_user()
+RETURNS trigger
 LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
+SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE
-    v_owner_id uuid;
-    v_quadra_name text;
-    v_creator_profile_id uuid := auth.uid();
-    v_notification_message text;
+  new_arena_id uuid;
 BEGIN
-    -- Get arena owner and quadra name
-    SELECT owner_id INTO v_owner_id FROM public.arenas WHERE id = NEW.arena_id;
-    SELECT name INTO v_quadra_name FROM public.quadras WHERE id = NEW.quadra_id;
-    -- If client made the reservation, notify the admin
-    IF v_creator_profile_id = NEW.profile_id THEN
-        v_notification_message := 'Nova reserva de ' || NEW.clientName || ' na quadra ' || v_quadra_name || '.';
-        INSERT INTO public.notificacoes (arena_id, profile_id, message, link_to, type)
-        VALUES (NEW.arena_id, v_owner_id, v_notification_message, '/reservas', 'new_reservation');
-    -- If admin made the reservation for a client, notify the client
-    ELSIF NEW.profile_id IS NOT NULL THEN
-        v_notification_message := 'Sua reserva na quadra ' || v_quadra_name || ' foi confirmada pela arena!';
-        INSERT INTO public.notificacoes (arena_id, profile_id, message, link_to, type)
-        VALUES (NEW.arena_id, NEW.profile_id, v_notification_message, '/perfil', 'new_reservation');
-    END IF;
-    RETURN NEW;
+  -- Verifica se o novo usuário tem a role 'admin_arena'
+  IF new.raw_user_meta_data->>'role' = 'admin_arena' THEN
+    -- Insere uma nova arena e obtém seu ID
+    INSERT INTO public.arenas (owner_id, name, slug)
+    VALUES (new.id, new.raw_user_meta_data->>'name', public.slugify(new.raw_user_meta_data->>'name'))
+    RETURNING id INTO new_arena_id;
+    -- Atualiza o perfil do usuário com o ID da nova arena
+    UPDATE public.profiles
+    SET arena_id = new_arena_id
+    WHERE id = new.id;
+  END IF;
+  RETURN new;
 END;
 $$;
--- 4. Create trigger for new reservations
-CREATE TRIGGER on_reservation_created
-    AFTER INSERT ON public.reservas
-    FOR EACH ROW EXECUTE FUNCTION public.handle_new_reservation_notification();
--- 5. Create function to handle cancellation notifications
-CREATE OR REPLACE FUNCTION public.handle_cancellation_notification()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-    v_owner_id uuid;
-    v_quadra_name text;
-    v_notification_message_for_admin text;
-    v_notification_message_for_client text;
-BEGIN
-    IF NEW.status = 'cancelada' AND OLD.status <> 'cancelada' THEN
-        -- Get arena owner and quadra name
-        SELECT owner_id INTO v_owner_id FROM public.arenas WHERE id = NEW.arena_id;
-        SELECT name INTO v_quadra_name FROM public.quadras WHERE id = NEW.quadra_id;
-        -- Notify Admin
-        v_notification_message_for_admin := 'A reserva de ' || NEW.clientName || ' na quadra ' || v_quadra_name || ' foi cancelada.';
-        INSERT INTO public.notificacoes (arena_id, profile_id, message, link_to, type)
-        VALUES (NEW.arena_id, v_owner_id, v_notification_message_for_admin, '/reservas', 'cancellation');
-        -- Notify Client if they have a profile
-        IF NEW.profile_id IS NOT NULL THEN
-            v_notification_message_for_client := 'Sua reserva na quadra ' || v_quadra_name || ' em ' || to_char(NEW.date, 'DD/MM') || ' foi cancelada.';
-            INSERT INTO public.notificacoes (arena_id, profile_id, message, link_to, type)
-            VALUES (NEW.arena_id, NEW.profile_id, v_notification_message_for_client, '/perfil', 'cancellation');
-        END IF;
-    END IF;
-    RETURN NEW;
-END;
-$$;
--- 6. Create trigger for reservation cancellations
-CREATE TRIGGER on_reservation_cancelled
-    AFTER UPDATE OF status ON public.reservas
-    FOR EACH ROW EXECUTE FUNCTION public.handle_cancellation_notification();
--- 7. Create function to handle credit notifications
-CREATE OR REPLACE FUNCTION public.handle_credit_notification()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-    v_profile_id uuid;
-    v_message text;
-BEGIN
-    SELECT profile_id INTO v_profile_id FROM public.alunos WHERE id = NEW.aluno_id;
-    IF v_profile_id IS NOT NULL THEN
-        IF NEW.amount > 0 THEN
-            v_message := 'Você recebeu ' || to_char(NEW.amount, 'L9G999D99') || ' em créditos. Motivo: ' || NEW.description;
-        ELSE
-            v_message := 'Foi utilizado ' || to_char(NEW.amount * -1, 'L9G999D99') || ' do seu saldo. Motivo: ' || NEW.description;
-        END IF;
-        INSERT INTO public.notificacoes (arena_id, profile_id, message, link_to, type)
-        VALUES (NEW.arena_id, v_profile_id, v_message, '/perfil', 'credit_update');
-    END IF;
-    RETURN NEW;
-END;
-$$;
--- 8. Create trigger for credit transactions
-CREATE TRIGGER on_credit_transaction_created
-    AFTER INSERT ON public.credit_transactions
-    FOR EACH ROW EXECUTE FUNCTION public.handle_credit_notification();
+-- 5. Gatilho (Trigger) para executar a função após o cadastro de um usuário
+CREATE TRIGGER on_new_admin_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_admin_user();
+-- 6. Habilita a Segurança em Nível de Linha (RLS)
+ALTER TABLE public.arenas ENABLE ROW LEVEL SECURITY;
+-- 7. Políticas de Segurança para a tabela de Arenas
+CREATE POLICY "Arenas are viewable by everyone."
+  ON public.arenas FOR SELECT
+  USING ( true );
+CREATE POLICY "Arena owners can update their own arena."
+  ON public.arenas FOR UPDATE
+  USING ( auth.uid() = owner_id );
+CREATE POLICY "Arena owners can insert their own arena."
+  ON public.arenas FOR INSERT
+  WITH CHECK ( auth.uid() = owner_id );
+-- 8. Concede permissões para os roles 'anon' e 'authenticated'
+GRANT ALL ON TABLE public.arenas TO anon;
+GRANT ALL ON TABLE public.arenas TO authenticated;
+GRANT ALL ON FUNCTION public.slugify(text) TO anon;
+GRANT ALL ON FUNCTION public.slugify(text) TO authenticated;
+GRANT ALL ON FUNCTION public.handle_new_admin_user() TO anon;
+GRANT ALL ON FUNCTION public.handle_new_admin_user() TO authenticated;

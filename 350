@@ -1,77 +1,100 @@
 /*
-  # [Function] create_booking_with_credit
-  Creates a new reservation and deducts credit from the client's balance in a single transaction.
+# [FIX] Corrigir Conflitos de Funções de Reserva de Cliente
+[Este script remove todas as versões conflitantes das funções `create_client_reservation_atomic` e `ensure_aluno_profile_exists` e as recria com a estrutura correta e definitiva para resolver os erros de migração e execução.]
 
-  ## Query Description:
-  - This function is designed to be called by authenticated clients.
-  - It first validates if the client has enough credit balance for the operation.
-  - If credit is used, it updates the client's balance and records the transaction.
-  - It then inserts the new reservation record.
-  - The entire operation is atomic. If any step fails, the whole transaction is rolled back.
-  - This is a safe operation as it runs with the invoker's security context and relies on RLS policies.
+## Query Description: [Esta operação irá apagar e recriar funções essenciais para a reserva de clientes. Não há risco de perda de dados de reservas existentes, mas é uma alteração estrutural importante. Recomenda-se fazer um backup por precaução.]
 
-  ## Metadata:
-  - Schema-Category: ["Structural", "Data"]
-  - Impact-Level: ["Low"]
-  - Requires-Backup: false
-  - Reversible: false (creates new data)
+## Metadata:
+- Schema-Category: ["Structural"]
+- Impact-Level: ["Medium"]
+- Requires-Backup: [false]
+- Reversible: [false]
 
-  ## Structure Details:
-  - Tables affected: public.reservas (INSERT), public.alunos (UPDATE), public.credit_transactions (INSERT)
+## Structure Details:
+- Funções Afetadas:
+  - `public.create_client_reservation_atomic`
+  - `public.ensure_aluno_profile_exists`
 
-  ## Security Implications:
-  - RLS Status: Enabled and relied upon.
-  - Policy Changes: No. This function depends on existing RLS policies.
-  - Auth Requirements: Authenticated user ('authenticated' role).
-  - SECURITY INVOKER: The function executes with the permissions of the user calling it.
+## Security Implications:
+- RLS Status: [N/A]
+- Policy Changes: [No]
+- Auth Requirements: [N/A]
 
-  ## Performance Impact:
-  - Indexes: Uses primary keys on affected tables.
-  - Triggers: May fire triggers on the affected tables.
-  - Estimated Impact: Low. The function performs a few indexed lookups and inserts/updates.
+## Performance Impact:
+- Indexes: [N/A]
+- Triggers: [N/A]
+- Estimated Impact: [Baixo. A recriação das funções pode causar um bloqueio momentâneo mínimo, mas não deve impactar a performance geral.]
 */
-CREATE OR REPLACE FUNCTION public.create_booking_with_credit(
+
+-- PASSO 1: Remover todas as versões conflitantes das funções para garantir um estado limpo.
+DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid, uuid, date, time without time zone, time without time zone, numeric, public.payment_status, text, numeric, jsonb, text, text);
+DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid, uuid, date, time without time zone, time without time zone, numeric, text, text, numeric, jsonb, text, text);
+DROP FUNCTION IF EXISTS public.ensure_aluno_profile_exists(uuid, uuid, text, text);
+DROP FUNCTION IF EXISTS public.ensure_aluno_profile_exists();
+
+-- PASSO 2: Criar a função auxiliar definitiva para garantir o perfil de aluno.
+CREATE OR REPLACE FUNCTION public.ensure_aluno_profile_exists(
+    p_profile_id uuid,
     p_arena_id uuid,
-    p_quadra_id uuid,
-    p_date date,
-    p_start_time time,
-    p_end_time time,
-    p_total_price numeric,
-    p_credit_used numeric,
     p_client_name text,
-    p_client_phone text,
-    p_sport_type text,
-    p_rented_items jsonb,
-    p_is_recurring boolean,
-    p_recurring_end_date date
+    p_client_phone text
 )
 RETURNS uuid
 LANGUAGE plpgsql
-SECURITY INVOKER
+SECURITY DEFINER
+SET search_path = public
 AS $$
 DECLARE
-    v_user_id uuid := auth.uid();
     v_aluno_id uuid;
-    v_current_credit numeric;
-    v_new_reserva_id uuid;
 BEGIN
-    -- 1. Find the client's 'aluno' profile for the specified arena.
-    SELECT id, credit_balance INTO v_aluno_id, v_current_credit
+    -- Verifica se já existe um perfil de aluno para este usuário nesta arena
+    SELECT id INTO v_aluno_id
     FROM public.alunos
-    WHERE profile_id = v_user_id AND arena_id = p_arena_id;
+    WHERE profile_id = p_profile_id AND arena_id = p_arena_id;
 
+    -- Se não existir, cria um novo perfil de aluno "Avulso"
     IF v_aluno_id IS NULL THEN
-        RAISE EXCEPTION 'Perfil de cliente não encontrado para esta arena. Por favor, siga a arena primeiro.';
+        INSERT INTO public.alunos (profile_id, arena_id, name, phone, status, plan_name, join_date)
+        VALUES (p_profile_id, p_arena_id, p_client_name, p_client_phone, 'ativo', 'Avulso', CURRENT_DATE)
+        RETURNING id INTO v_aluno_id;
     END IF;
 
-    -- 2. Validate credit balance if credit is being used.
-    IF p_credit_used > 0 THEN
-        IF v_current_credit < p_credit_used THEN
-            RAISE EXCEPTION 'Saldo de crédito insuficiente. Saldo atual: %, Crédito necessário: %', v_current_credit, p_credit_used;
-        END IF;
-    END IF;
+    RETURN v_aluno_id;
+END;
+$$;
 
-    -- 3. Insert the new reservation.
+-- PASSO 3: Criar a função principal e definitiva para a criação de reserva pelo cliente.
+CREATE OR REPLACE FUNCTION public.create_client_reservation_atomic(
+    p_arena_id uuid,
+    p_quadra_id uuid,
+    p_date date,
+    p_start_time time without time zone,
+    p_end_time time without time zone,
+    p_total_price numeric,
+    p_payment_status text, -- Usar TEXT para evitar problemas de tipo enum
+    p_sport_type text,
+    p_credit_to_use numeric,
+    p_rented_items jsonb,
+    p_client_name text,
+    p_client_phone text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_profile_id uuid := auth.uid();
+    v_aluno_id uuid;
+    v_final_payment_status public.payment_status;
+BEGIN
+    -- Garante que o perfil de aluno existe e obtém o ID
+    v_aluno_id := public.ensure_aluno_profile_exists(v_profile_id, p_arena_id, p_client_name, p_client_phone);
+
+    -- Converte o status de pagamento de texto para o tipo enum
+    v_final_payment_status := p_payment_status::public.payment_status;
+
+    -- Insere a reserva
     INSERT INTO public.reservas (
         arena_id,
         quadra_id,
@@ -80,65 +103,43 @@ BEGIN
         start_time,
         end_time,
         total_price,
+        payment_status,
+        sport_type,
         credit_used,
+        rented_items,
         clientName,
         clientPhone,
-        sport_type,
-        rented_items,
-        isRecurring,
-        recurringEndDate,
-        status,
         type,
-        payment_status
-    ) VALUES (
+        status
+    )
+    VALUES (
         p_arena_id,
         p_quadra_id,
-        v_user_id,
+        v_profile_id,
         p_date,
         p_start_time,
         p_end_time,
         p_total_price,
-        p_credit_used,
+        v_final_payment_status,
+        p_sport_type,
+        p_credit_to_use,
+        p_rented_items,
         p_client_name,
         p_client_phone,
-        p_sport_type,
-        p_rented_items,
-        p_is_recurring,
-        p_recurring_end_date,
-        'confirmada',
-        'avulsa',
-        CASE WHEN (p_total_price - p_credit_used) <= 0 THEN 'pago' ELSE 'pendente' END
-    ) RETURNING id INTO v_new_reserva_id;
+        'avulsa', -- Tipo padrão para reserva de cliente
+        'confirmada' -- Status padrão
+    );
 
-    -- 4. If credit was used, update the balance and log the transaction.
-    IF p_credit_used > 0 THEN
+    -- Se crédito foi usado, atualiza o saldo do aluno
+    IF p_credit_to_use > 0 THEN
         UPDATE public.alunos
-        SET credit_balance = credit_balance - p_credit_used
+        SET credit_balance = credit_balance - p_credit_to_use
         WHERE id = v_aluno_id;
-
-        INSERT INTO public.credit_transactions (
-            aluno_id,
-            arena_id,
-            amount,
-            type,
-            description,
-            related_reservation_id,
-            created_by
-        ) VALUES (
-            v_aluno_id,
-            p_arena_id,
-            -p_credit_used,
-            'reservation_payment',
-            'Pagamento da reserva #' || substr(v_new_reserva_id::text, 1, 8),
-            v_new_reserva_id,
-            v_user_id
-        );
     END IF;
 
-    -- 5. Return the ID of the new reservation.
-    RETURN v_new_reserva_id;
 END;
 $$;
 
--- Grant execution permission to authenticated users.
-GRANT EXECUTE ON FUNCTION public.create_booking_with_credit(uuid, uuid, date, time, time, numeric, numeric, text, text, text, jsonb, boolean, date) TO authenticated;
+-- Conceder permissão para o role `authenticated` chamar as funções
+GRANT EXECUTE ON FUNCTION public.ensure_aluno_profile_exists(uuid, uuid, text, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.create_client_reservation_atomic(uuid, uuid, date, time without time zone, time without time zone, numeric, text, text, numeric, jsonb, text, text) TO authenticated;

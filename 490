@@ -1,57 +1,59 @@
 /*
-  # [Operation Name]
-  [This operation secures the 'seed_gamification_defaults' function by setting a fixed search_path, mitigating a security advisory.]
-  ## Query Description: [This script safely drops and recreates a database function to apply security best practices. It modifies the function's definition to prevent potential search_path hijacking vulnerabilities, without altering its core logic or impacting existing data. This is a low-risk, preventative security enhancement.]
-  ## Metadata:
-  - Schema-Category: "Security"
-  - Impact-Level: "Low"
-  - Requires-Backup: false
-  - Reversible: true
-  ## Structure Details:
-  - Function 'seed_gamification_defaults' will be dropped and recreated.
-  ## Security Implications:
-  - RLS Status: Unchanged
-  - Policy Changes: No
-  - Auth Requirements: Admin privileges
-  ## Performance Impact:
-  - Indexes: None
-  - Triggers: None
-  - Estimated Impact: Negligible. This change only affects the function's security context.
+# [SECURITY] Secure check_duplicate_reservation Function
+[This operation secures the `check_duplicate_reservation` function by setting a fixed search_path, preventing potential hijacking vulnerabilities, and improves its logic to correctly handle midnight-crossing reservations.]
+
+## Query Description: [This operation redefines an existing database function to enhance security and correctness. It does not alter any user data but improves the function's execution context to prevent security risks and booking conflicts. No backup is required, and the change is reversible by redeploying the previous version of the function.]
+
+## Metadata:
+- Schema-Category: ["Structural", "Safe"]
+- Impact-Level: ["Low"]
+- Requires-Backup: [false]
+- Reversible: [true]
+
+## Structure Details:
+- Function: public.check_duplicate_reservation
+
+## Security Implications:
+- RLS Status: [Not Applicable]
+- Policy Changes: [No]
+- Auth Requirements: [Not Applicable]
+
+## Performance Impact:
+- Indexes: [No change]
+- Triggers: [No change]
+- Estimated Impact: [Negligible performance impact.]
 */
-DROP FUNCTION IF EXISTS public.seed_gamification_defaults(uuid);
-CREATE OR REPLACE FUNCTION public.seed_gamification_defaults(p_arena_id uuid)
+CREATE OR REPLACE FUNCTION public.check_duplicate_reservation(
+    p_quadra_id uuid,
+    p_date date,
+    p_start_time time without time zone,
+    p_end_time time without time zone,
+    p_reserva_id uuid DEFAULT NULL::uuid
+)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
+DECLARE
+    v_conflict_id uuid;
 BEGIN
-    -- Seed Settings
-    INSERT INTO public.gamification_settings (arena_id, is_enabled, points_per_reservation, points_per_real)
-    VALUES (p_arena_id, true, 10, 1)
-    ON CONFLICT (arena_id) DO NOTHING;
-    -- Seed Levels
-    INSERT INTO public.gamification_levels (arena_id, name, points_required, level_rank)
-    VALUES
-        (p_arena_id, 'Bronze', 0, 1),
-        (p_arena_id, 'Prata', 100, 2),
-        (p_arena_id, 'Ouro', 500, 3),
-        (p_arena_id, 'Platina', 1000, 4),
-        (p_arena_id, 'Diamante', 2500, 5)
-    ON CONFLICT (arena_id, level_rank) DO NOTHING;
-    -- Seed Rewards
-    INSERT INTO public.gamification_rewards (arena_id, title, description, points_cost, type, value, is_active)
-    VALUES
-        (p_arena_id, 'Desconto R$ 10', 'Use seus pontos para ganhar R$ 10 de desconto.', 100, 'discount', 10, true),
-        (p_arena_id, 'Bebida Grátis', 'Troque seus pontos por uma bebida (água ou isotônico).', 50, 'free_item', null, true)
-    ON CONFLICT (arena_id, title) DO NOTHING;
-    -- Seed Achievements
-    INSERT INTO public.gamification_achievements (arena_id, name, description, type, points_reward, icon)
-    VALUES
-        (p_arena_id, 'Primeira Reserva', 'Concedido por fazer sua primeira reserva na arena.', 'first_reservation', 20, 'Sparkles'),
-        (p_arena_id, 'Fidelidade Bronze', 'Concedido por completar 10 reservas.', 'loyalty_10', 50, 'Medal'),
-        (p_arena_id, 'Fidelidade Prata', 'Concedido por completar 50 reservas.', 'loyalty_50', 100, 'Award'),
-        (p_arena_id, 'Fidelidade Ouro', 'Concedido por completar 100 reservas.', 'loyalty_100', 250, 'Trophy')
-    ON CONFLICT (arena_id, type) DO NOTHING;
+    SELECT r.id INTO v_conflict_id
+    FROM public.reservas r
+    WHERE
+        r.quadra_id = p_quadra_id AND
+        r.date = p_date AND
+        r.status <> 'cancelada' AND
+        (r.id <> p_reserva_id OR p_reserva_id IS NULL) AND
+        -- Overlap check that correctly handles midnight-crossing times (e.g., 23:00-00:00)
+        (
+            (r.start_time, COALESCE(NULLIF(r.end_time, '00:00:00'), '24:00:00')) OVERLAPS
+            (p_start_time, COALESCE(NULLIF(p_end_time, '00:00:00'), '24:00:00'))
+        )
+    LIMIT 1;
+
+    IF v_conflict_id IS NOT NULL THEN
+        RAISE EXCEPTION 'Conflito de horário. Já existe uma reserva para esta quadra neste horário.';
+    END IF;
 END;
 $$;

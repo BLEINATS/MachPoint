@@ -1,49 +1,51 @@
 import React from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { MailCheck, X } from 'lucide-react';
-import Button from '../Forms/Button';
+import { Arena } from '../../types';
+import { MapPin } from 'lucide-react';
+import QRCode from 'qrcode.react';
+import { useTheme } from '../../context/ThemeContext';
 
-interface ConfirmationDialogProps {
-  isOpen: boolean;
-  onClose: () => void;
-  email: string;
+interface ArenaInfoCardProps {
+  arena: Arena;
 }
 
-const ConfirmationDialog: React.FC<ConfirmationDialogProps> = ({ isOpen, onClose, email }) => {
+const ArenaInfoCard: React.FC<ArenaInfoCardProps> = ({ arena }) => {
+  const { theme } = useTheme();
+  const qrCodeColors = {
+    light: { fg: '#0f172a', bg: '#f1f5f9' },
+    dark: { fg: '#f8fafc', bg: '#1e293b' },
+  };
+  const currentColors = theme === 'dark' ? qrCodeColors.dark : qrCodeColors.light;
+  const publicUrl = `${window.location.origin}/${arena.slug}`;
+
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50" onClick={onClose}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.8, y: 50 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.8, y: 50 }}
-            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            className="bg-white dark:bg-brand-gray-900 rounded-2xl w-full max-w-md shadow-2xl text-center p-8 relative"
-            onClick={e => e.stopPropagation()}
-          >
-            <button onClick={onClose} className="absolute top-4 right-4 p-1 rounded-full hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
-              <X className="h-5 w-5 text-brand-gray-500" />
-            </button>
-            <div className="mx-auto flex items-center justify-center h-20 w-20 rounded-full bg-green-100 dark:bg-green-900/50 mb-6">
-              <MailCheck className="h-10 w-10 text-green-600 dark:text-green-400" />
-            </div>
-            <h3 className="text-2xl font-bold text-brand-gray-900 dark:text-white">
-              Confirme seu e-mail
-            </h3>
-            <p className="text-brand-gray-600 dark:text-brand-gray-400 mt-4">
-              Enviamos um link de confirmação para <strong className="text-brand-gray-800 dark:text-brand-gray-200">{email}</strong>. Por favor, verifique sua caixa de entrada (e spam) para ativar sua conta.
-            </p>
-            <div className="mt-8">
-              <Button onClick={onClose} className="w-full" size="lg">
-                Entendi
-              </Button>
-            </div>
-          </motion.div>
+    <div className="bg-white dark:bg-brand-gray-800 rounded-lg shadow-md border border-brand-gray-200 dark:border-brand-gray-700 overflow-hidden h-48 lg:h-56">
+      <div className="p-4 h-full flex flex-col">
+        <div className="flex-1">
+          <h3 className="font-bold text-lg text-brand-gray-900 dark:text-white mb-2">{arena.name}</h3>
+          <p className="text-sm text-brand-gray-500 mb-3 line-clamp-2">Bem-vindo à {arena.name}! Reserve um horário abaixo.</p>
+          <div className="flex items-center text-brand-gray-700 dark:text-brand-gray-300 text-sm">
+            <MapPin className="h-4 w-4 mr-2 text-brand-blue-500 flex-shrink-0" />
+            <span className="font-medium truncate">{arena.city}, {arena.state}</span>
+          </div>
         </div>
-      )}
-    </AnimatePresence>
+        <div className="border-t border-brand-gray-200 dark:border-brand-gray-700 pt-3 flex items-center justify-between">
+          <div className="flex-1">
+            <p className="text-xs text-brand-gray-500 dark:text-brand-gray-400">Acesse a página pública</p>
+          </div>
+          <div className="bg-brand-gray-50 dark:bg-brand-gray-700/50 p-1.5 rounded">
+            <QRCode
+              value={publicUrl}
+              size={40}
+              fgColor={currentColors.fg}
+              bgColor={currentColors.bg}
+              level="L"
+              includeMargin={false}
+            />
+          </div>
+        </div>
+      </div>
+    </div>
   );
 };
 
-export default ConfirmationDialog;
+export default ArenaInfoCard;

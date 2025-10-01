@@ -1,120 +1,119 @@
 /*
-  # [Fix] Correct column names in reservation creation function
-  [This migration corrects a typo in the `create_client_reservation_atomic` function, changing `clientname` to `client_name` and `clientphone` to `client_phone` to match the database schema. This resolves an error that prevented client reservations from being created.]
+          # [Function] create_client_reservation_atomic
+          Cria ou substitui a função para criar uma reserva de cliente de forma atômica, incluindo todos os detalhes em uma única transação para evitar inconsistências de dados, como preço zerado.
 
-  ## Query Description: [This operation drops and recreates a database function. It is a safe, non-destructive change that only affects the logic for creating new reservations. No existing data will be altered or lost.]
-  
-  ## Metadata:
-  - Schema-Category: ["Structural"]
-  - Impact-Level: ["Low"]
-  - Requires-Backup: [false]
-  - Reversible: [false]
-  
-  ## Structure Details:
-  - Functions affected: `public.create_client_reservation_atomic`
-  
-  ## Security Implications:
-  - RLS Status: [Enabled]
-  - Policy Changes: [No]
-  - Auth Requirements: [authenticated]
-  
-  ## Performance Impact:
-  - Indexes: [No]
-  - Triggers: [No]
-  - Estimated Impact: [None. This is a function definition change.]
-*/
+          ## Query Description: "Esta operação substitui a função de criação de reserva do cliente por uma versão mais robusta e segura. A nova função garante que todos os dados da reserva, incluindo o preço, sejam salvos atomicamente, eliminando o risco de reservas com valor zerado. Não há impacto em dados existentes, apenas melhora a criação de novas reservas."
+          
+          ## Metadata:
+          - Schema-Category: "Structural"
+          - Impact-Level: "Low"
+          - Requires-Backup: false
+          - Reversible: true
+          
+          ## Structure Details:
+          - Function: `public.create_client_reservation_atomic` (CREATE OR REPLACE)
+          
+          ## Security Implications:
+          - RLS Status: A função opera com os privilégios do usuário autenticado (`invoker`), respeitando as políticas de RLS existentes.
+          - Policy Changes: No
+          - Auth Requirements: Requer um usuário autenticado (`authenticated` role).
+          
+          ## Performance Impact:
+          - Indexes: N/A
+          - Triggers: N/A
+          - Estimated Impact: "Impacto de performance negligenciável. A mudança melhora a integridade dos dados ao consolidar múltiplas operações em uma única chamada de função."
+          */
 
--- Drop the existing function to avoid conflicts
-DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid, uuid, date, time without time zone, time without time zone, numeric, text, text, numeric, jsonb, text, text);
-
--- Recreate the function with the correct column names
-CREATE OR REPLACE FUNCTION public.create_client_reservation_atomic (
-  p_arena_id uuid,
-  p_quadra_id uuid,
-  p_date date,
-  p_start_time time,
-  p_end_time time,
-  p_total_price numeric,
-  p_payment_status text,
-  p_sport_type text,
-  p_credit_to_use numeric,
-  p_rented_items jsonb,
-  p_client_name text,
-  p_client_phone text
+CREATE OR REPLACE FUNCTION public.create_client_reservation_atomic(
+    p_arena_id uuid,
+    p_quadra_id uuid,
+    p_date date,
+    p_start_time time,
+    p_end_time time,
+    p_total_price numeric,
+    p_payment_status public.payment_status,
+    p_sport_type text,
+    p_credit_to_use numeric,
+    p_rented_items jsonb,
+    p_client_name text,
+    p_client_phone text
 )
 RETURNS uuid
 LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
+SECURITY INVOKER
 AS $$
 DECLARE
-  v_aluno_id uuid;
-  v_profile_id uuid;
-  v_reserva_id uuid;
+    v_profile_id uuid := auth.uid();
+    v_aluno_id uuid;
+    v_new_reserva_id uuid;
 BEGIN
-  -- Ensure the user has an 'aluno' profile in the arena, creating one if it doesn't exist.
-  SELECT id INTO v_aluno_id FROM public.ensure_aluno_profile_exists(
-    p_arena_id,
-    auth.uid(),
-    p_client_name,
-    p_client_phone
-  );
+    -- Garante que um perfil de aluno exista para o usuário nesta arena
+    v_aluno_id := public.ensure_aluno_profile_exists();
 
-  -- Get the profile_id from the aluno record
-  SELECT profile_id INTO v_profile_id FROM public.alunos WHERE id = v_aluno_id;
+    -- Deduz o crédito, se aplicável
+    IF p_credit_to_use > 0 THEN
+        UPDATE public.alunos
+        SET credit_balance = credit_balance - p_credit_to_use
+        WHERE id = v_aluno_id;
+    END IF;
 
-  -- Insert the reservation with the correct column names
-  INSERT INTO public.reservas (
-    arena_id,
-    quadra_id,
-    profile_id,
-    date,
-    start_time,
-    end_time,
-    total_price,
-    payment_status,
-    sport_type,
-    credit_used,
-    rented_items,
-    client_name, -- Corrected from clientname
-    client_phone, -- Corrected from clientphone
-    type,
-    status
-  )
-  VALUES (
-    p_arena_id,
-    p_quadra_id,
-    v_profile_id,
-    p_date,
-    p_start_time,
-    p_end_time,
-    p_total_price,
-    p_payment_status::public.payment_status,
-    p_sport_type,
-    p_credit_to_use,
-    p_rented_items,
-    p_client_name,
-    p_client_phone,
-    'avulsa',
-    'confirmada'
-  )
-  RETURNING id INTO v_reserva_id;
+    -- Insere a reserva com todos os dados de uma vez
+    INSERT INTO public.reservas (
+        arena_id,
+        quadra_id,
+        profile_id,
+        date,
+        start_time,
+        end_time,
+        total_price,
+        payment_status,
+        sport_type,
+        credit_used,
+        rented_items,
+        clientName,
+        clientPhone,
+        type,
+        status
+    )
+    VALUES (
+        p_arena_id,
+        p_quadra_id,
+        v_profile_id,
+        p_date,
+        p_start_time,
+        p_end_time,
+        p_total_price,
+        p_payment_status,
+        p_sport_type,
+        p_credit_to_use,
+        p_rented_items,
+        p_client_name,
+        p_client_phone,
+        'avulsa', -- Tipo padrão para reservas de cliente
+        'confirmada' -- Status padrão
+    )
+    RETURNING id INTO v_new_reserva_id;
 
-  -- If credit was used, deduct it and record the transaction
-  IF p_credit_to_use > 0 THEN
-    -- Deduct credit from the aluno's balance
-    UPDATE public.alunos
-    SET credit_balance = credit_balance - p_credit_to_use
-    WHERE id = v_aluno_id;
+    -- Registra a transação de crédito, se aplicável
+    IF p_credit_to_use > 0 THEN
+        INSERT INTO public.credit_transactions (
+            aluno_id,
+            arena_id,
+            amount,
+            type,
+            description,
+            related_reservation_id
+        )
+        VALUES (
+            v_aluno_id,
+            p_arena_id,
+            -p_credit_to_use,
+            'reservation_payment',
+            'Pagamento da reserva #' || substr(v_new_reserva_id::text, 1, 8),
+            v_new_reserva_id
+        );
+    END IF;
 
-    -- Log the credit transaction
-    INSERT INTO public.credit_transactions (aluno_id, arena_id, amount, type, description, related_reservation_id)
-    VALUES (v_aluno_id, p_arena_id, -p_credit_to_use, 'reservation_payment', 'Pagamento da reserva #' || v_reserva_id::text, v_reserva_id);
-  END IF;
-
-  RETURN v_reserva_id;
+    RETURN v_new_reserva_id;
 END;
 $$;
-
--- Grant execute permission to the 'authenticated' role
-GRANT EXECUTE ON FUNCTION public.create_client_reservation_atomic(uuid, uuid, date, time without time zone, time without time zone, numeric, text, text, numeric, jsonb, text, text) TO authenticated;

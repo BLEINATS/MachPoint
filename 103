@@ -1,173 +1,91 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { motion } from 'framer-motion';
-import { Calendar, Mail, Key, Shield, ArrowLeft } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { useNavigate, Link } from 'react-router-dom';
 import Layout from '../components/Layout/Layout';
-import Input from '../components/Forms/Input';
+import { Link, useNavigate } from 'react-router-dom';
+import { MapPin, Star, Check } from 'lucide-react';
 import Button from '../components/Forms/Button';
-import ConfirmationDialog from '../components/Auth/ConfirmationDialog';
+import { Arena } from '../types';
 
-const ArenaSignup: React.FC = () => {
-  const [formData, setFormData] = useState({
-    email: '',
-    password: '',
-    arenaName: '',
-  });
-  const [isLoading, setIsLoading] = useState(false);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [showConfirmation, setShowConfirmation] = useState(false);
-
-  const { signUp } = useAuth();
+const Arenas: React.FC = () => {
+  const { allArenas, memberships, followArena, user, profile } = useAuth();
   const navigate = useNavigate();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleFollow = async (e: React.MouseEvent, arenaId: string) => {
     e.preventDefault();
-    setIsLoading(true);
-    setErrors({});
-
-    try {
-      const newErrors: Record<string, string> = {};
-      if (!formData.email) newErrors.email = 'E-mail é obrigatório';
-      if (!formData.password) newErrors.password = 'Senha é obrigatória';
-      if (!formData.arenaName) newErrors.arenaName = 'Nome da arena é obrigatório';
-
-      if (Object.keys(newErrors).length > 0) {
-        setErrors(newErrors);
-        setIsLoading(false);
-        return;
-      }
-
-      await signUp(formData.email, formData.password, formData.arenaName, 'admin_arena');
-      setShowConfirmation(true);
-    } catch (error: any) {
-      setErrors({ submit: error.message || 'Erro ao criar conta. Tente novamente.' });
-    } finally {
-      setIsLoading(false);
+    e.stopPropagation();
+    if (!user) {
+      navigate('/auth');
+      return;
     }
-  };
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setFormData(prev => ({
-      ...prev,
-      [e.target.name]: e.target.value,
-    }));
+    await followArena(arenaId);
   };
 
   return (
-    <Layout showHeader={false}>
-      <div className="min-h-screen bg-brand-gray-50 dark:bg-brand-gray-950 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
-        <div className="sm:mx-auto sm:w-full sm:max-w-md">
-          <motion.div
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex justify-center"
-          >
-            <Calendar className="h-12 w-12 text-brand-blue-500" />
-          </motion.div>
-          <motion.h2
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.1 }}
-            className="mt-6 text-center text-3xl font-extrabold text-brand-gray-900 dark:text-white"
-          >
-            Crie sua Arena no MatchPlay
-          </motion.h2>
-          <motion.p
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.2 }}
-            className="mt-2 text-center text-sm text-brand-gray-600 dark:text-brand-gray-400"
-          >
-            Comece a gerenciar suas quadras em minutos
-          </motion.p>
-        </div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.3 }}
-          className="mt-8 sm:mx-auto sm:w-full sm:max-w-md"
-        >
-          <div className="bg-white dark:bg-brand-gray-900 py-8 px-4 shadow-xl dark:shadow-2xl dark:shadow-brand-blue-500/10 rounded-lg sm:px-10">
-            <form className="space-y-6" onSubmit={handleSubmit}>
-              <Input
-                label="E-mail de Administrador"
-                name="email"
-                type="email"
-                value={formData.email}
-                onChange={handleChange}
-                error={errors.email}
-                placeholder="seu@email.com"
-                icon={<Mail className="h-4 w-4 text-brand-gray-400" />}
-                required
-              />
-
-              <Input
-                label="Senha"
-                name="password"
-                type="password"
-                value={formData.password}
-                onChange={handleChange}
-                error={errors.password}
-                placeholder="Digite sua senha"
-                icon={<Key className="h-4 w-4 text-brand-gray-400" />}
-                required
-              />
-
-              <Input
-                label="Nome da sua Arena"
-                name="arenaName"
-                value={formData.arenaName}
-                onChange={handleChange}
-                error={errors.arenaName}
-                placeholder="Ex: Arena Beira Rio"
-                icon={<Shield className="h-4 w-4 text-brand-gray-400" />}
-                required
-              />
-
-              {errors.submit && (
-                <div className="text-sm text-red-600 dark:text-red-400 text-center">
-                  {errors.submit}
-                </div>
-              )}
-
-              <Button
-                type="submit"
-                className="w-full"
-                size="lg"
-                isLoading={isLoading}
-              >
-                Criar minha Arena
-              </Button>
-            </form>
-
-            <p className="mt-6 text-center text-sm text-brand-gray-600 dark:text-brand-gray-400">
-              Já tem uma conta?{' '}
-              <Link to="/auth" className="font-medium text-brand-blue-600 hover:text-brand-blue-500 dark:text-brand-blue-400 dark:hover:text-brand-blue-300">
-                Entrar
-              </Link>
-            </p>
-            
-            <div className="mt-4 text-center">
-                <Link to="/auth" className="inline-flex items-center text-sm font-medium text-brand-gray-600 dark:text-brand-gray-400 hover:text-brand-blue-500 dark:hover:text-brand-blue-400 transition-colors">
-                    <ArrowLeft className="h-4 w-4 mr-2" />
-                    Voltar para a seleção
-                </Link>
-            </div>
-          </div>
+    <Layout>
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }} className="text-center mb-12">
+          <h1 className="text-4xl font-extrabold text-brand-gray-900 dark:text-white">Explore Nossas Arenas</h1>
+          <p className="mt-4 text-lg text-brand-gray-600 dark:text-brand-gray-400 max-w-2xl mx-auto">
+            Encontre o lugar perfeito para sua próxima partida. Siga uma arena para começar a reservar.
+          </p>
         </motion.div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+          {allArenas.map((arena, index) => {
+            const isMember = memberships.some(m => m.arena_id === arena.id);
+            return (
+              <motion.div
+                key={arena.id}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: index * 0.1 }}
+              >
+                <Link to={`/${arena.slug}`} className="block bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg hover:shadow-2xl dark:hover:shadow-brand-blue-500/10 transition-all duration-300 overflow-hidden h-full flex flex-col">
+                  <div className="h-48 bg-brand-gray-200 dark:bg-brand-gray-700 overflow-hidden relative">
+                    <img src={arena.logo_url || `https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://placehold.co/400x300?text=${arena.name}`} alt={arena.name} className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
+                    <div className="absolute bottom-4 left-4 text-white">
+                      <h3 className="font-bold text-2xl">{arena.name}</h3>
+                      <div className="flex items-center text-sm opacity-90">
+                        <MapPin className="h-4 w-4 mr-1" />
+                        <span>{arena.city}, {arena.state}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="p-6 flex-1 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center text-yellow-500 mb-4">
+                        <Star className="h-5 w-5 fill-current" />
+                        <Star className="h-5 w-5 fill-current" />
+                        <Star className="h-5 w-5 fill-current" />
+                        <Star className="h-5 w-5 fill-current" />
+                        <Star className="h-5 w-5" />
+                        <span className="ml-2 text-sm text-brand-gray-500 dark:text-brand-gray-400">(12 reviews)</span>
+                      </div>
+                      <p className="text-sm text-brand-gray-600 dark:text-brand-gray-400 mb-4">
+                        A melhor arena de {arena.city} para beach tennis e futevôlei. Venha conhecer!
+                      </p>
+                    </div>
+                    {profile?.role === 'cliente' && (
+                       <Button 
+                         onClick={(e) => handleFollow(e, arena.id)}
+                         variant={isMember ? 'secondary' : 'primary'}
+                         className="w-full mt-4"
+                         disabled={isMember}
+                       >
+                         {isMember ? <><Check className="h-4 w-4 mr-2"/> Seguindo</> : 'Seguir Arena'}
+                       </Button>
+                    )}
+                  </div>
+                </Link>
+              </motion.div>
+            );
+          })}
+        </div>
       </div>
-      <ConfirmationDialog
-        isOpen={showConfirmation}
-        onClose={() => {
-          setShowConfirmation(false);
-          navigate('/auth');
-        }}
-        email={formData.email}
-      />
     </Layout>
   );
 };
 
-export default ArenaSignup;
+export default Arenas;

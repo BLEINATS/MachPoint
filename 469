@@ -1,52 +1,54 @@
 /*
-  # [Operation Name]
-  [This operation secures the 'handle_new_user_profile' function and its trigger by setting a fixed search_path, mitigating a security advisory.]
-  ## Query Description: [This script safely drops and recreates a database function and its associated trigger to apply security best practices. It modifies the function's definition to prevent potential search_path hijacking vulnerabilities, without altering its core logic or impacting existing data. This is a low-risk, preventative security enhancement.]
-  ## Metadata:
-  - Schema-Category: 'Security'
-  - Impact-Level: 'Low'
-  - Requires-Backup: false
-  - Reversible: true
-  ## Structure Details:
-  - Function 'handle_new_user_profile' will be dropped and recreated.
-  - Trigger 'on_auth_user_created' on 'auth.users' will be dropped and recreated.
-  ## Security Implications:
-  - RLS Status: Unchanged
-  - Policy Changes: No
-  - Auth Requirements: Admin privileges
-  ## Performance Impact:
-  - Indexes: None
-  - Triggers: Modified
-  - Estimated Impact: Negligible. This change only affects the function's security context.
+# [Security Hardening] Secure add_credit_to_aluno function
+[This operation secures the `add_credit_to_aluno` function by explicitly setting its search path and ensuring it runs with definer privileges, mitigating potential security risks.]
+
+## Query Description: [This operation will redefine the `add_credit_to_aluno` function to enhance security. It ensures that the function operates within a safe and predictable context. There is no risk to existing data, but it is a critical update for system integrity.]
+          
+## Metadata:
+- Schema-Category: ["Structural"]
+- Impact-Level: ["Low"]
+- Requires-Backup: [false]
+- Reversible: [true]
+          
+## Structure Details:
+- Function: `public.add_credit_to_aluno(uuid, uuid, numeric)`
+          
+## Security Implications:
+- RLS Status: [Not Applicable]
+- Policy Changes: [No]
+- Auth Requirements: [Admin privileges for the target arena]
+          
+## Performance Impact:
+- Indexes: [No change]
+- Triggers: [No change]
+- Estimated Impact: [None]
 */
--- Drop the existing trigger and function to avoid conflicts
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
-DROP FUNCTION IF EXISTS public.handle_new_user_profile();
--- Recreate the function with security settings
-CREATE OR REPLACE FUNCTION public.handle_new_user_profile()
-RETURNS trigger
+
+-- Drop the existing function if it exists, to avoid conflicts
+DROP FUNCTION IF EXISTS public.add_credit_to_aluno(uuid, uuid, numeric);
+
+-- Recreate the function with enhanced security
+CREATE OR REPLACE FUNCTION public.add_credit_to_aluno(
+    aluno_id_to_update uuid,
+    arena_id_to_check uuid,
+    amount_to_add numeric
+)
+RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
 BEGIN
-  INSERT INTO public.profiles (id, name, email, role, clientType)
-  VALUES (
-    new.id,
-    new.raw_user_meta_data->>'name',
-    new.email,
-    (new.raw_user_meta_data->>'role')::public.user_role,
-    (new.raw_user_meta_data->>'clientType')::public.client_type
-  );
-  -- If the new user is an arena admin, also create an arena for them
-  IF (new.raw_user_meta_data->>'role')::public.user_role = 'admin_arena' THEN
-    INSERT INTO public.arenas (owner_id, name, city, state)
-    VALUES (new.id, new.raw_user_meta_data->>'name', 'Cidade', 'UF');
-  END IF;
-  RETURN new;
+    -- Check if the calling user is an admin of the arena
+    IF NOT is_arena_admin(arena_id_to_check) THEN
+        RAISE EXCEPTION 'Permissão negada: você não é administrador desta arena.';
+    END IF;
+
+    UPDATE public.alunos
+    SET credit_balance = COALESCE(credit_balance, 0) + amount_to_add
+    WHERE id = aluno_id_to_update AND arena_id = arena_id_to_check;
 END;
 $$;
--- Recreate the trigger to call the new function
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user_profile();
+
+-- Grant execution rights to authenticated users
+GRANT EXECUTE ON FUNCTION public.add_credit_to_aluno(uuid, uuid, numeric) TO authenticated;

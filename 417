@@ -1,47 +1,58 @@
 /*
-  # [Secure Function] add_credit_to_aluno
-  [This operation secures the 'add_credit_to_aluno' function by setting a fixed search_path, preventing potential hijacking attacks.]
+          # [Function Security] Secure ensure_aluno_profile Function
+          [This operation secures the `ensure_aluno_profile` function by setting a fixed search_path, preventing potential hijacking vulnerabilities.]
 
-  ## Query Description: [This script will safely drop and recreate the 'add_credit_to_aluno' function to enhance its security by setting a non-mutable search path. This is a preventative security measure and does not change the function's behavior or impact any existing data.]
-  
-  ## Metadata:
-  - Schema-Category: ["Security"]
-  - Impact-Level: ["Low"]
-  - Requires-Backup: [false]
-  - Reversible: [true]
-  
-  ## Structure Details:
-  - Function: public.add_credit_to_aluno
-  
-  ## Security Implications:
-  - RLS Status: [Not Applicable]
-  - Policy Changes: [No]
-  - Auth Requirements: [authenticated]
-  - Mitigates: [CVE-2018-1058 - Search Path Hijacking]
-  
-  ## Performance Impact:
-  - Indexes: [No change]
-  - Triggers: [No change]
-  - Estimated Impact: [Negligible. This is a definitional change with no runtime performance impact.]
-*/
+          ## Query Description: [This operation will safely drop and recreate the `ensure_aluno_profile` function. It enhances security by explicitly setting the function's `search_path`, which is a best practice recommended by Supabase. There is no impact on existing data, and the function's logic remains the same.]
+          
+          ## Metadata:
+          - Schema-Category: "Security"
+          - Impact-Level: "Low"
+          - Requires-Backup: false
+          - Reversible: true
+          
+          ## Structure Details:
+          - Function `ensure_aluno_profile` will be dropped and recreated.
+          
+          ## Security Implications:
+          - RLS Status: Unchanged
+          - Policy Changes: No
+          - Auth Requirements: None
+          - Mitigates: `Function Search Path Mutable` warning.
+          
+          ## Performance Impact:
+          - Indexes: None
+          - Triggers: None
+          - Estimated Impact: "Negligible performance impact. This is a security and stability improvement."
+          */
 
--- Drop the existing function
-DROP FUNCTION IF EXISTS public.add_credit_to_aluno(uuid, uuid, numeric);
+DROP FUNCTION IF EXISTS public.ensure_aluno_profile(uuid, uuid);
 
--- Recreate the function with security definer and search_path
-CREATE OR REPLACE FUNCTION public.add_credit_to_aluno(
-    aluno_id_to_update uuid,
-    arena_id_to_check uuid,
-    amount_to_add numeric
+CREATE OR REPLACE FUNCTION public.ensure_aluno_profile(
+    p_profile_id uuid,
+    p_arena_id uuid,
+    p_name text,
+    p_phone text
 )
-RETURNS void
+RETURNS uuid
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = '';
+SET search_path = public
 AS $$
+DECLARE
+    v_aluno_id uuid;
 BEGIN
-    UPDATE public.alunos
-    SET credit_balance = credit_balance + amount_to_add
-    WHERE id = aluno_id_to_update AND arena_id = arena_id_to_check;
+    -- Check if an aluno profile already exists for this profile_id and arena_id
+    SELECT id INTO v_aluno_id
+    FROM public.alunos
+    WHERE profile_id = p_profile_id AND arena_id = p_arena_id;
+
+    -- If it doesn't exist, create one
+    IF v_aluno_id IS NULL THEN
+        INSERT INTO public.alunos (profile_id, arena_id, name, phone, status, join_date, plan_name)
+        VALUES (p_profile_id, p_arena_id, p_name, p_phone, 'ativo', CURRENT_DATE, 'Avulso')
+        RETURNING id INTO v_aluno_id;
+    END IF;
+
+    RETURN v_aluno_id;
 END;
 $$;

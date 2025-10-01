@@ -1,44 +1,61 @@
 /*
-# [Fix] Create Payment Status Enum Type
-This migration creates the missing `payment_status_enum` type and ensures the `reservas` table uses it correctly. This fixes errors related to this missing type.
+          # [Fix] Corrige o tipo de retorno da função `check_duplicate_reservation`
+          [Este script corrige um erro de migração que impede a alteração de uma função existente. A função antiga é removida e recriada com a assinatura e o tipo de retorno corretos, garantindo que a verificação de reservas duplicadas funcione como esperado.]
 
-## Query Description:
-This operation defines a new data type (`payment_status_enum`) for managing payment statuses and alters the `reservas` table to use this new type for the `payment_status` column. This change enforces data consistency, ensuring that only predefined values ('pago', 'pendente', 'parcialmente_pago') can be stored. Existing text values in the column will be converted to the new enum type.
+          ## Query Description: [Esta operação remove e recria uma função do banco de dados. Não há impacto direto nos dados existentes, mas é um passo necessário para corrigir a lógica de verificação de conflitos de horário. A função antiga está impedindo atualizações.]
+          
+          ## Metadata:
+          - Schema-Category: ["Structural"]
+          - Impact-Level: ["Low"]
+          - Requires-Backup: [false]
+          - Reversible: [false]
+          
+          ## Structure Details:
+          - Function `check_duplicate_reservation`
+          
+          ## Security Implications:
+          - RLS Status: [Not Applicable]
+          - Policy Changes: [No]
+          - Auth Requirements: [None]
+          
+          ## Performance Impact:
+          - Indexes: [No change]
+          - Triggers: [No change]
+          - Estimated Impact: [Nenhum impacto de performance esperado.]
+          */
 
-## Metadata:
-- Schema-Category: "Structural"
-- Impact-Level: "Medium"
-- Requires-Backup: true
-- Reversible: false
+-- Remove a função antiga com a assinatura incorreta
+DROP FUNCTION IF EXISTS public.check_duplicate_reservation(uuid, date, time without time zone, time without time zone, uuid);
 
-## Structure Details:
-- **Creates Type**: `public.payment_status_enum`
-- **Alters Table**: `public.reservas`
-  - **Alters Column**: `payment_status` to use the new enum type.
-
-## Security Implications:
-- RLS Status: Not changed.
-- Policy Changes: No.
-- Auth Requirements: None.
-
-## Performance Impact:
-- Indexes: No change.
-- Triggers: No change.
-- Estimated Impact: Low. The operation might cause a brief lock on the `reservas` table during the type conversion.
-*/
-
--- Step 1: Create the custom ENUM type for payment status if it doesn't exist.
--- The error "type public.payment_status_enum does not exist" indicates it's missing.
-DO $$
+-- Recria a função com a lógica e o tipo de retorno corretos
+CREATE OR REPLACE FUNCTION public.check_duplicate_reservation(
+    p_arena_id uuid,
+    p_quadra_id uuid,
+    p_date date,
+    p_start_time time without time zone,
+    p_end_time time without time zone,
+    p_reserva_id_to_exclude uuid DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_conflict_exists boolean;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_status_enum') THEN
-        CREATE TYPE public.payment_status_enum AS ENUM ('pago', 'pendente', 'parcialmente_pago');
-    END IF;
-END$$;
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.reservas r
+        WHERE
+            r.arena_id = p_arena_id AND
+            r.quadra_id = p_quadra_id AND
+            r.date = p_date AND
+            r.status <> 'cancelada' AND
+            (p_reserva_id_to_exclude IS NULL OR r.id <> p_reserva_id_to_exclude) AND
+            (r.start_time, r.end_time) OVERLAPS (p_start_time, p_end_time)
+    ) INTO v_conflict_exists;
 
--- Step 2: Alter the 'reservas' table to use the new enum type for the 'payment_status' column.
--- This assumes the column exists and is of a text-compatible type.
--- The `USING` clause safely converts existing text values to the new enum type.
-ALTER TABLE public.reservas
-ALTER COLUMN payment_status TYPE public.payment_status_enum
-USING payment_status::text::public.payment_status_enum;
+    RETURN v_conflict_exists;
+END;
+$$;

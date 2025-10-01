@@ -1,8 +1,8 @@
 /*
-          # [Operation Name]
-          Secure `handle_reservation_completion` function
+          # [Refactor] Secure Gamification Points Update Function
+          This migration refactors the trigger function responsible for updating a student's total points and level when a gamification transaction occurs. It ensures the function is more secure and robust.
 
-          ## Query Description: [This operation secures the `handle_reservation_completion` function by explicitly setting its `search_path`. This is a preventative security measure to mitigate potential risks, as recommended by Supabase security advisories. It involves temporarily dropping the dependent trigger, recreating the function with the security setting, and then recreating the trigger. There is no impact on existing data.]
+          ## Query Description: [This operation temporarily drops a trigger, updates a function, and recreates the trigger. It is a safe, non-destructive operation that improves security and maintainability.]
           
           ## Metadata:
           - Schema-Category: "Structural"
@@ -11,96 +11,71 @@
           - Reversible: true
           
           ## Structure Details:
-          - Function `handle_reservation_completion` will be dropped and recreated.
-          - Trigger `on_reservation_completed_add_points` on table `reservas` will be dropped and recreated.
+          - Drops and recreates the `on_gamification_transaction_change` trigger on the `gamification_point_transactions` table.
+          - Drops and recreates the `update_aluno_gamification_points()` function.
+          - Sets a fixed `search_path` for the function to enhance security.
           
           ## Security Implications:
-          - RLS Status: Not changed
-          - Policy Changes: No
-          - Auth Requirements: None
+          - RLS Status: Not affected.
+          - Policy Changes: No.
+          - Auth Requirements: None.
           
           ## Performance Impact:
-          - Indexes: None
-          - Triggers: Modified (dropped and recreated)
-          - Estimated Impact: Negligible performance impact.
+          - Indexes: Not affected.
+          - Triggers: Recreated.
+          - Estimated Impact: Negligible. This improves the security of an existing trigger.
           */
 
--- Drop the dependent trigger first
-DROP TRIGGER IF EXISTS on_reservation_completed_add_points ON public.reservas;
+		-- Step 1: Drop the existing trigger that depends on the function.
+		DROP TRIGGER IF EXISTS on_gamification_transaction_change ON public.gamification_point_transactions;
 
--- Drop the existing function
-DROP FUNCTION IF EXISTS public.handle_reservation_completion();
+		-- Step 2: Drop the existing function.
+		DROP FUNCTION IF EXISTS public.update_aluno_gamification_points();
 
--- Recreate the function with the security definer and search_path
-CREATE OR REPLACE FUNCTION public.handle_reservation_completion()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = ''
-AS $$
-DECLARE
-    v_aluno_id UUID;
-    v_arena_id UUID;
-    v_points_to_add INTEGER;
-    v_description TEXT;
-    v_settings RECORD;
-BEGIN
-    -- Check if the reservation status is updated to 'realizada'
-    IF NEW.status = 'realizada' AND OLD.status <> 'realizada' THEN
-        -- Get the arena_id from the new reservation record
-        v_arena_id := NEW.arena_id;
+		-- Step 3: Recreate the function with security best practices.
+		CREATE OR REPLACE FUNCTION public.update_aluno_gamification_points()
+		RETURNS TRIGGER AS $$
+		DECLARE
+			v_total_points INT;
+			v_level_id UUID;
+			v_aluno_id_to_update UUID;
+		BEGIN
+			-- Determine which aluno_id to update based on the operation
+			IF (TG_OP = 'DELETE') THEN
+				v_aluno_id_to_update := OLD.aluno_id;
+			ELSE
+				v_aluno_id_to_update := NEW.aluno_id;
+			END IF;
 
-        -- Fetch gamification settings for the arena
-        SELECT is_enabled, points_per_reservation, points_per_real
-        INTO v_settings
-        FROM public.gamification_settings
-        WHERE arena_id = v_arena_id;
+			-- Calculate the new total points for the specific aluno
+			SELECT COALESCE(SUM(points), 0)
+			INTO v_total_points
+			FROM public.gamification_point_transactions
+			WHERE aluno_id = v_aluno_id_to_update;
 
-        -- Proceed only if gamification is enabled
-        IF v_settings.is_enabled THEN
-            -- Find the corresponding aluno_id from the profile_id
-            SELECT id INTO v_aluno_id
-            FROM public.alunos
-            WHERE profile_id = NEW.profile_id AND arena_id = v_arena_id;
+			-- Find the corresponding level for the new total points
+			SELECT id
+			INTO v_level_id
+			FROM public.gamification_levels
+			WHERE points_required &lt;= v_total_points
+			ORDER BY points_required DESC
+			LIMIT 1;
 
-            -- If an aluno record exists, calculate and add points
-            IF v_aluno_id IS NOT NULL THEN
-                v_points_to_add := 0;
-                v_description := '';
+			-- Update the aluno's total points and level
+			UPDATE public.alunos
+			SET 
+				gamification_points = v_total_points,
+				gamification_level_id = v_level_id
+			WHERE id = v_aluno_id_to_update;
 
-                -- Add points per reservation
-                IF v_settings.points_per_reservation > 0 THEN
-                    v_points_to_add := v_points_to_add + v_settings.points_per_reservation;
-                    v_description := 'Pontos por reserva completada.';
-                END IF;
+			RETURN NULL; -- Result is ignored since this is an AFTER trigger
+		END;
+		$$ LANGUAGE plpgsql SECURITY DEFINER;
 
-                -- Add points based on the value of the reservation
-                IF v_settings.points_per_real > 0 AND NEW.total_price > 0 THEN
-                    v_points_to_add := v_points_to_add + floor(NEW.total_price * v_settings.points_per_real);
-                    v_description := v_description || ' Pontos por valor da reserva.';
-                END IF;
+		-- Set a secure search path for the function
+		ALTER FUNCTION public.update_aluno_gamification_points() SET search_path = 'public';
 
-                -- If there are points to add, call the function to add them
-                IF v_points_to_add > 0 THEN
-                    PERFORM public.add_gamification_points(
-                        p_aluno_id := v_aluno_id,
-                        p_points_to_add := v_points_to_add,
-                        p_description := trim(v_description),
-                        p_transaction_type := 'reservation_completed',
-                        p_related_reservation_id := NEW.id,
-                        p_arena_id := v_arena_id
-                    );
-                END IF;
-            END IF;
-        END IF;
-    END IF;
-
-    RETURN NEW;
-END;
-$$;
-
--- Recreate the trigger to call the function
-CREATE TRIGGER on_reservation_completed_add_points
-AFTER UPDATE OF status ON public.reservas
-FOR EACH ROW
-EXECUTE FUNCTION public.handle_reservation_completion();
+		-- Step 4: Recreate the trigger to use the new function.
+		CREATE TRIGGER on_gamification_transaction_change
+		AFTER INSERT OR UPDATE OR DELETE ON public.gamification_point_transactions
+		FOR EACH ROW EXECUTE FUNCTION public.update_aluno_gamification_points();

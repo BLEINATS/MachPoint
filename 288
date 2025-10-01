@@ -1,61 +1,53 @@
--- Drop the trigger first to remove dependency
+-- Definitive fix for is_active vs is_enabled typo in gamification trigger
+-- This script safely drops the trigger, recreates the function with the correct field name, and re-adds the trigger.
+
+-- Step 1: Drop the existing trigger to remove dependency
 DROP TRIGGER IF EXISTS on_reservation_completed_add_points ON public.reservas;
 
--- Drop the faulty function
+-- Step 2: Drop the faulty function
 DROP FUNCTION IF EXISTS public.handle_reservation_completion();
 
--- Recreate the function with the correct column name 'is_enabled'
+-- Step 3: Recreate the function with the correct logic (using is_enabled)
 CREATE OR REPLACE FUNCTION public.handle_reservation_completion()
-RETURNS TRIGGER AS $$
+ RETURNS trigger
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
 DECLARE
-    v_settings public.gamification_settings;
-    v_points_to_add INT;
+    settings public.gamification_settings;
+    aluno_profile public.alunos;
+    points_to_add int;
 BEGIN
-    -- Fetch gamification settings for the specific arena
-    SELECT * INTO v_settings
-    FROM public.gamification_settings
-    WHERE arena_id = NEW.arena_id
-    LIMIT 1;
+    -- 1. Get the gamification settings for the arena
+    SELECT * INTO settings FROM public.gamification_settings WHERE arena_id = NEW.arena_id;
 
-    -- If gamification is not enabled or no settings found, exit
-    IF v_settings IS NULL OR NOT v_settings.is_enabled THEN
-        RETURN NEW;
-    END IF;
+    -- 2. Check if gamification is enabled using the correct column name 'is_enabled'
+    IF settings.is_enabled THEN
+        -- 3. Get the aluno profile
+        SELECT * INTO aluno_profile FROM public.alunos WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id;
 
-    -- Calculate points based on reservation price and settings
-    v_points_to_add := v_settings.points_per_reservation + floor(NEW.total_price * v_settings.points_per_real);
-
-    -- If there are points to add, call the function to add them
-    IF v_points_to_add > 0 THEN
-        DECLARE
-            v_aluno_id uuid;
-        BEGIN
-            -- Find the 'aluno' record using the 'profile_id' from the reservation
-            SELECT id INTO v_aluno_id
-            FROM public.alunos
-            WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id
-            LIMIT 1;
-
-            IF v_aluno_id IS NOT NULL THEN
-                -- Call the function to add points and record the transaction
-                PERFORM public.add_gamification_points(
-                    v_aluno_id,
-                    v_points_to_add,
-                    'Pontos por reserva concluída'
-                );
+        IF FOUND THEN
+            -- 4. Calculate points
+            points_to_add := 0;
+            IF settings.points_per_reservation > 0 THEN
+                points_to_add := points_to_add + settings.points_per_reservation;
             END IF;
-        EXCEPTION
-            WHEN OTHERS THEN
-                -- Log error or handle it, but don't block the update
-                RAISE NOTICE 'Could not add gamification points for aluno with profile_id %: %', NEW.profile_id, SQLERRM;
-        END;
+            IF settings.points_per_real > 0 AND NEW.total_price > 0 THEN
+                points_to_add := points_to_add + floor(NEW.total_price * settings.points_per_real);
+            END IF;
+
+            -- 5. Add points if there are any to add
+            IF points_to_add > 0 THEN
+                PERFORM public.add_gamification_points(aluno_profile.id, points_to_add, 'Reserva concluída');
+            END IF;
+        END IF;
     END IF;
 
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$function$;
 
--- Recreate the trigger to call the corrected function
+-- Step 4: Recreate the trigger to execute the corrected function
 CREATE TRIGGER on_reservation_completed_add_points
 AFTER UPDATE ON public.reservas
 FOR EACH ROW

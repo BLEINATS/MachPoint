@@ -1,59 +1,101 @@
 /*
-          # [Operation Name]
-          Secure Gamification Seeding Function
+          # [Function Security] update_aluno_gamification_points
+          [This operation secures the function that updates a student's total gamification points by setting a strict search_path. It involves temporarily dropping and recreating the trigger that uses this function.]
 
-          ## Query Description: [This operation secures the `seed_gamification_defaults` function by explicitly setting its `search_path`. This is a preventative security measure to ensure the function operates in a predictable and safe schema context, mitigating potential risks associated with mutable search paths. It does not alter any existing data or user-facing functionality.]
+          ## Query Description: [This is a safe, non-destructive operation. It enhances security by preventing potential hijacking of the function's execution path. No user data will be affected.]
           
           ## Metadata:
-          - Schema-Category: "Security"
-          - Impact-Level: "Low"
-          - Requires-Backup: false
-          - Reversible: true
+          - Schema-Category: ["Structural", "Safe"]
+          - Impact-Level: ["Low"]
+          - Requires-Backup: [false]
+          - Reversible: [true]
           
           ## Structure Details:
-          - Function `public.seed_gamification_defaults(uuid)` will be replaced.
+          - Drops and recreates the trigger 'on_gamification_transaction_change'.
+          - Drops and recreates the function 'update_aluno_gamification_points'.
           
           ## Security Implications:
-          - RLS Status: Not Applicable
-          - Policy Changes: No
-          - Auth Requirements: None
+          - RLS Status: [No Change]
+          - Policy Changes: [No]
+          - Auth Requirements: [None]
           
           ## Performance Impact:
-          - Indexes: None
-          - Triggers: None
-          - Estimated Impact: None
+          - Indexes: [No Change]
+          - Triggers: [Recreated]
+          - Estimated Impact: [Negligible. The function is only called when a gamification transaction occurs.]
           */
 
-DROP FUNCTION IF EXISTS public.seed_gamification_defaults(uuid);
+-- Step 1: Drop the dependent trigger
+DROP TRIGGER IF EXISTS on_gamification_transaction_change ON public.gamification_point_transactions;
 
-CREATE OR REPLACE FUNCTION public.seed_gamification_defaults(p_arena_id uuid)
-RETURNS void
+-- Step 2: Drop the existing function
+DROP FUNCTION IF EXISTS public.update_aluno_gamification_points();
+
+-- Step 3: Recreate the function with security settings
+CREATE OR REPLACE FUNCTION public.update_aluno_gamification_points()
+RETURNS TRIGGER
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp;
 AS $$
+DECLARE
+    v_total_points INT;
+    v_current_level_id UUID;
+    v_new_level_id UUID;
+    v_aluno_id UUID;
 BEGIN
-    -- Seed gamification_settings
-    INSERT INTO public.gamification_settings (arena_id, is_enabled, points_per_reservation, points_per_real)
-    VALUES (p_arena_id, true, 10, 1)
-    ON CONFLICT (arena_id) DO NOTHING;
+    -- Determine which record's points to update
+    IF TG_OP = 'DELETE' THEN
+        v_aluno_id := OLD.aluno_id;
+    ELSE
+        v_aluno_id := NEW.aluno_id;
+    END IF;
 
-    -- Seed gamification_levels
-    INSERT INTO public.gamification_levels (arena_id, name, points_required, level_rank)
-    VALUES
-        (p_arena_id, 'Bronze', 0, 1),
-        (p_arena_id, 'Prata', 500, 2),
-        (p_arena_id, 'Ouro', 1500, 3),
-        (p_arena_id, 'Platina', 3000, 4)
-    ON CONFLICT (arena_id, level_rank) DO NOTHING;
+    -- Calculate the new total points for the student
+    SELECT COALESCE(SUM(points), 0)
+    INTO v_total_points
+    FROM public.gamification_point_transactions
+    WHERE aluno_id = v_aluno_id;
 
-    -- Seed gamification_achievements
-    INSERT INTO public.gamification_achievements (arena_id, name, description, type, points_reward, icon)
-    VALUES
-        (p_arena_id, 'Primeira Reserva', 'Sua primeira reserva na arena!', 'first_reservation', 50, 'Sparkles'),
-        (p_arena_id, 'Fiel da Casa', '10 reservas completadas', 'loyalty_10', 100, 'Heart'),
-        (p_arena_id, 'Sócio-Torcedor', '50 reservas completadas', 'loyalty_50', 500, 'Gem'),
-        (p_arena_id, 'Lenda da Arena', '100 reservas completadas', 'loyalty_100', 1000, 'Crown')
-    ON CONFLICT (arena_id, type) DO NOTHING;
+    -- Get the current level of the student
+    SELECT gamification_level_id
+    INTO v_current_level_id
+    FROM public.alunos
+    WHERE id = v_aluno_id;
+
+    -- Determine the new level based on the total points
+    SELECT id
+    INTO v_new_level_id
+    FROM public.gamification_levels
+    WHERE arena_id = (SELECT arena_id FROM public.alunos WHERE id = v_aluno_id LIMIT 1)
+      AND points_required &lt;= v_total_points
+    ORDER BY points_required DESC
+    LIMIT 1;
+
+    -- Update the student's total points and level
+    UPDATE public.alunos
+    SET 
+        gamification_points = v_total_points,
+        gamification_level_id = v_new_level_id
+    WHERE id = v_aluno_id;
+
+    -- If the level has changed, create a notification
+    IF v_new_level_id IS DISTINCT FROM v_current_level_id THEN
+        INSERT INTO public.notificacoes (profile_id, arena_id, message, type)
+        SELECT 
+            profile_id, 
+            arena_id,
+            'Parabéns! Você subiu para o nível ' || (SELECT name FROM public.gamification_levels WHERE id = v_new_level_id),
+            'gamification_level_up'
+        FROM public.alunos
+        WHERE id = v_aluno_id;
+    END IF;
+
+    RETURN NULL;
 END;
 $$;
+
+-- Step 4: Recreate the trigger
+CREATE TRIGGER on_gamification_transaction_change
+AFTER INSERT OR UPDATE OR DELETE ON public.gamification_point_transactions
+FOR EACH ROW
+EXECUTE FUNCTION public.update_aluno_gamification_points();

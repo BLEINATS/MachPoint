@@ -1,46 +1,64 @@
 /*
-# [FIX] Adiciona a coluna `payment_status` à tabela de reservas
-[Este script adiciona a coluna `payment_status` à tabela `reservas` para permitir o rastreamento do status de pagamento de cada reserva.]
-## Query Description: [Esta operação adiciona uma nova coluna `payment_status` à tabela `reservas` com um valor padrão de 'pendente'. Não há perda de dados existente, pois apenas adiciona uma nova estrutura.]
+# [Feature] RPC para Auto-Criação de Perfil de Aluno
+[Cria uma função `create_my_aluno_profile` que permite a um usuário autenticado criar seu próprio registro na tabela `alunos` para uma arena específica, contornando RLS de forma segura.]
+
+## Query Description: [Esta operação adiciona uma nova função `create_my_aluno_profile` ao banco de dados. A função é `SECURITY DEFINER`, o que significa que ela executa com os privilégios do criador (postgres), permitindo a inserção na tabela `alunos` que de outra forma seria bloqueada por RLS para o cliente. É seguro porque a função usa `auth.uid()` para garantir que os usuários só possam criar perfis para si mesmos.]
+
 ## Metadata:
 - Schema-Category: ["Structural"]
 - Impact-Level: ["Low"]
 - Requires-Backup: [false]
 - Reversible: [true]
+
 ## Structure Details:
-- Tabela Modificada: `public.reservas`
-- Coluna Adicionada: `payment_status`
+- Função Adicionada: `public.create_my_aluno_profile(p_arena_id uuid)`
+
 ## Security Implications:
-- RLS Status: [Enabled]
+- RLS Status: [N/A - Função]
 - Policy Changes: [No]
-- Auth Requirements: [N/A]
+- Auth Requirements: [A função só pode ser executada por usuários autenticados (`authenticated` role).]
+
 ## Performance Impact:
 - Indexes: [None]
 - Triggers: [None]
-- Estimated Impact: [Baixo. Adicionar uma coluna com valor padrão pode levar algum tempo em tabelas muito grandes, mas geralmente é rápido.]
+- Estimated Impact: [Baixo. A execução da função é rápida e ocorre apenas na primeira reserva de um cliente em uma arena.]
 */
+create or replace function public.create_my_aluno_profile(p_arena_id uuid)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_aluno_id uuid;
+  v_profile_name text;
+  v_profile_email text;
+begin
+  -- Check if an aluno profile already exists for this user in this arena
+  select id into v_aluno_id from public.alunos where profile_id = auth.uid() and arena_id = p_arena_id;
 
--- Adiciona a coluna se ela não existir
-ALTER TABLE public.reservas
-ADD COLUMN IF NOT EXISTS payment_status TEXT;
+  if v_aluno_id is not null then
+    return v_aluno_id; -- Return existing ID
+  end if;
 
--- Atualiza valores nulos para o padrão 'pendente'
-UPDATE public.reservas
-SET payment_status = 'pendente'
-WHERE payment_status IS NULL;
+  -- Get user's name and email from their main profile
+  select name, email into v_profile_name, v_profile_email from public.profiles where id = auth.uid();
 
--- Garante que a coluna não seja nula
-ALTER TABLE public.reservas
-ALTER COLUMN payment_status SET NOT NULL;
+  -- Insert a new aluno profile
+  insert into public.alunos (profile_id, arena_id, name, email, status, plan_name, join_date)
+  values (
+    auth.uid(),
+    p_arena_id,
+    v_profile_name,
+    v_profile_email,
+    'ativo',
+    'Avulso',
+    CURRENT_DATE
+  )
+  returning id into v_aluno_id;
+  
+  return v_aluno_id;
+end;
+$$;
 
--- Garante que o valor padrão seja 'pendente'
-ALTER TABLE public.reservas
-ALTER COLUMN payment_status SET DEFAULT 'pendente';
-
--- Remove a restrição antiga se existir para evitar conflitos
-ALTER TABLE public.reservas
-DROP CONSTRAINT IF EXISTS check_payment_status;
-
--- Adiciona a restrição de verificação para os valores permitidos
-ALTER TABLE public.reservas
-ADD CONSTRAINT check_payment_status CHECK (payment_status IN ('pago', 'pendente', 'parcialmente_pago'));
+grant execute on function public.create_my_aluno_profile(uuid) to authenticated;

@@ -1,67 +1,80 @@
 /*
-          # [Critical] Fix Function Signature Conflict
-          [This migration resolves a function signature conflict for `check_duplicate_reservation`. The previous update attempted to rename a function parameter, which requires the function to be dropped and recreated. This script performs that action safely, ensuring the function is updated with the correct logic for checking reservation overlaps without causing database errors.]
+  # [BUGFIX] Corrige erro de digitação no gatilho de gamificação
+  [This migration fixes a typo in a database function that was preventing reservations from being saved. The function was trying to access a non-existent field `points_per_booking` instead of the correct `points_per_reservation` in the `gamification_settings` table.]
 
-          ## Query Description: [This operation first removes the old version of the `check_duplicate_reservation` function that is causing the conflict. It then recreates the function with the correct parameter names and improved logic to prevent false overlap detections for adjacent bookings. This is a safe, structural change that does not affect any reservation data.]
-          
-          ## Metadata:
-          - Schema-Category: ["Structural"]
-          - Impact-Level: ["Low"]
-          - Requires-Backup: [false]
-          - Reversible: [false]
-          
-          ## Structure Details:
-          - Drops function: `check_duplicate_reservation(uuid, uuid, date, time, time, uuid)`
-          - Creates function: `check_duplicate_reservation(uuid, uuid, date, time, time, uuid)` with corrected logic and parameter names.
-          
-          ## Security Implications:
-          - RLS Status: [N/A]
-          - Policy Changes: [No]
-          - Auth Requirements: [N/A]
-          
-          ## Performance Impact:
-          - Indexes: [N/A]
-          - Triggers: [N/A]
-          - Estimated Impact: [None. The function is only called during reservation creation/update.]
-          */
+  ## Query Description: [This operation safely drops the existing trigger, replaces the faulty function with a corrected version, and then recreates the trigger. This resolves the "column does not exist" error that occurs when creating a new reservation.]
+  
+  ## Metadata:
+  - Schema-Category: "Structural"
+  - Impact-Level: "Low"
+  - Requires-Backup: false
+  - Reversible: true
+  
+  ## Structure Details:
+  - Drops and recreates trigger `on_reservation_completion_trigger` on table `reservas`.
+  - Replaces function `handle_reservation_completion()`.
+  
+  ## Security Implications:
+  - RLS Status: Unchanged
+  - Policy Changes: No
+  - Auth Requirements: None
+  
+  ## Performance Impact:
+  - Indexes: Unchanged
+  - Triggers: Recreated
+  - Estimated Impact: Negligible. The trigger execution will now succeed instead of failing.
+*/
 
--- Drop the function with the conflicting signature.
--- The signature is taken directly from the error message to ensure the correct function is targeted.
-DROP FUNCTION IF EXISTS public.check_duplicate_reservation(uuid, uuid, date, time without time zone, time without time zone, uuid);
+-- Drop the existing trigger to allow function replacement
+DROP TRIGGER IF EXISTS on_reservation_completion_trigger ON public.reservas;
 
--- Recreate the function with a consistent signature and corrected logic.
--- Note: We are keeping the 6-parameter signature to avoid breaking dependencies, even if p_arena_id is not used in this specific function's logic.
-CREATE OR REPLACE FUNCTION public.check_duplicate_reservation(
-    p_quadra_id uuid,
-    p_arena_id uuid, -- This parameter is kept for signature compatibility.
-    p_date date,
-    p_start_time time,
-    p_end_time time,
-    p_reserva_id_to_exclude uuid DEFAULT NULL
-)
-RETURNS boolean
-LANGUAGE plpgsql
-AS $$
+-- Recreate the function with the correct column name
+CREATE OR REPLACE FUNCTION public.handle_reservation_completion()
+RETURNS TRIGGER AS $$
 DECLARE
-    v_conflict_exists boolean;
+  settings public.gamification_settings;
+  aluno_profile public.alunos;
+  points_to_add INT;
 BEGIN
-    SELECT EXISTS (
-        SELECT 1
-        FROM public.reservas r
-        WHERE r.quadra_id = p_quadra_id
-          AND r.date = p_date
-          AND r.status <> 'cancelada'
-          AND (p_reserva_id_to_exclude IS NULL OR r.id <> p_reserva_id_to_exclude)
-          -- Corrected logic to check for overlaps without flagging adjacent slots
-          AND (
-              p_start_time < r.end_time AND p_end_time > r.start_time
-          )
-    ) INTO v_conflict_exists;
+  -- Only run for confirmed or realized reservations
+  IF NEW.status = 'confirmada' OR NEW.status = 'realizada' THEN
+    -- Get the gamification settings for the arena
+    SELECT * INTO settings FROM public.gamification_settings WHERE arena_id = NEW.arena_id LIMIT 1;
 
-    IF v_conflict_exists THEN
-        RAISE EXCEPTION 'Conflito de horário: Já existe uma reserva para esta quadra neste horário.';
+    -- If gamification is not enabled, exit
+    IF settings IS NULL OR NOT settings.is_enabled THEN
+      RETURN NEW;
     END IF;
 
-    RETURN FALSE;
+    -- Find the student profile associated with the reservation
+    SELECT * INTO aluno_profile FROM public.alunos WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id LIMIT 1;
+
+    -- If no student profile is found, exit
+    IF aluno_profile IS NULL THEN
+      RETURN NEW;
+    END IF;
+
+    -- Calculate points to add
+    -- THIS IS THE FIX: points_per_reservation instead of points_per_booking
+    points_to_add := settings.points_per_reservation + (floor(NEW.total_price) * settings.points_per_real);
+
+    -- If there are points to add, call the RPC function
+    IF points_to_add > 0 THEN
+      PERFORM public.add_gamification_points(
+        p_aluno_id := aluno_profile.id,
+        p_points_to_add := points_to_add,
+        p_description := 'Reserva #' || substr(NEW.id::text, 1, 8)
+      );
+    END IF;
+
+  END IF;
+
+  RETURN NEW;
 END;
-$$;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Recreate the trigger to call the corrected function
+CREATE TRIGGER on_reservation_completion_trigger
+AFTER INSERT OR UPDATE OF status ON public.reservas
+FOR EACH ROW
+EXECUTE FUNCTION public.handle_reservation_completion();

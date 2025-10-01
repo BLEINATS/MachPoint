@@ -1,30 +1,26 @@
 /*
-# [SECURITY] Secure seed_gamification_defaults function
-This migration enhances the security of the `seed_gamification_defaults` function by explicitly setting its `search_path`.
+          # [Fix] Remove Duplicate Reservation Function
+          This operation removes a duplicate and incorrectly typed version of the function responsible for creating client reservations. This will resolve an ambiguity error that prevents new reservations from being created by clients.
 
-## Query Description:
-- **Safety:** This is a safe, non-destructive operation.
-- **Impact:** It prevents potential "search path hijacking" vulnerabilities by ensuring the function only looks for objects in the 'public' schema. No data or functionality will be changed.
-- **Recommendation:** This is a recommended security best practice for all PostgreSQL functions.
-
-## Metadata:
-- Schema-Category: "Safe"
-- Impact-Level: "Low"
-- Requires-Backup: false
-- Reversible: true (by resetting the search_path)
-
-## Structure Details:
-- Function being modified: `public.seed_gamification_defaults(uuid)`
-
-## Security Implications:
-- RLS Status: Not applicable
-- Policy Changes: No
-- Auth Requirements: Not applicable
-
-## Performance Impact:
-- Indexes: None
-- Triggers: None
-- Estimated Impact: Negligible.
-*/
-ALTER FUNCTION public.seed_gamification_defaults(p_arena_id uuid)
-SET search_path = 'public';
+          ## Query Description: [This operation will remove a conflicting database function. It is a safe cleanup operation and will not affect any existing data. It is necessary to restore the reservation functionality for clients.]
+          
+          ## Metadata:
+          - Schema-Category: ["Structural"]
+          - Impact-Level: ["Low"]
+          - Requires-Backup: [false]
+          - Reversible: [false]
+          
+          ## Structure Details:
+          - Function `public.create_client_reservation_atomic` with text parameters will be dropped.
+          
+          ## Security Implications:
+          - RLS Status: [Not Applicable]
+          - Policy Changes: [No]
+          - Auth Requirements: [Admin]
+          
+          ## Performance Impact:
+          - Indexes: [Not Applicable]
+          - Triggers: [Not Applicable]
+          - Estimated Impact: [None]
+          */
+DROP FUNCTION IF EXISTS public.create_client_reservation_atomic(uuid, uuid, text, text, text, numeric, text, text, integer, jsonb, text, text);

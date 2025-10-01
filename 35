@@ -1,156 +1,244 @@
-import React, { useMemo } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import QRCode from 'qrcode.react';
-import { Reserva, Quadra } from '../../types';
-import { format } from 'date-fns';
-import { ptBR } from 'date-fns/locale';
-import { Calendar, Clock, MapPin, X, ShoppingBag, CreditCard, DollarSign, CheckCircle, AlertCircle, User, Info } from 'lucide-react';
-import { parseDateStringAsLocal } from '../../utils/dateUtils';
-import { useTheme } from '../../context/ThemeContext';
+import React, { useState } from 'react';
+import { Aluno, GamificationLevel, GamificationReward, GamificationAchievement, AlunoAchievement, GamificationPointTransaction } from '../../types';
+import { Star, Gift, Trophy, CheckCircle, History } from 'lucide-react';
 import Button from '../Forms/Button';
+import { format } from 'date-fns';
+import ConfirmationModal from '../Shared/ConfirmationModal';
+import { supabase } from '../../lib/supabaseClient';
+import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
 
-interface ReservationDetailModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  reserva: Reserva | null;
-  quadra: Quadra | null;
-  arenaName?: string;
-  onCancel: (reserva: Reserva) => void;
+interface RewardsTabProps {
+  aluno: Aluno | null;
+  levels: GamificationLevel[];
+  rewards: GamificationReward[];
+  achievements: GamificationAchievement[];
+  unlockedAchievements: AlunoAchievement[];
+  history: GamificationPointTransaction[];
 }
 
-const ReservationDetailModal: React.FC<ReservationDetailModalProps> = ({ isOpen, onClose, reserva, quadra, arenaName, onCancel }) => {
-  const { theme } = useTheme();
+const RewardsTab: React.FC<RewardsTabProps> = ({ aluno, levels, rewards, achievements, unlockedAchievements, history }) => {
+  const [rewardToRedeem, setRewardToRedeem] = useState<GamificationReward | null>(null);
+  const [isRedeeming, setIsRedeeming] = useState(false);
+  const { addToast } = useToast();
+  const { refreshAlunoProfile } = useAuth();
 
-  if (!reserva || !quadra) return null;
+  if (!aluno) {
+    return <div className="text-center p-8 text-brand-gray-500">Carregando dados de gamificação...</div>;
+  }
 
-  const qrCodeColors = {
-    light: { fg: '#0f172a', bg: '#f1f5f9' },
-    dark: { fg: '#f8fafc', bg: '#1e293b' },
-  };
-  const currentColors = theme === 'dark' ? qrCodeColors.dark : qrCodeColors.light;
-  
-  const handleCancelClick = () => {
-    onClose();
-    setTimeout(() => onCancel(reserva), 150);
-  };
+  const handleConfirmRedemption = async () => {
+    if (!aluno || !rewardToRedeem) return;
 
-  const paymentStatus = useMemo(() => {
-    switch (reserva.payment_status) {
-      case 'pago': return { icon: CheckCircle, color: 'text-green-500', label: 'Pago' };
-      case 'pendente': return { icon: AlertCircle, color: 'text-yellow-500', label: 'Pendente' };
-      default: return { icon: AlertCircle, color: 'text-brand-gray-400', label: 'N/D' };
+    setIsRedeeming(true);
+    try {
+      // 1. Deduct points
+      const { error: rpcError } = await supabase.rpc('add_gamification_points', {
+        p_aluno_id: aluno.id,
+        p_points_to_add: -rewardToRedeem.points_cost,
+        p_description: `Resgate: ${rewardToRedeem.title}`,
+      });
+      if (rpcError) throw rpcError;
+
+      // 2. Update quantity if limited
+      if (rewardToRedeem.quantity !== null && rewardToRedeem.quantity > 0) {
+        const { error: updateError } = await supabase
+          .from('gamification_rewards')
+          .update({ quantity: rewardToRedeem.quantity - 1 })
+          .eq('id', rewardToRedeem.id);
+        if (updateError) {
+          console.error("Erro ao atualizar quantidade da recompensa:", updateError);
+        }
+      }
+
+      // 3. Add credit if it's a discount reward
+      if (rewardToRedeem.type === 'discount' && rewardToRedeem.value && rewardToRedeem.value > 0) {
+        const creditValue = rewardToRedeem.value;
+        
+        const { error: creditError } = await supabase.rpc('add_credit_to_aluno', {
+            aluno_id_to_update: aluno.id,
+            arena_id_to_check: aluno.arena_id,
+            amount_to_add: creditValue
+        });
+        if (creditError) throw creditError;
+
+        const { error: transactionError } = await supabase.from('credit_transactions').insert({
+            aluno_id: aluno.id,
+            arena_id: aluno.arena_id,
+            amount: creditValue,
+            type: 'goodwill_credit',
+            description: `Crédito por resgate: ${rewardToRedeem.title}`,
+        });
+        if (transactionError) throw transactionError;
+
+        if (aluno.profile_id) {
+            await supabase.from('notificacoes').insert({
+                profile_id: aluno.profile_id,
+                arena_id: aluno.arena_id,
+                message: `Você resgatou "${rewardToRedeem.title}" e ganhou ${creditValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} de crédito!`,
+                type: 'gamification_reward',
+            });
+        }
+      } else {
+        if (aluno.profile_id) {
+            await supabase.from('notificacoes').insert({
+              profile_id: aluno.profile_id,
+              arena_id: aluno.arena_id,
+              message: `Você resgatou "${rewardToRedeem.title}"!`,
+              type: 'gamification_reward',
+            });
+        }
+      }
+
+      // 4. Notify admin
+      await supabase.from('notificacoes').insert({
+        arena_id: aluno.arena_id,
+        message: `Cliente ${aluno.name} resgatou a recompensa "${rewardToRedeem.title}".`,
+        type: 'gamification_reward',
+      });
+
+      addToast({ message: 'Recompensa resgatada com sucesso!', type: 'success' });
+      refreshAlunoProfile();
+    } catch (error: any) {
+      addToast({ message: `Erro ao resgatar: ${error.message}`, type: 'error' });
+    } finally {
+      setIsRedeeming(false);
+      setRewardToRedeem(null);
     }
-  }, [reserva.payment_status]);
+  };
 
-  const rentalItemsTotal = useMemo(() => {
-    return reserva.rented_items?.reduce((acc, item) => acc + item.price * item.quantity, 0) || 0;
-  }, [reserva.rented_items]);
+  const currentLevel = levels.find(l => (aluno.gamification_points || 0) >= l.points_required);
+  const currentLevelIndex = currentLevel ? levels.findIndex(l => l.id === currentLevel.id) : -1;
+  const nextLevel = currentLevelIndex > 0 ? levels[currentLevelIndex - 1] : null;
 
-  const reservationValue = (reserva.total_price || 0) - rentalItemsTotal;
-  const amountToPay = (reserva.total_price || 0) - (reserva.credit_used || 0);
+  let progressPercentage = 0;
+  if (currentLevel) {
+      if (nextLevel && nextLevel.points_required > currentLevel.points_required) {
+          const pointsInLevel = (aluno.gamification_points || 0) - currentLevel.points_required;
+          const pointsForNextLevel = nextLevel.points_required - currentLevel.points_required;
+          progressPercentage = (pointsInLevel / pointsForNextLevel) * 100;
+      } else {
+          progressPercentage = 100;
+      }
+  }
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50" onClick={onClose}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9, y: 20 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.8 }}
-            className="bg-white dark:bg-brand-gray-900 rounded-xl w-full max-w-lg shadow-2xl flex flex-col max-h-[90vh]"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex justify-between items-center p-6 border-b border-brand-gray-200 dark:border-brand-gray-700">
-              <h3 className="text-xl font-bold text-brand-gray-900 dark:text-white">Detalhes da Reserva</h3>
-              <button onClick={onClose} className="p-1 rounded-full hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
-                <X className="h-5 w-5 text-brand-gray-500" />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-6 overflow-y-auto">
-              <div className="text-center">
-                <div className="inline-block p-3 bg-brand-gray-100 dark:bg-brand-gray-800 rounded-lg border border-brand-gray-200 dark:border-brand-gray-700">
-                  <QRCode
-                    value={reserva.id}
-                    size={128}
-                    fgColor={currentColors.fg}
-                    bgColor={currentColors.bg}
-                    level="L"
-                  />
-                </div>
-                <p className="text-xs text-brand-gray-500 mt-2">Apresente este QR Code na recepção.</p>
-              </div>
-
-              <div className="space-y-3">
-                <InfoItem icon={MapPin} label="Local" value={`${quadra.name} • ${arenaName}`} />
-                <InfoItem icon={Calendar} label="Data" value={format(parseDateStringAsLocal(reserva.date), "EEEE, dd 'de' MMMM", { locale: ptBR })} />
-                <InfoItem icon={Clock} label="Horário" value={`${reserva.start_time.slice(0, 5)} - ${reserva.end_time.slice(0, 5)}`} />
-                {reserva.created_by_name && (
-                    <InfoItem icon={User} label="Reservado por" value={reserva.created_by_name} />
-                )}
-                <InfoItem icon={Info} label="Data da Reserva" value={reserva.created_at ? format(new Date(reserva.created_at), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR }) : 'Não disponível'} />
-              </div>
-
-              <div className="border-t border-brand-gray-200 dark:border-brand-gray-700 pt-4 space-y-2">
-                <h4 className="font-semibold text-brand-gray-800 dark:text-white mb-2 flex items-center"><DollarSign className="h-4 w-4 mr-2 text-brand-blue-500" /> Pagamento</h4>
-                
-                <div className="flex justify-between text-sm">
-                  <span className="text-brand-gray-600 dark:text-brand-gray-400">Valor da Reserva</span>
-                  <span className="font-medium">{(reservationValue).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                </div>
-                
-                {rentalItemsTotal > 0 && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-brand-gray-600 dark:text-brand-gray-400">Itens Alugados</span>
-                    <span className="font-medium">+ {rentalItemsTotal.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                  </div>
-                )}
-
-                <div className="flex justify-between text-sm font-semibold border-t border-brand-gray-200 dark:border-brand-gray-700 pt-2 mt-2">
-                  <span>Total</span>
-                  <span>{(reserva.total_price || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                </div>
-
-                {reserva.credit_used && reserva.credit_used > 0 && (
-                  <div className="flex justify-between text-sm">
-                    <span className="text-brand-gray-600 dark:text-brand-gray-400 flex items-center"><CreditCard className="h-4 w-4 mr-1.5 text-blue-500"/> Crédito utilizado</span>
-                    <span className="font-medium text-blue-600 dark:text-blue-400">- {(reserva.credit_used).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                  </div>
-                )}
-                
-                <div className="flex justify-between text-lg font-bold border-t-2 border-brand-gray-300 dark:border-brand-gray-600 pt-2 mt-2">
-                  <span>Valor a Pagar</span>
-                  <span className="text-brand-blue-600 dark:text-brand-blue-300">{amountToPay.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                </div>
-
-                 <div className="flex justify-end items-center text-xs mt-1">
-                    <paymentStatus.icon className={`h-3 w-3 mr-1 ${paymentStatus.color}`} />
-                    <span className={`font-medium ${paymentStatus.color}`}>{paymentStatus.label}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6 mt-auto border-t border-brand-gray-200 dark:border-brand-gray-700 flex justify-end gap-3">
-              <Button variant="outline" onClick={onClose}>Fechar</Button>
-              <Button onClick={handleCancelClick} className="bg-red-600 hover:bg-red-700 dark:bg-red-500 dark:hover:bg-red-600 focus:ring-red-500">
-                Cancelar Reserva
-              </Button>
-            </div>
-          </motion.div>
+    <div className="space-y-8">
+      {/* Level and Points */}
+      <div className="bg-white dark:bg-brand-gray-800 rounded-lg shadow-md p-6 border border-brand-gray-200 dark:border-brand-gray-700">
+        <div className="flex justify-between items-center mb-4">
+          <div>
+            <h3 className="text-xl font-bold">{currentLevel?.name || 'Iniciante'}</h3>
+            <p className="text-sm text-brand-gray-500">Seu nível no MatchPlay Rewards</p>
+          </div>
+          <div className="text-right">
+            <p className="text-2xl font-bold text-brand-blue-500">{aluno.gamification_points || 0}</p>
+            <p className="text-sm text-brand-gray-500">MatchPoints</p>
+          </div>
         </div>
-      )}
-    </AnimatePresence>
+        <div className="w-full bg-brand-gray-200 dark:bg-brand-gray-700 rounded-full h-2.5">
+          <div className="bg-brand-blue-500 h-2.5 rounded-full" style={{ width: `${Math.min(progressPercentage, 100)}%` }}></div>
+        </div>
+        {nextLevel && (
+          <p className="text-xs text-right mt-2 text-brand-gray-500">
+            Faltam {nextLevel.points_required - (aluno.gamification_points || 0)} pontos para o nível {nextLevel.name}
+          </p>
+        )}
+      </div>
+
+      {/* Rewards */}
+      <div>
+        <h3 className="text-xl font-semibold mb-4 flex items-center"><Gift className="mr-2 h-5 w-5 text-green-500" /> Recompensas para Resgate</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {rewards.filter(r => r.is_active).map(reward => (
+            <div key={reward.id} className="bg-white dark:bg-brand-gray-800 rounded-lg shadow p-4 border border-brand-gray-200 dark:border-brand-gray-700 flex flex-col justify-between">
+              <div>
+                <h4 className="font-bold">{reward.title}</h4>
+                <p className="text-sm text-brand-gray-500 mt-1">{reward.description}</p>
+                {reward.quantity !== null && <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">Restam: {reward.quantity}</p>}
+              </div>
+              <div className="flex justify-between items-center mt-4">
+                <span className="font-bold text-green-600 dark:text-green-400">{reward.points_cost} Pontos</span>
+                <Button 
+                  size="sm" 
+                  disabled={(aluno.gamification_points || 0) < reward.points_cost || (reward.quantity !== null && reward.quantity <= 0)}
+                  onClick={() => setRewardToRedeem(reward)}
+                >
+                  Resgatar
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Achievements */}
+      <div>
+        <h3 className="text-xl font-semibold mb-4 flex items-center"><Trophy className="mr-2 h-5 w-5 text-yellow-500" /> Conquistas</h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {achievements.map(ach => {
+            const isUnlocked = unlockedAchievements.some(ua => ua.achievement_id === ach.id);
+            return (
+              <div key={ach.id} className={`p-4 rounded-lg text-center border ${isUnlocked ? 'bg-yellow-50 dark:bg-yellow-900/50 border-yellow-300 dark:border-yellow-700' : 'bg-brand-gray-100 dark:bg-brand-gray-800 border-brand-gray-200 dark:border-brand-gray-700'}`}>
+                <div className="relative w-12 h-12 mx-auto">
+                  <Trophy className={`w-12 h-12 ${isUnlocked ? 'text-yellow-500' : 'text-brand-gray-400'}`} />
+                  {isUnlocked && <CheckCircle className="absolute -bottom-1 -right-1 h-5 w-5 bg-white dark:bg-yellow-900/50 rounded-full text-green-500" />}
+                </div>
+                <p className="font-semibold text-sm mt-2">{ach.name}</p>
+                <p className="text-xs text-brand-gray-500">{ach.description}</p>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      
+      {/* History */}
+      <div>
+        <h3 className="text-xl font-semibold mb-4 flex items-center"><History className="mr-2 h-5 w-5 text-brand-blue-500" /> Histórico de Pontos</h3>
+        <div className="bg-white dark:bg-brand-gray-800 rounded-lg shadow-md border border-brand-gray-200 dark:border-brand-gray-700">
+          <div className="max-h-96 overflow-y-auto">
+            {history.length > 0 ? (
+              <ul className="divide-y divide-brand-gray-200 dark:divide-brand-gray-700">
+                {history.map(tx => (
+                  <li key={tx.id} className="p-4 flex justify-between items-center">
+                    <div>
+                      <p className="font-medium text-sm text-brand-gray-800 dark:text-brand-gray-200">{tx.description}</p>
+                      <p className="text-xs text-brand-gray-500 dark:text-brand-gray-400 mt-1">
+                        {format(new Date(tx.created_at), 'dd/MM/yyyy HH:mm')}
+                      </p>
+                    </div>
+                    <span className={`font-bold text-lg ${tx.points >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                      {tx.points >= 0 ? '+' : ''}{tx.points}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="p-8 text-center text-sm text-brand-gray-500">Nenhuma transação de pontos encontrada.</p>
+            )}
+          </div>
+        </div>
+      </div>
+      
+      <ConfirmationModal
+        isOpen={!!rewardToRedeem}
+        onClose={() => setRewardToRedeem(null)}
+        onConfirm={handleConfirmRedemption}
+        title="Confirmar Resgate"
+        message={
+            rewardToRedeem && (
+                <p>
+                    Você tem certeza que deseja usar{' '}
+                    <strong>{rewardToRedeem.points_cost} pontos</strong> para resgatar a recompensa{' '}
+                    <strong>"{rewardToRedeem.title}"</strong>?
+                </p>
+            )
+        }
+        confirmText={isRedeeming ? 'Resgatando...' : 'Sim, Resgatar'}
+        icon={<Gift className="h-10 w-10 text-green-500" />}
+      />
+    </div>
   );
 };
 
-const InfoItem: React.FC<{ icon: React.ElementType, label: string, value: string }> = ({ icon: Icon, label, value }) => (
-  <div className="flex items-start">
-    <Icon className="h-5 w-5 mr-3 mt-0.5 text-brand-gray-400 flex-shrink-0" />
-    <div>
-      <p className="text-xs text-brand-gray-500 dark:text-brand-gray-400">{label}</p>
-      <p className="font-semibold text-brand-gray-800 dark:text-brand-gray-200">{value}</p>
-    </div>
-  </div>
-);
-
-export default ReservationDetailModal;
+export default RewardsTab;

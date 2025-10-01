@@ -1,229 +1,129 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Aluno, GamificationPointTransaction, GamificationReward } from '../../types';
-import { supabase } from '../../lib/supabaseClient';
-import { useToast } from '../../context/ToastContext';
-import { Loader2, Plus, Minus, Star, Trophy, History, Gift } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { X, Save, User, Mail, Phone, Sparkles, Trash2 } from 'lucide-react';
+import { Professor } from '../../types';
 import Button from '../Forms/Button';
 import Input from '../Forms/Input';
-import { format } from 'date-fns';
+import { maskPhone } from '../../utils/masks';
 
-interface GamificationTabProps {
-  aluno: Aluno;
-  onDataChange: () => void;
-  rewards: GamificationReward[];
+interface ProfessorModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onSave: (professor: Omit<Professor, 'id' | 'arena_id' | 'created_at'> | Professor) => void;
+  onDelete: (id: string) => void;
+  initialData: Professor | null;
 }
 
-const GamificationTab: React.FC<GamificationTabProps> = ({ aluno, onDataChange, rewards }) => {
-  const { addToast } = useToast();
-  const [history, setHistory] = useState<GamificationPointTransaction[]>([]);
-  const [unlockedAchievements, setUnlockedAchievements] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [pointsToAdd, setPointsToAdd] = useState<number | string>('');
-  const [adjustmentReason, setAdjustmentReason] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
+const ProfessorModal: React.FC<ProfessorModalProps> = ({ isOpen, onClose, onSave, onDelete, initialData }) => {
+  const [formData, setFormData] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    specialties: [] as string[],
+  });
 
-  const levelName = (aluno.gamification_levels as { name: string } | null)?.name || 'Iniciante';
-
-  const loadGamificationData = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const { data: historyData, error: historyError } = await supabase
-        .from('gamification_point_transactions')
-        .select('*')
-        .eq('aluno_id', aluno.id)
-        .order('created_at', { ascending: false });
-
-      if (historyError) throw historyError;
-      setHistory(historyData || []);
-      
-      const { data: achievementsData, error: achievementsError } = await supabase
-        .from('aluno_achievements')
-        .select('*, gamification_achievements(*)')
-        .eq('aluno_id', aluno.id);
-        
-      if (achievementsError) throw achievementsError;
-      setUnlockedAchievements(achievementsData || []);
-
-    } catch (error: any) {
-      addToast({ message: `Erro ao carregar dados de gamificação: ${error.message}`, type: 'error' });
-    } finally {
-      setIsLoading(false);
-    }
-  }, [aluno.id, addToast]);
+  const isEditing = !!initialData;
 
   useEffect(() => {
-    if (aluno?.id) {
-      loadGamificationData();
-    }
-  }, [aluno, loadGamificationData]);
+    if (!isOpen) return;
 
-  const handlePointsAdjustment = async () => {
-    const points = Number(pointsToAdd);
-    if (isNaN(points) || points === 0 || !adjustmentReason.trim()) {
-      addToast({ message: 'Por favor, insira um valor de pontos e um motivo.', type: 'error' });
-      return;
-    }
-
-    setIsSubmitting(true);
-    try {
-      const { error: rpcError } = await supabase.rpc('add_gamification_points', {
-        p_aluno_id: aluno.id,
-        p_points_to_add: points,
-        p_description: adjustmentReason,
+    if (initialData) {
+      setFormData({
+        name: initialData.name,
+        email: initialData.email,
+        phone: initialData.phone || '',
+        specialties: initialData.specialties || [],
       });
+    } else {
+      setFormData({ name: '', email: '', phone: '', specialties: [] });
+    }
+  }, [initialData, isOpen]);
 
-      if (rpcError) throw rpcError;
-      
-      if (aluno.profile_id) {
-        const notificationMessage = points > 0 
-          ? `Você ganhou ${points} pontos: ${adjustmentReason}`
-          : `Você perdeu ${Math.abs(points)} pontos: ${adjustmentReason}`;
-          
-        const { error: notificationError } = await supabase.from('notificacoes').insert({
-          profile_id: aluno.profile_id,
-          arena_id: aluno.arena_id,
-          message: notificationMessage,
-          type: 'gamification_points'
-        });
-        if (notificationError) {
-            console.error("Erro ao criar notificação:", notificationError);
-        }
-      }
-
-      addToast({ message: 'Pontos ajustados com sucesso!', type: 'success' });
-      setPointsToAdd('');
-      setAdjustmentReason('');
-
-      await loadGamificationData();
-      onDataChange();
-
-    } catch (error: any) {
-      addToast({ message: `Erro ao ajustar pontos: ${error.message}`, type: 'error' });
-    } finally {
-      setIsSubmitting(false);
+  const handleSave = () => {
+    if (isEditing && initialData) {
+      onSave({ ...initialData, ...formData });
+    } else {
+      onSave(formData);
+    }
+  };
+  
+  const handleDelete = () => {
+    if (initialData) {
+      onDelete(initialData.id);
     }
   };
 
-  if (isLoading) {
-    return <div className="flex justify-center items-center h-40"><Loader2 className="w-6 h-6 animate-spin text-brand-blue-500" /></div>;
-  }
+  const handleSpecialtiesChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const specialtiesArray = e.target.value.split(',').map(s => s.trim()).filter(Boolean);
+    setFormData(prev => ({ ...prev, specialties: specialtiesArray }));
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    let finalValue = value;
+    if (name === 'phone') {
+      finalValue = maskPhone(value);
+    }
+    setFormData(prev => ({ ...prev, [name]: finalValue }));
+  };
 
   return (
-    <div className="space-y-6">
-      {/* Summary Card */}
-      <div className="bg-brand-gray-50 dark:bg-brand-gray-900/50 rounded-lg p-4 flex justify-between items-center border border-brand-gray-200 dark:border-brand-gray-700">
-        <div className="flex items-center">
-          <Star className="h-8 w-8 text-yellow-500 mr-4" />
-          <div>
-            <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400">Nível Atual</p>
-            <p className="font-bold text-lg text-brand-gray-900 dark:text-white">{levelName}</p>
-          </div>
-        </div>
-        <div className="text-right">
-          <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400">Pontuação Total</p>
-          <p className="font-bold text-lg text-brand-blue-500">{aluno.gamification_points || 0}</p>
-        </div>
-      </div>
-
-      {/* Manual Adjustment */}
-      <div className="p-4 border rounded-lg">
-        <h4 className="font-semibold mb-3">Ajuste Manual de Pontos</h4>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Input 
-            label="Pontos a Adicionar/Remover"
-            type="number"
-            value={pointsToAdd}
-            onChange={(e) => setPointsToAdd(e.target.value)}
-            placeholder="Ex: 50 ou -20"
-          />
-          <Input 
-            label="Motivo do Ajuste"
-            value={adjustmentReason}
-            onChange={(e) => setAdjustmentReason(e.target.value)}
-            placeholder="Ex: Bônus de boas-vindas"
-          />
-        </div>
-        <div className="mt-4 text-right">
-          <Button onClick={handlePointsAdjustment} isLoading={isSubmitting}>
-            {Number(pointsToAdd) >= 0 ? <Plus className="h-4 w-4 mr-2" /> : <Minus className="h-4 w-4 mr-2" />}
-            Ajustar Pontos
-          </Button>
-        </div>
-      </div>
-
-      {/* Rewards */}
-      <div>
-        <h4 className="font-semibold mb-3 flex items-center"><Gift className="h-5 w-5 mr-2 text-green-500"/> Recompensas Disponíveis</h4>
-        {rewards.length > 0 ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {rewards.map(reward => {
-              const canAfford = (aluno.gamification_points || 0) >= reward.points_cost;
-              const isAvailable = reward.quantity === null || reward.quantity > 0;
-              return (
-                <div key={reward.id} className={`p-3 bg-brand-gray-50 dark:bg-brand-gray-800/50 rounded-lg border border-brand-gray-200 dark:border-brand-gray-700 flex flex-col justify-between ${(!canAfford || !isAvailable) ? 'opacity-60' : ''}`}>
-                  <div>
-                    <h5 className="font-bold text-sm">{reward.title}</h5>
-                    <p className="text-xs text-brand-gray-500 mt-1">{reward.description}</p>
-                    {reward.quantity !== null && <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">Restam: {reward.quantity}</p>}
-                  </div>
-                  <div className="flex justify-between items-center mt-3">
-                    <span className={`font-bold text-sm ${canAfford ? 'text-green-600 dark:text-green-400' : 'text-red-500'}`}>{reward.points_cost} Pontos</span>
-                    <Button 
-                      size="sm" 
-                      disabled={true}
-                      title="Apenas para visualização. O resgate é feito pelo cliente."
-                    >
-                      Resgatar
-                    </Button>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        ) : (
-          <p className="text-sm text-brand-gray-500">Nenhuma recompensa ativa configurada para esta arena.</p>
-        )}
-      </div>
-
-      {/* Unlocked Achievements */}
-      <div>
-        <h4 className="font-semibold mb-3 flex items-center"><Trophy className="h-5 w-5 mr-2 text-yellow-500"/> Conquistas Desbloqueadas</h4>
-        {unlockedAchievements.length > 0 ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-            {unlockedAchievements.map(ua => (
-              <div key={ua.achievement_id} className="p-3 bg-yellow-50 dark:bg-yellow-900/30 rounded-lg text-center border border-yellow-200 dark:border-yellow-800">
-                <Star className="h-8 w-8 mx-auto text-yellow-500" />
-                <p className="text-sm font-semibold mt-2">{ua.gamification_achievements.name}</p>
-                <p className="text-xs text-brand-gray-500">+{ua.gamification_achievements.points_reward} pontos</p>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-brand-gray-500">Nenhuma conquista desbloqueada ainda.</p>
-        )}
-      </div>
-
-      {/* Points History */}
-      <div>
-        <h4 className="font-semibold mb-3 flex items-center"><History className="h-5 w-5 mr-2 text-brand-blue-500"/> Histórico de Pontos</h4>
-        <div className="max-h-60 overflow-y-auto space-y-2 pr-2">
-          {history.length > 0 ? history.map(tx => (
-            <div key={tx.id} className="flex justify-between items-center p-2 bg-brand-gray-50 dark:bg-brand-gray-800/50 rounded-md">
-              <div>
-                <p className="text-sm font-medium">{tx.description}</p>
-                <p className="text-xs text-brand-gray-500">{format(new Date(tx.created_at), 'dd/MM/yyyy HH:mm')}</p>
-              </div>
-              <span className={`font-bold text-sm ${tx.points >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {tx.points >= 0 ? '+' : ''}{tx.points}
-              </span>
+    <AnimatePresence>
+      {isOpen && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50" onClick={onClose}>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.9 }}
+            className="bg-white dark:bg-brand-gray-900 rounded-lg w-full max-w-lg shadow-xl flex flex-col max-h-[90vh]"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center p-6 border-b border-brand-gray-200 dark:border-brand-gray-700">
+              <h3 className="text-xl font-semibold text-brand-gray-900 dark:text-white">
+                {isEditing ? 'Editar Professor' : 'Adicionar Novo Professor'}
+              </h3>
+              <button onClick={onClose} className="p-1 rounded-full hover:bg-brand-gray-100 dark:hover:bg-brand-gray-700">
+                <X className="h-5 w-5 text-brand-gray-500" />
+              </button>
             </div>
-          )) : (
-            <p className="text-sm text-center text-brand-gray-500 py-4">Nenhuma transação de pontos encontrada.</p>
-          )}
+
+            <div className="p-6 space-y-4 overflow-y-auto">
+              <Input label="Nome Completo" name="name" value={formData.name} onChange={handleChange} icon={<User className="h-4 w-4 text-brand-gray-400"/>} required />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Input label="E-mail" name="email" type="email" value={formData.email} onChange={handleChange} icon={<Mail className="h-4 w-4 text-brand-gray-400"/>} required />
+                <Input label="Telefone" name="phone" value={formData.phone} onChange={handleChange} icon={<Phone className="h-4 w-4 text-brand-gray-400"/>} />
+              </div>
+              <Input 
+                label="Especialidades" 
+                name="specialties" 
+                value={formData.specialties.join(', ')} 
+                onChange={handleSpecialtiesChange} 
+                icon={<Sparkles className="h-4 w-4 text-brand-gray-400"/>}
+                placeholder="Ex: Beach Tennis, Futevôlei, Funcional"
+                />
+            </div>
+
+            <div className="p-6 mt-auto border-t border-brand-gray-200 dark:border-brand-gray-700 flex justify-between items-center">
+              <div>
+                {isEditing && (
+                  <Button variant="outline" onClick={handleDelete} className="text-red-500 border-red-300 dark:border-red-700 hover:bg-red-50 dark:hover:bg-red-900/30">
+                    <Trash2 className="h-4 w-4 mr-2" />
+                    Excluir
+                  </Button>
+                )}
+              </div>
+              <div className="flex justify-end gap-3">
+                <Button variant="outline" onClick={onClose}>Cancelar</Button>
+                <Button onClick={handleSave}>
+                  <Save className="h-4 w-4 mr-2"/> {isEditing ? 'Salvar Alterações' : 'Adicionar Professor'}
+                </Button>
+              </div>
+            </div>
+          </motion.div>
         </div>
-      </div>
-    </div>
+      )}
+    </AnimatePresence>
   );
 };
 
-export default GamificationTab;
+export default ProfessorModal;

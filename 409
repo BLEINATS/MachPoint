@@ -1,121 +1,44 @@
 /*
-# [SECURITY] Set Search Path for is_arena_admin Function
-[This operation enhances security by explicitly setting the search_path for the is_arena_admin function, preventing potential hijacking attacks.]
+# [Fix] Create Payment Status Enum Type
+This migration creates the missing `payment_status_enum` type and ensures the `reservas` table uses it correctly. This fixes errors related to this missing type.
 
-## Query Description: [This operation redefines the `is_arena_admin` function to include a `SET search_path = 'public'`. This is a safe, non-destructive change that improves the function's security without altering its behavior or affecting any data.]
-
-## Metadata:
-- Schema-Category: ["Security", "Safe"]
-- Impact-Level: ["Low"]
-- Requires-Backup: [false]
-- Reversible: [true]
-
-## Structure Details:
-- Function: `public.is_arena_admin(uuid)`
-
-## Security Implications:
-- RLS Status: [Not Applicable]
-- Policy Changes: [No]
-- Auth Requirements: [None]
-
-## Performance Impact:
-- Indexes: [Not Applicable]
-- Triggers: [Not Applicable]
-- Estimated Impact: [None]
-*/
-CREATE OR REPLACE FUNCTION public.is_arena_admin(p_user_id uuid)
-RETURNS boolean
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = 'public'
-AS $$
-BEGIN
-  RETURN EXISTS (
-    SELECT 1
-    FROM public.arenas
-    WHERE owner_id = p_user_id
-  );
-END;
-$$;
-
-/*
-# [SECURITY] Set Search Path for handle_reservation_completion
-[This operation enhances security by explicitly setting the search_path for the handle_reservation_completion trigger function.]
-
-## Query Description: [This operation redefines the `handle_reservation_completion` function to include a `SET search_path = 'public'`. This is a safe, non-destructive change that improves the function's security without altering its behavior or affecting any data.]
+## Query Description:
+This operation defines a new data type (`payment_status_enum`) for managing payment statuses and alters the `reservas` table to use this new type for the `payment_status` column. This change enforces data consistency, ensuring that only predefined values ('pago', 'pendente', 'parcialmente_pago') can be stored. Existing text values in the column will be converted to the new enum type.
 
 ## Metadata:
-- Schema-Category: ["Security", "Safe"]
-- Impact-Level: ["Low"]
-- Requires-Backup: [false]
-- Reversible: [true]
+- Schema-Category: "Structural"
+- Impact-Level: "Medium"
+- Requires-Backup: true
+- Reversible: false
 
 ## Structure Details:
-- Function: `public.handle_reservation_completion()`
+- **Creates Type**: `public.payment_status_enum`
+- **Alters Table**: `public.reservas`
+  - **Alters Column**: `payment_status` to use the new enum type.
 
 ## Security Implications:
-- RLS Status: [Not Applicable]
-- Policy Changes: [No]
-- Auth Requirements: [None]
+- RLS Status: Not changed.
+- Policy Changes: No.
+- Auth Requirements: None.
 
 ## Performance Impact:
-- Indexes: [Not Applicable]
-- Triggers: [Modified]
-- Estimated Impact: [None]
+- Indexes: No change.
+- Triggers: No change.
+- Estimated Impact: Low. The operation might cause a brief lock on the `reservas` table during the type conversion.
 */
-CREATE OR REPLACE FUNCTION public.handle_reservation_completion()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = 'public'
-AS $$
-DECLARE
-    v_aluno_id uuid;
-    v_arena_id uuid;
-    v_settings record;
-    v_points_to_add integer;
+
+-- Step 1: Create the custom ENUM type for payment status if it doesn't exist.
+-- The error "type public.payment_status_enum does not exist" indicates it's missing.
+DO $$
 BEGIN
-    -- Only run for confirmed reservations being updated to 'realizada'
-    IF TG_OP = 'UPDATE' AND OLD.status = 'confirmada' AND NEW.status = 'realizada' THEN
-        v_arena_id := NEW.arena_id;
-
-        -- Check if gamification is enabled for the arena
-        SELECT is_enabled, points_per_reservation, points_per_real
-        INTO v_settings
-        FROM public.gamification_settings
-        WHERE arena_id = v_arena_id;
-
-        -- If gamification is not enabled, exit
-        IF v_settings IS NULL OR NOT v_settings.is_enabled THEN
-            RETURN NEW;
-        END IF;
-
-        -- Find the aluno_id from the profile_id
-        IF NEW.profile_id IS NOT NULL THEN
-            SELECT id INTO v_aluno_id
-            FROM public.alunos
-            WHERE profile_id = NEW.profile_id AND arena_id = v_arena_id;
-        END IF;
-
-        -- If no aluno profile is linked, exit
-        IF v_aluno_id IS NULL THEN
-            RETURN NEW;
-        END IF;
-
-        -- Calculate points
-        v_points_to_add := v_settings.points_per_reservation + floor(NEW.total_price * v_settings.points_per_real);
-
-        -- Add points if any
-        IF v_points_to_add > 0 THEN
-            PERFORM public.add_gamification_points(
-                v_aluno_id,
-                v_points_to_add,
-                'Pontos por reserva realizada',
-                NEW.id
-            );
-        END IF;
-
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_status_enum') THEN
+        CREATE TYPE public.payment_status_enum AS ENUM ('pago', 'pendente', 'parcialmente_pago');
     END IF;
-    RETURN NEW;
-END;
-$$;
+END$$;
+
+-- Step 2: Alter the 'reservas' table to use the new enum type for the 'payment_status' column.
+-- This assumes the column exists and is of a text-compatible type.
+-- The `USING` clause safely converts existing text values to the new enum type.
+ALTER TABLE public.reservas
+ALTER COLUMN payment_status TYPE public.payment_status_enum
+USING payment_status::text::public.payment_status_enum;

@@ -1,39 +1,41 @@
 /*
-# [SECURITY] Set Search Path for Core Functions
-This migration enhances security by setting a fixed `search_path` for critical database functions, mitigating the risk of search path hijacking attacks as flagged by Supabase security advisories.
+# [SECURITY] Set Search Path for add_credit_to_aluno
+This operation sets a secure search_path for the `add_credit_to_aluno` function to prevent potential hijacking attacks.
 
-## Query Description:
-- This operation alters existing database functions to explicitly set their `search_path` to `'public'`.
-- It does not change the logic of the functions, only their security configuration.
-- There is no impact on existing data.
+## Query Description: [This operation modifies a database function to enhance security by explicitly setting the `search_path`. It does not alter the function's logic or impact existing data. This is a safe and recommended security practice.]
 
 ## Metadata:
-- Schema-Category: "Security"
-- Impact-Level: "Low"
-- Requires-Backup: false
-- Reversible: true (by altering the function to reset the search_path)
+- Schema-Category: ["Security", "Safe"]
+- Impact-Level: ["Low"]
+- Requires-Backup: [false]
+- Reversible: [true]
 
 ## Structure Details:
-- Functions potentially affected:
-  - `public.cancel_booking(uuid)`
-  - `public.add_credit(uuid, integer)`
+- Function being affected: `public.add_credit_to_aluno(uuid, uuid, numeric)`
 
 ## Security Implications:
-- RLS Status: Unchanged
-- Policy Changes: No
-- Auth Requirements: Unchanged
-- Mitigates: `Function Search Path Mutable` warning by preventing unauthorized schema manipulation within the function's execution context.
+- RLS Status: [Not Applicable]
+- Policy Changes: [No]
+- Auth Requirements: [None]
 
 ## Performance Impact:
-- Indexes: None
-- Triggers: None
-- Estimated Impact: Negligible. This is a metadata change.
+- Indexes: [None]
+- Triggers: [None]
+- Estimated Impact: [Negligible performance impact.]
 */
-
--- Secures the booking cancellation function
-ALTER FUNCTION public.cancel_booking(booking_id uuid)
-SET search_path = 'public';
-
--- Secures the credit addition function
-ALTER FUNCTION public.add_credit(p_aluno_id uuid, p_amount integer)
-SET search_path = 'public';
+CREATE OR REPLACE FUNCTION public.add_credit_to_aluno(
+    aluno_id_to_update uuid,
+    arena_id_to_check uuid,
+    amount_to_add numeric
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    UPDATE public.alunos
+    SET credit_balance = credit_balance + amount_to_add
+    WHERE id = aluno_id_to_update AND arena_id = arena_id_to_check;
+END;
+$$;

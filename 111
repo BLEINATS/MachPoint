@@ -1,139 +1,150 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Plus, Search, Trophy } from 'lucide-react';
-import { format, eachDayOfInterval } from 'date-fns';
-import { useAuth } from '../context/AuthContext';
+import { ArrowLeft, Settings, Star, Gift, Trophy, Loader2, Save, CheckCircle } from 'lucide-react';
 import Layout from '../components/Layout/Layout';
+import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
+import { supabase } from '../lib/supabaseClient';
+import { GamificationSettings, GamificationLevel, GamificationReward, GamificationAchievement } from '../types';
 import Button from '../components/Forms/Button';
-import Input from '../components/Forms/Input';
-import { Evento, Quadra, Reserva, Participant } from '../types';
-import EventModal from '../components/Events/EventModal';
-import EventCard from '../components/Events/EventCard';
-import { parseDateStringAsLocal } from '../utils/dateUtils';
+import GeneralSettings from '../components/Gamification/GeneralSettings';
+import LevelsSettings from '../components/Gamification/LevelsSettings';
+import RewardsSettings from '../components/Gamification/RewardsSettings';
+import AchievementsSettings from '../components/Gamification/AchievementsSettings';
 
-// Mock de participantes
-const MOCK_PARTICIPANTS: Omit<Participant, 'id'>[] = [
-  { name: 'Carlos Silva', email: 'carlos@email.com', checked_in: false },
-  { name: 'Bruna Matos', email: 'bruna@email.com', checked_in: false },
-  { name: 'Pedro Almeida', email: 'pedro@email.com', checked_in: false },
-  { name: 'Juliana Costa', email: 'juliana@email.com', checked_in: false },
-  { name: 'Fernando Lima', email: 'fernando@email.com', checked_in: false },
-  { name: 'Mariana Dias', email: 'mariana@email.com', checked_in: false },
-  { name: 'Rafael Souza', email: 'rafael@email.com', checked_in: false },
-  { name: 'Luiza Pereira', email: 'luiza@email.com', checked_in: false },
-];
+type TabType = 'general' | 'levels' | 'rewards' | 'achievements';
 
-const Events: React.FC = () => {
+const Gamification: React.FC = () => {
   const { arena } = useAuth();
-  const [eventos, setEventos] = useState<Evento[]>([]);
-  const [quadras, setQuadras] = useState<Quadra[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingEvento, setEditingEvento] = useState<Evento | null>(null);
+  const { addToast } = useToast();
+  const [activeTab, setActiveTab] = useState<TabType>('general');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [showSuccess, setShowSuccess] = useState(false);
 
-  const loadData = useCallback(() => {
-    if (arena) {
-      const savedEventos = localStorage.getItem(`eventos_${arena.id}`);
-      setEventos(savedEventos ? JSON.parse(savedEventos) : []);
-      const savedQuadras = localStorage.getItem(`quadras_${arena.id}`);
-      setQuadras(savedQuadras ? JSON.parse(savedQuadras) : []);
-    }
-  }, [arena]);
+  const [settings, setSettings] = useState<GamificationSettings | null>(null);
+  const [levels, setLevels] = useState<GamificationLevel[]>([]);
+  const [rewards, setRewards] = useState<GamificationReward[]>([]);
+  const [achievements, setAchievements] = useState<GamificationAchievement[]>([]);
 
   useEffect(() => {
-    loadData();
-    window.addEventListener('focus', loadData);
-    return () => window.removeEventListener('focus', loadData);
-  }, [loadData]);
+    const initializeAndLoad = async () => {
+      if (!arena) return;
+      setIsLoading(true);
+      try {
+        const useMock = String(import.meta.env.VITE_USE_MOCK_DB).toLowerCase() === 'true';
 
-  const handleSaveEvento = (eventoData: Omit<Evento, 'id' | 'arena_id' | 'created_at'> | Evento) => {
-    if (!arena) return;
+        // Em modo offline, sempre reseta para os padrões para evitar problemas com dados salvos no localStorage.
+        // O RPC mock é idempotente (limpa antes de adicionar), então é seguro chamar sempre.
+        if (useMock) {
+          const { error: rpcError } = await supabase.rpc('seed_gamification_defaults', { p_arena_id: arena.id });
+          if (rpcError) throw rpcError;
+        } else {
+          // Lógica original para ambiente de produção, verifica se precisa popular os dados pela primeira vez.
+          const [settingsRes, rewardsRes] = await Promise.all([
+            supabase.from('gamification_settings').select('arena_id').eq('arena_id', arena.id).limit(1),
+            supabase.from('gamification_rewards').select('id').eq('arena_id', arena.id).limit(1)
+          ]);
 
-    const isEditing = 'id' in eventoData;
-    const eventoId = isEditing ? eventoData.id : `evento_${Date.now()}`;
-    
-    // Adiciona participantes mock ao criar um novo evento
-    const participants = isEditing ? (eventoData as Evento).participants : MOCK_PARTICIPANTS.slice(0, eventoData.max_participants).map((p, i) => ({...p, id: `participante_${eventoId}_${i}`}));
+          if (settingsRes.error) throw settingsRes.error;
+          if (rewardsRes.error) throw rewardsRes.error;
 
-    const newEvento: Evento = isEditing 
-      ? eventoData as Evento
-      : { ...eventoData, id: eventoId, arena_id: arena.id, created_at: new Date().toISOString(), participants, matches: [] } as Evento;
+          const settingsExist = settingsRes.data && settingsRes.data.length > 0;
+          const rewardsExist = rewardsRes.data && rewardsRes.data.length > 0;
 
-    const updatedEventos = isEditing
-      ? eventos.map(e => e.id === newEvento.id ? newEvento : e)
-      : [...eventos, newEvento];
-    
-    setEventos(updatedEventos);
-    localStorage.setItem(`eventos_${arena.id}`, JSON.stringify(updatedEventos));
+          if (!settingsExist || !rewardsExist) {
+            addToast({ message: "Configurando sistema de gamificação pela primeira vez...", type: 'info' });
+            const { error: rpcError } = await supabase.rpc('seed_gamification_defaults', { p_arena_id: arena.id });
+            if (rpcError) throw rpcError;
+          }
+        }
 
-    // --- Lógica de criação de reserva ---
-    const savedReservas = localStorage.getItem(`reservas_${arena.id}`);
-    const currentReservas: Reserva[] = savedReservas ? JSON.parse(savedReservas) : [];
-    
-    const otherReservas = currentReservas.filter(r => r.evento_id !== eventoId);
-    
-    const eventBlockReservations: Reserva[] = [];
-    const eventDays = eachDayOfInterval({
-      start: parseDateStringAsLocal(newEvento.start_date),
-      end: parseDateStringAsLocal(newEvento.end_date)
-    });
+        // Após garantir que os dados existem (ou foram criados), busca tudo.
+        const [
+          finalSettingsRes,
+          finalLevelsRes,
+          finalRewardsRes,
+          finalAchievementsRes
+        ] = await Promise.all([
+          supabase.from('gamification_settings').select('*').eq('arena_id', arena.id).maybeSingle(),
+          supabase.from('gamification_levels').select('*').eq('arena_id', arena.id),
+          supabase.from('gamification_rewards').select('*').eq('arena_id', arena.id),
+          supabase.from('gamification_achievements').select('*').eq('arena_id', arena.id),
+        ]);
 
-    for (const day of eventDays) {
-      for (const quadraId of newEvento.quadras_ids) {
-        const newBlockReserva: Reserva = {
-          id: `reserva_evento_${eventoId}_${quadraId}_${format(day, 'yyyy-MM-dd')}`,
-          arena_id: arena.id,
-          quadra_id: quadraId,
-          evento_id: eventoId,
-          date: format(day, 'yyyy-MM-dd'),
-          start_time: newEvento.start_time,
-          end_time: newEvento.end_time,
-          type: 'evento',
-          status: 'confirmada',
-          clientName: `Evento: ${newEvento.name}`,
-          isRecurring: false,
-          profile_id: '',
-          created_at: new Date().toISOString(),
-        };
-        eventBlockReservations.push(newBlockReserva);
+        if (finalSettingsRes.error) throw finalSettingsRes.error;
+        if (finalLevelsRes.error) throw finalLevelsRes.error;
+        if (finalRewardsRes.error) throw finalRewardsRes.error;
+        if (finalAchievementsRes.error) throw finalAchievementsRes.error;
+
+        setSettings(finalSettingsRes.data);
+        setLevels((finalLevelsRes.data || []).sort((a, b) => a.level_rank - b.level_rank));
+        setRewards(finalRewardsRes.data || []);
+        setAchievements(finalAchievementsRes.data || []);
+
+      } catch (error: any) {
+        addToast({ message: `Erro ao carregar configurações: ${error.message}`, type: 'error' });
+      } finally {
+        setIsLoading(false);
       }
+    };
+
+    if (arena) {
+      initializeAndLoad();
     }
+  }, [arena, addToast]);
 
-    const finalReservas = [...otherReservas, ...eventBlockReservations];
-    localStorage.setItem(`reservas_${arena.id}`, JSON.stringify(finalReservas));
-    // --- Fim da lógica de reserva ---
+  const handleSave = async () => {
+    if (!arena) return;
+    setIsSaving(true);
+    try {
+      if (settings) {
+        const { error: settingsError } = await supabase.from('gamification_settings').upsert({ ...settings, arena_id: arena.id });
+        if (settingsError) throw settingsError;
+      }
+      const { error: levelsError } = await supabase.from('gamification_levels').upsert(levels.map(l => ({ ...l, arena_id: arena.id })));
+      if (levelsError) throw levelsError;
 
-    setIsModalOpen(false);
-    setEditingEvento(null);
+      const { error: rewardsError } = await supabase.from('gamification_rewards').upsert(rewards.map(r => ({ ...r, arena_id: arena.id })));
+      if (rewardsError) throw rewardsError;
+
+      const { error: achievementsError } = await supabase.from('gamification_achievements').upsert(achievements.map(a => ({ ...a, arena_id: arena.id })));
+      if (achievementsError) throw achievementsError;
+
+      setShowSuccess(true);
+      setTimeout(() => setShowSuccess(false), 2000);
+      addToast({ message: "Configurações de gamificação salvas!", type: 'success' });
+    } catch (error: any) {
+      addToast({ message: `Erro ao salvar: ${error.message}`, type: 'error' });
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const handleDeleteEvento = (id: string) => {
-    if (!arena || !window.confirm('Tem certeza que deseja excluir este evento? Os bloqueios de horário e todos os dados do evento serão removidos.')) return;
+  const tabs: { id: TabType; label: string; icon: React.ElementType }[] = [
+    { id: 'general', label: 'Geral', icon: Settings },
+    { id: 'levels', label: 'Níveis', icon: Star },
+    { id: 'rewards', label: 'Recompensas', icon: Gift },
+    { id: 'achievements', label: 'Conquistas', icon: Trophy },
+  ];
+
+  const renderContent = () => {
+    if (isLoading) return <div className="flex justify-center items-center h-64"><Loader2 className="w-8 h-8 text-brand-blue-500 animate-spin" /></div>;
     
-    const updatedEventos = eventos.filter(e => e.id !== id);
-    setEventos(updatedEventos);
-    localStorage.setItem(`eventos_${arena.id}`, JSON.stringify(updatedEventos));
-
-    const savedReservas = localStorage.getItem(`reservas_${arena.id}`);
-    const currentReservas: Reserva[] = savedReservas ? JSON.parse(savedReservas) : [];
-    const finalReservas = currentReservas.filter(r => r.evento_id !== id);
-    localStorage.setItem(`reservas_${arena.id}`, JSON.stringify(finalReservas));
+    switch (activeTab) {
+      case 'general':
+        return <GeneralSettings settings={settings} setSettings={setSettings} />;
+      case 'levels':
+        return <LevelsSettings levels={levels} setLevels={setLevels} />;
+      case 'rewards':
+        return <RewardsSettings rewards={rewards} setRewards={setRewards} />;
+      case 'achievements':
+        return <AchievementsSettings achievements={achievements} setAchievements={setAchievements} />;
+      default:
+        return null;
+    }
   };
-
-  const filteredEventos = useMemo(() => 
-    eventos.filter(e => e.name.toLowerCase().includes(searchTerm.toLowerCase())),
-    [eventos, searchTerm]
-  );
-  
-  useEffect(() => {
-    if (editingEvento) setIsModalOpen(true);
-  }, [editingEvento]);
-
-  useEffect(() => {
-    if (!isModalOpen) setEditingEvento(null);
-  }, [isModalOpen]);
 
   return (
     <Layout>
@@ -143,65 +154,40 @@ const Events: React.FC = () => {
             <ArrowLeft className="h-4 w-4 mr-2" />
             Voltar para o Dashboard
           </Link>
-          <h1 className="text-3xl font-bold text-brand-gray-900 dark:text-white">Gestão de Eventos</h1>
-          <p className="text-brand-gray-600 dark:text-brand-gray-400 mt-2">Crie e gerencie torneios, campeonatos e atividades especiais.</p>
-        </motion.div>
-
-        <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-4 mb-8 border border-brand-gray-200 dark:border-brand-gray-700">
-          <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
-            <div className="w-full sm:w-auto sm:flex-1">
-              <Input
-                placeholder="Buscar por evento..."
-                icon={<Search className="h-4 w-4 text-brand-gray-400" />}
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
+          <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4">
+            <div>
+              <h1 className="text-3xl font-bold text-brand-gray-900 dark:text-white">MatchPlay Rewards</h1>
+              <p className="text-brand-gray-600 dark:text-brand-gray-400 mt-2">Configure o sistema de gamificação para engajar seus clientes.</p>
             </div>
-            <Button onClick={() => setIsModalOpen(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              Criar Novo Evento
+            <Button onClick={handleSave} isLoading={isSaving} disabled={isSaving}>
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.span key={showSuccess ? 'success' : 'save'} initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="flex items-center">
+                  {showSuccess ? <><CheckCircle className="h-4 w-4 mr-2" /> Salvo!</> : <><Save className="h-4 w-4 mr-2" /> Salvar Alterações</>}
+                </motion.span>
+              </AnimatePresence>
             </Button>
           </div>
+        </motion.div>
+
+        <div className="border-b border-brand-gray-200 dark:border-brand-gray-700 mb-8">
+          <nav className="-mb-px flex space-x-6 overflow-x-auto" aria-label="Tabs">
+            {tabs.map(tab => (
+              <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm flex items-center transition-colors ${activeTab === tab.id ? 'border-brand-blue-500 text-brand-blue-600 dark:text-brand-blue-400' : 'border-transparent text-brand-gray-500 hover:text-brand-gray-700 hover:border-brand-gray-300 dark:text-brand-gray-400 dark:hover:text-brand-gray-200 dark:hover:border-brand-gray-600'}`}>
+                <tab.icon className="mr-2 h-5 w-5" />
+                {tab.label}
+              </button>
+            ))}
+          </nav>
         </div>
 
         <AnimatePresence mode="wait">
-          <motion.div key="eventos-list" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
-            {filteredEventos.length > 0 ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {filteredEventos.map((evento, index) => (
-                  <EventCard 
-                    key={evento.id}
-                    evento={evento}
-                    onEdit={() => setEditingEvento(evento)}
-                    onDelete={() => handleDeleteEvento(evento.id)}
-                    index={index}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="text-center py-16">
-                <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="max-w-md mx-auto">
-                  <div className="flex justify-center items-center w-16 h-16 bg-brand-gray-100 dark:bg-brand-gray-800 rounded-full mx-auto mb-6">
-                    <Trophy className="h-8 w-8 text-brand-gray-400" />
-                  </div>
-                  <h3 className="text-xl font-bold text-brand-gray-900 dark:text-white mb-2">Nenhum evento encontrado</h3>
-                  <p className="text-brand-gray-600 dark:text-brand-gray-400">Clique em 'Criar Novo Evento' para começar a organizar seu primeiro torneio ou atividade.</p>
-                </motion.div>
-              </div>
-            )}
+          <motion.div key={activeTab} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }}>
+            {renderContent()}
           </motion.div>
         </AnimatePresence>
       </div>
-
-      <EventModal 
-        isOpen={isModalOpen} 
-        onClose={() => setIsModalOpen(false)} 
-        onSave={handleSaveEvento} 
-        initialData={editingEvento}
-        quadras={quadras}
-      />
     </Layout>
   );
 };
 
-export default Events;
+export default Gamification;

@@ -1,17 +1,17 @@
 /*
-# [SECURITY] Set Search Path for add_gamification_points
-[This operation enhances security by explicitly setting the search_path for the specified function, preventing potential hijacking attacks.]
+# [SECURITY] Set Search Path for handle_new_user_profile
+This operation enhances security by setting a fixed `search_path` for the `handle_new_user_profile` function. This prevents potential hijacking attacks by ensuring the function resolves objects only from the specified schemas.
 
-## Query Description: [This operation will alter the 'add_gamification_points' function to set a secure search_path. It is a non-destructive change that improves the function's security without affecting its logic or existing data. No backup is required.]
+## Query Description: [This is a non-destructive security enhancement. It ensures that the function for creating new user profiles operates in a predictable and secure environment, reducing the risk of unauthorized access or data manipulation. No data will be changed.]
 
 ## Metadata:
-- Schema-Category: ["Security"]
+- Schema-Category: ["Security", "Safe"]
 - Impact-Level: ["Low"]
 - Requires-Backup: [false]
 - Reversible: [true]
 
 ## Structure Details:
-- Function: public.add_gamification_points(uuid, integer, text)
+- Function: `public.handle_new_user_profile()`
 
 ## Security Implications:
 - RLS Status: [Not Applicable]
@@ -19,28 +19,8 @@
 - Auth Requirements: [None]
 
 ## Performance Impact:
-- Indexes: [No change]
-- Triggers: [No change]
-- Estimated Impact: [None]
+- Indexes: [None]
+- Triggers: [None]
+- Estimated Impact: [Negligible performance impact. This is a security best practice.]
 */
-CREATE OR REPLACE FUNCTION public.add_gamification_points(p_aluno_id uuid, p_points_to_add integer, p_description text)
- RETURNS void
- LANGUAGE plpgsql
- SECURITY DEFINER
-AS $function$
-BEGIN
-    -- Insert a new transaction record
-    INSERT INTO public.gamification_point_transactions (aluno_id, arena_id, points, type, description)
-    SELECT
-        p_aluno_id,
-        a.arena_id,
-        p_points_to_add,
-        'manual_adjustment'::public.gamification_point_transaction_type,
-        p_description
-    FROM public.alunos a
-    WHERE a.id = p_aluno_id;
-END;
-$function$
-;
-
-ALTER FUNCTION public.add_gamification_points(uuid, integer, text) SET search_path = public;
+ALTER FUNCTION public.handle_new_user_profile() SET search_path = public;

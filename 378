@@ -1,60 +1,68 @@
 /*
-          # [Fix] Recreate Missing Profile Creation Function
-          [This script recreates the essential function `handle_new_user_profile` and its associated trigger. This function is responsible for automatically creating a user profile in the `public.profiles` table whenever a new user signs up through Supabase Auth. The previous error indicated this function was missing, breaking the user creation flow.]
+# [Security Enhancement] Secure seed_gamification_defaults Function
+[This operation secures the `seed_gamification_defaults` function by setting a fixed search_path, mitigating potential security risks as advised by Supabase.]
 
-          ## Query Description: [This operation is safe and foundational. It ensures that new user accounts are correctly set up in the application's public schema, which is a standard and required practice for Supabase projects. There is no risk to existing data.]
-          
-          ## Metadata:
-          - Schema-Category: ["Structural"]
-          - Impact-Level: ["Low"]
-          - Requires-Backup: [false]
-          - Reversible: [true]
-          
-          ## Structure Details:
-          - Creates or replaces the function `public.handle_new_user_profile`.
-          - Creates or replaces the trigger `on_auth_user_created` on the `auth.users` table.
-          - Ensures the `public.user_role` enum type exists.
-          
-          ## Security Implications:
-          - RLS Status: [Not Applicable]
-          - Policy Changes: [No]
-          - Auth Requirements: [None]
-          
-          ## Performance Impact:
-          - Indexes: [None]
-          - Triggers: [Adds a trigger to `auth.users`, which has a negligible performance impact on user creation.]
-          - Estimated Impact: [Low]
-          */
+## Query Description: [This operation will safely recreate the `seed_gamification_defaults` function to improve security. It has no impact on existing data and is a preventative measure.]
 
--- Step 1: Ensure the user_role enum type exists for profile creation.
-DO $$
+## Metadata:
+- Schema-Category: ["Security", "Safe"]
+- Impact-Level: ["Low"]
+- Requires-Backup: [false]
+- Reversible: [true]
+
+## Structure Details:
+- Function: `public.seed_gamification_defaults(uuid)`
+
+## Security Implications:
+- RLS Status: [Not Applicable]
+- Policy Changes: [No]
+- Auth Requirements: [service_role or owner]
+
+## Performance Impact:
+- Indexes: [No change]
+- Triggers: [No change]
+- Estimated Impact: [None]
+*/
+CREATE OR REPLACE FUNCTION public.seed_gamification_defaults(p_arena_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
-        CREATE TYPE public.user_role AS ENUM ('cliente', 'admin_arena');
+    -- Seed default settings if they don't exist for the arena
+    INSERT INTO public.gamification_settings (arena_id, is_enabled, points_per_reservation, points_per_real)
+    VALUES (p_arena_id, false, 10, 1)
+    ON CONFLICT (arena_id) DO NOTHING;
+
+    -- Seed default levels if they don't exist for the arena
+    IF NOT EXISTS (SELECT 1 FROM public.gamification_levels WHERE arena_id = p_arena_id) THEN
+        INSERT INTO public.gamification_levels (arena_id, name, points_required, level_rank)
+        VALUES
+            (p_arena_id, 'Bronze', 0, 1),
+            (p_arena_id, 'Prata', 500, 2),
+            (p_arena_id, 'Ouro', 2000, 3),
+            (p_arena_id, 'Platina', 5000, 4),
+            (p_arena_id, 'Diamante', 10000, 5);
     END IF;
-END$$;
 
+    -- Seed default rewards if they don't exist for the arena
+    IF NOT EXISTS (SELECT 1 FROM public.gamification_rewards WHERE arena_id = p_arena_id) THEN
+        INSERT INTO public.gamification_rewards (arena_id, title, description, points_cost, type, value, is_active)
+        VALUES
+            (p_arena_id, 'Desconto R$ 10', 'Use seus pontos para ganhar R$ 10 de desconto.', 100, 'discount', 10, true),
+            (p_arena_id, 'Bebida Grátis', 'Troque seus pontos por uma bebida (água ou isotônico).', 50, 'free_item', null, true);
+    END IF;
 
--- Step 2: Create or replace the function to handle new user profile creation.
-create or replace function public.handle_new_user_profile()
-returns trigger
-language plpgsql
-security definer set search_path = public
-as $$
-begin
-  insert into public.profiles (id, name, email, role)
-  values (
-    new.id,
-    new.raw_user_meta_data->>'name',
-    new.email,
-    (new.raw_user_meta_data->>'role')::public.user_role
-  );
-  return new;
-end;
+    -- Seed default achievements if they don't exist for the arena
+    IF NOT EXISTS (SELECT 1 FROM public.gamification_achievements WHERE arena_id = p_arena_id) THEN
+        INSERT INTO public.gamification_achievements (arena_id, name, description, type, points_reward, icon)
+        VALUES
+            (p_arena_id, 'Primeira Reserva', 'Sua primeira jornada começa aqui!', 'first_reservation', 25, 'Star'),
+            (p_arena_id, 'Fidelidade Bronze', 'Completou 10 reservas. Você é um cliente fiel!', 'loyalty_10', 50, 'Award'),
+            (p_arena_id, 'Fidelidade Prata', 'Completou 50 reservas. Parte da família!', 'loyalty_50', 250, 'Shield'),
+            (p_arena_id, 'Fidelidade Ouro', 'Completou 100 reservas. Uma lenda da arena!', 'loyalty_100', 1000, 'Crown');
+    END IF;
+END;
 $$;
 
--- Step 3: Create or replace the trigger on the auth.users table.
--- This ensures the function is called automatically after a new user signs up.
-create or replace trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute procedure public.handle_new_user_profile();
+ALTER FUNCTION public.seed_gamification_defaults(uuid) SET search_path = 'public';

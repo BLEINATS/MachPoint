@@ -1,62 +1,53 @@
 /*
-# [Fix] Função para Adicionar Crédito de Forma Segura
-[Cria uma função de banco de dados (RPC) para adicionar crédito ao perfil de um usuário, contornando as políticas de RLS de forma segura.]
-## Query Description: [Esta operação cria uma função `add_credit_to_profile` que permite a um administrador de arena adicionar crédito a um cliente de sua própria arena. A função é `SECURITY DEFINER`, permitindo que ela modifique a tabela `profiles`, mas contém verificações internas para garantir que apenas administradores autorizados possam chamar a função para clientes válidos, prevenindo acesso não autorizado.]
+# [Feature] Sistema de Aluguel de Itens
+[Este script prepara o banco de dados para suportar o aluguel de itens (raquetes, bolas, etc.) junto com as reservas.]
+## Query Description: [Esta operação adiciona uma nova tabela `rental_items` para o catálogo de itens e uma coluna `rented_items` (JSONB) na tabela `reservas` para registrar os itens alugados. Não há perda de dados, apenas adição de novas estruturas.]
 ## Metadata:
 - Schema-Category: ["Structural"]
 - Impact-Level: ["Low"]
 - Requires-Backup: [false]
 - Reversible: [true]
 ## Structure Details:
-- Função Adicionada: `public.add_credit_to_profile(uuid, uuid, numeric)`
+- Tabela Adicionada: `public.rental_items`
+- Coluna Adicionada: `rented_items` em `public.reservas`
 ## Security Implications:
-- RLS Status: [N/A - Function]
-- Policy Changes: [No]
-- Auth Requirements: [A função verifica internamente se o chamador é o `owner_id` da arena especificada.]
+- RLS Status: [Enabled]
+- Policy Changes: [Yes]
+- Auth Requirements: [As políticas de RLS garantirão que apenas o dono da arena possa gerenciar os itens de aluguel.]
 ## Performance Impact:
-- Indexes: [None]
+- Indexes: [Added on foreign keys]
 - Triggers: [None]
-- Estimated Impact: [Baixo. A execução da função é rápida e só ocorre durante o cancelamento de reservas.]
+- Estimated Impact: [Baixo. Novas tabelas e colunas com índices não devem impactar o desempenho existente.]
 */
-create or replace function add_credit_to_profile(
-    profile_id_to_update uuid,
-    arena_id_to_check uuid,
-    amount_to_add numeric
-)
-returns void
-language plpgsql
-security definer
-as $$
-declare
-  is_admin boolean;
-  is_client_of_arena boolean;
-begin
-  -- Verifica se o chamador é o administrador da arena especificada
-  select exists (
-    select 1 from public.arenas
-    where id = arena_id_to_check and owner_id = auth.uid()
-  ) into is_admin;
-  if not is_admin then
-    raise exception 'Permissão negada: Você não é o administrador desta arena.';
-  end if;
-  -- Verifica se o perfil a ser atualizado é um cliente da arena (seja na tabela de alunos ou de reservas)
-  select exists (
-    select 1 from public.alunos
-    where profile_id = profile_id_to_update and arena_id = arena_id_to_check
-  ) into is_client_of_arena;
-  if not is_client_of_arena then
-     select exists (
-        select 1 from public.reservas
-        where profile_id = profile_id_to_update and arena_id = arena_id_to_check
-    ) into is_client_of_arena;
-  end if;
-  
-  if not is_client_of_arena then
-    raise exception 'Permissão negada: O usuário especificado não é um cliente desta arena.';
-  end if;
-  -- Realiza a atualização do saldo de crédito
-  update public.profiles
-  set credit_balance = credit_balance + amount_to_add
-  where id = profile_id_to_update;
-end;
-$$;
+-- Passo 1: Criar a tabela para os itens de aluguel
+CREATE TABLE IF NOT EXISTS public.rental_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    arena_id UUID NOT NULL REFERENCES public.arenas(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    price NUMERIC(10, 2) NOT NULL DEFAULT 0,
+    stock INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+-- Passo 2: Habilitar RLS e criar índices
+ALTER TABLE public.rental_items ENABLE ROW LEVEL SECURITY;
+CREATE INDEX IF NOT EXISTS idx_rental_items_arena_id ON public.rental_items(arena_id);
+-- Passo 3: Adicionar a coluna para armazenar itens alugados na reserva
+ALTER TABLE public.reservas
+ADD COLUMN IF NOT EXISTS rented_items JSONB;
+-- Passo 4: Definir políticas de segurança para a nova tabela
+-- Permite que donos de arena gerenciem (leiam, insiram, atualizem, excluam) seus próprios itens.
+CREATE POLICY "Allow arena owners to manage their rental items"
+ON public.rental_items
+FOR ALL
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.arenas
+    WHERE public.arenas.id = public.rental_items.arena_id AND public.arenas.owner_id = auth.uid()
+  )
+);
+-- Permite que qualquer pessoa leia os itens de uma arena (para exibir no modal de reserva).
+CREATE POLICY "Allow anyone to read rental items"
+ON public.rental_items
+FOR SELECT
+USING (true);

@@ -1,645 +1,81 @@
-import { Aluno, Arena, Professor, Quadra, Reserva, Turma, PricingRule, Profile, RentalItem, DurationDiscount, ArenaMembership, CreditTransaction, Evento, Torneio, Notificacao, GamificationSettings, GamificationLevel, GamificationReward, GamificationAchievement, AlunoAchievement, GamificationPointTransaction } from '../types';
-import { mockArena, mockQuadras, mockAlunos, mockProfessores, mockTurmas, mockReservas, mockPricingRules, mockAdminProfile, mockClientProfile, mockGamificationAchievements, mockGamificationRewards, mockGamificationLevels } from './mockData';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Aluno, CreditTransaction } from '../../types';
+import { supabase } from '../../lib/supabaseClient';
+import { useToast } from '../../context/ToastContext';
+import { Loader2, DollarSign, History } from 'lucide-react';
+import { format } from 'date-fns';
 
-// --- Simulação de Estado de Autenticação ---
-let mockSession: { user: any; profile: Profile } | null = null;
-let authStateChangeCallback: ((event: string, session: any) => void) | null = null;
-
-const LOCAL_STORAGE_KEY = 'matchplay_mock_db';
-
-// Simula o armazenamento de dados em memória
-const initialMockDb = {
-  arenas: [mockArena],
-  quadras: mockQuadras,
-  alunos: mockAlunos,
-  professores: mockProfessores,
-  turmas: mockTurmas,
-  reservas: mockReservas,
-  pricing_rules: mockPricingRules,
-  profiles: [mockAdminProfile, mockClientProfile],
-  rental_items: [] as RentalItem[],
-  duration_discounts: [] as DurationDiscount[],
-  arena_memberships: [] as ArenaMembership[],
-  credit_transactions: [
-    {
-      id: 'tx-1',
-      aluno_id: 'mock-aluno-1', // João
-      arena_id: 'mock-arena-1',
-      amount: 70,
-      type: 'manual_adjustment',
-      description: 'Crédito de boas-vindas',
-      created_at: '2025-09-20T10:00:00Z',
-    },
-    {
-      id: 'tx-2',
-      aluno_id: 'mock-aluno-1', // João
-      arena_id: 'mock-arena-1',
-      amount: -20,
-      type: 'reservation_payment',
-      description: 'Pagamento parcial da reserva #xyz',
-      created_at: '2025-09-22T14:00:00Z',
-    },
-    {
-      id: 'tx-3',
-      aluno_id: 'mock-aluno-2', // Maria
-      arena_id: 'mock-arena-1',
-      amount: 30,
-      type: 'cancellation_credit',
-      description: 'Crédito por cancelamento da reserva #abc',
-      created_at: '2025-09-25T11:00:00Z',
-    },
-    {
-      id: 'tx-4',
-      aluno_id: 'mock-aluno-2', // Maria
-      arena_id: 'mock-arena-1',
-      amount: -30,
-      type: 'reservation_payment',
-      description: 'Pagamento da reserva #def',
-      created_at: '2025-09-26T18:00:00Z',
-    },
-  ] as CreditTransaction[],
-  eventos: [] as Evento[],
-  torneios: [] as Torneio[],
-  notificacoes: [] as Notificacao[],
-  gamification_settings: [{
-    arena_id: 'mock-arena-1',
-    is_enabled: true,
-    points_per_reservation: 10,
-    points_per_real: 1,
-  }] as GamificationSettings[],
-  gamification_levels: mockGamificationLevels,
-  gamification_rewards: mockGamificationRewards,
-  gamification_achievements: mockGamificationAchievements,
-  aluno_achievements: [] as AlunoAchievement[],
-  gamification_point_transactions: [] as GamificationPointTransaction[],
-};
-
-let mockDb: { [key: string]: any[] } = initialMockDb;
-
-const saveDbToLocalStorage = () => {
-  try {
-    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(mockDb));
-  } catch (error) {
-    console.error("Failed to save mock DB to localStorage:", error);
-  }
-};
-
-const loadDbFromLocalStorage = () => {
-  try {
-    const savedDb = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (savedDb) {
-      const parsedDb = JSON.parse(savedDb);
-      // Merge to ensure new tables from initialMockDb are included
-      mockDb = { ...initialMockDb, ...parsedDb };
-    } else {
-      mockDb = initialMockDb;
-    }
-  } catch (error) {
-    console.error("Failed to load mock DB from localStorage, using initial data:", error);
-    mockDb = initialMockDb;
-  }
-};
-
-// Load data from localStorage when the module is first imported
-loadDbFromLocalStorage();
-
-
-const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
-
-class MockQueryBuilder {
-  private data: any[];
-  private filters: ((item: any) => boolean)[] = [];
-  private isSingle = false;
-  private isMaybeSingle = false;
-  private ordering: { column: string; ascending: boolean } | null = null;
-  private selectQuery: string = '*';
-  private tableName: string;
-
-  constructor(tableName: string, data: any[]) {
-    this.tableName = tableName;
-    this.data = data;
-  }
-
-  eq(column: string, value: any) {
-    this.filters.push(item => item[column] === value);
-    return this;
-  }
-
-  in(column: string, values: any[]) {
-    this.filters.push(item => values.includes(item[column]));
-    return this;
-  }
-
-  or(filterString: string) {
-    // This is a simplified implementation for the specific filter used in Header.tsx
-    // It expects a format like: `col1.op.val,and(col2.op.val,col3.op.val)`
-    const orConditions: ((item: any) => boolean)[] = [];
-
-    const mainParts = filterString.split(',and(');
-    
-    // Handle the first part (before any 'and')
-    const firstPart = mainParts[0];
-    const [col1, op1, val1] = firstPart.split('.');
-    if (op1 === 'eq') {
-      orConditions.push(item => item[col1] === val1);
-    }
-
-    // Handle subsequent 'and' parts
-    if (mainParts.length > 1) {
-      for (let i = 1; i < mainParts.length; i++) {
-        let andBlock = mainParts[i];
-        if (andBlock.endsWith(')')) {
-          andBlock = andBlock.slice(0, -1);
-        }
-        
-        const andConditions: ((item: any) => boolean)[] = [];
-        const andParts = andBlock.split(',');
-
-        andParts.forEach(part => {
-          const [col, op, val] = part.split('.');
-          if (op === 'eq') {
-            andConditions.push(item => item[col] === val);
-          } else if (op === 'is' && val === 'null') {
-            andConditions.push(item => item[col] === null || item[col] === undefined);
-          }
-        });
-
-        if (andConditions.length > 0) {
-          orConditions.push(item => andConditions.every(cond => cond(item)));
-        }
-      }
-    }
-
-    if (orConditions.length > 0) {
-      this.filters.push(item => orConditions.some(cond => cond(item)));
-    }
-
-    return this;
-  }
-
-  select(query = '*') {
-    this.selectQuery = query;
-    return this;
-  }
-
-  order(column: string, { ascending }: { ascending: boolean }) {
-    this.ordering = { column, ascending };
-    return this;
-  }
-
-  limit(count: number) {
-    // This mock doesn't implement limit yet.
-    return this;
-  }
-
-  single() {
-    this.isSingle = true;
-    return this;
-  }
-
-  maybeSingle() {
-    this.isMaybeSingle = true;
-    return this;
-  }
-
-  then(onFulfilled: (value: any) => any, onRejected?: (reason: any) => any) {
-    const promise = new Promise((resolve, reject) => {
-      delay(50).then(() => {
-        try {
-          let resultData = [...this.data];
-
-          this.filters.forEach(filterFn => {
-            resultData = resultData.filter(filterFn);
-          });
-
-          if (this.ordering) {
-            const { column, ascending } = this.ordering;
-            resultData.sort((a, b) => {
-              if (a[column] < b[column]) return ascending ? -1 : 1;
-              if (a[column] > b[column]) return ascending ? 1 : -1;
-              return 0;
-            });
-          }
-
-          const joinRequests = this.selectQuery.split(',').map(s => s.trim()).filter(s => s.includes('('));
-          if (joinRequests.length > 0) {
-            resultData = resultData.map(item => {
-              const newItem = { ...item };
-              joinRequests.forEach(req => {
-                const match = req.match(/^(\w+)\(.*\)$/);
-                if (match && match[1]) {
-                    const tableName = match[1];
-                    if (mockDb[tableName]) {
-                      let relatedData;
-                      if (tableName === 'pricing_rules' && item.id) {
-                         relatedData = mockDb[tableName].filter((relatedItem: any) => relatedItem.quadra_id === item.id);
-                      } else if (tableName === 'gamification_levels' && item.gamification_level_id) {
-                         const level = mockDb[tableName].find((relatedItem: any) => relatedItem.id === item.gamification_level_id);
-                         relatedData = level ? { name: level.name } : null;
-                      }
-                      else {
-                         relatedData = null;
-                      }
-                      newItem[tableName] = relatedData;
-                    }
-                }
-              });
-              return newItem;
-            });
-          }
-
-          if (this.isSingle) {
-            if (resultData.length > 1) {
-              reject({ code: 'PGRST116', message: 'Multiple rows returned for single()' });
-            } else {
-              resolve({ data: resultData[0] || null, error: null });
-            }
-          } else if (this.isMaybeSingle) {
-            resolve({ data: resultData[0] || null, error: null });
-          } else {
-            resolve({ data: resultData, error: null });
-          }
-        } catch (e) {
-          reject(e);
-        }
-      });
-    });
-
-    return promise.then(onFulfilled, onRejected);
-  }
+interface CreditHistoryTabProps {
+  aluno: Aluno;
 }
 
-class MockTable {
-  private tableName: string;
+const CreditHistoryTab: React.FC<CreditHistoryTabProps> = ({ aluno }) => {
+  const { addToast } = useToast();
+  const [history, setHistory] = useState<CreditTransaction[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
-  constructor(tableName: string) {
-    this.tableName = tableName;
+  const loadCreditHistory = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('credit_transactions')
+        .select('*')
+        .eq('aluno_id', aluno.id)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setHistory(data || []);
+    } catch (error: any) {
+      addToast({ message: `Erro ao carregar histórico de créditos: ${error.message}`, type: 'error' });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [aluno.id, addToast]);
+
+  useEffect(() => {
+    loadCreditHistory();
+  }, [loadCreditHistory]);
+
+  if (isLoading) {
+    return <div className="flex justify-center items-center h-40"><Loader2 className="w-6 h-6 animate-spin text-brand-blue-500" /></div>;
   }
 
-  select(query = '*') {
-    return new MockQueryBuilder(this.tableName, mockDb[this.tableName] || []);
-  }
+  return (
+    <div className="space-y-6">
+      {/* Summary Card */}
+      <div className="bg-green-50 dark:bg-green-900/50 rounded-lg p-4 flex justify-between items-center border border-green-200 dark:border-green-800">
+        <div className="flex items-center">
+          <DollarSign className="h-8 w-8 text-green-600 dark:text-green-400 mr-4" />
+          <div>
+            <p className="text-sm text-green-800 dark:text-green-300">Saldo Atual de Crédito</p>
+            <p className="font-bold text-2xl text-green-700 dark:text-green-200">
+              {(aluno.credit_balance || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+            </p>
+          </div>
+        </div>
+      </div>
 
-  insert(newData: any) {
-    const dataToInsert = Array.isArray(newData) ? newData : [newData];
-    const insertedItems: any[] = [];
-    dataToInsert.forEach(item => {
-      const newItem = { id: `mock_${this.tableName}_${Date.now()}_${Math.random()}`, created_at: new Date().toISOString(), ...item };
-      if (!mockDb[this.tableName]) mockDb[this.tableName] = [];
-      mockDb[this.tableName].push(newItem);
-      insertedItems.push(newItem);
-    });
-    saveDbToLocalStorage();
-    return new MockQueryBuilder(this.tableName, insertedItems);
-  }
-
-  upsert(data: any) {
-    const dataToUpsert = Array.isArray(data) ? data : [data];
-    const upsertedData: any[] = [];
-    
-    if (!mockDb[this.tableName]) {
-        mockDb[this.tableName] = [];
-    }
-
-    dataToUpsert.forEach(item => {
-      const isEditing = !!item.id;
-      const index = isEditing ? mockDb[this.tableName].findIndex(dbItem => dbItem.id === item.id) : -1;
-      
-      if (index > -1) {
-        // Update existing item
-        const updatedItem = { ...mockDb[this.tableName][index], ...item };
-        mockDb[this.tableName][index] = updatedItem;
-        upsertedData.push(updatedItem);
-      } else {
-        // Insert new item
-        const newItemId = item.id || `mock_${this.tableName}_${Date.now()}_${Math.random()}`;
-        const newItem = { 
-          created_at: new Date().toISOString(), 
-          ...item,
-          id: newItemId
-        };
-        mockDb[this.tableName].push(newItem);
-        upsertedData.push(newItem);
-
-        // --- GAMIFICATION LOGIC ON RESERVATION CREATION ---
-        if (this.tableName === 'reservas') {
-          const { arena_id, clientName, total_price, status } = newItem;
-          
-          if (status === 'confirmada' || status === 'realizada') {
-            const aluno = mockDb.alunos.find(a => a.name === clientName);
-            const settings = mockDb.gamification_settings.find(s => s.arena_id === arena_id);
-
-            if (aluno && settings && settings.is_enabled) {
-              const pointsFromReservation = settings.points_per_reservation || 0;
-              const pointsFromPrice = (total_price || 0) * (settings.points_per_real || 0);
-              const totalPoints = Math.floor(pointsFromReservation + pointsFromPrice);
-
-              if (totalPoints > 0) {
-                  mockDb.gamification_point_transactions.push({
-                      id: `mock_tx_${Date.now()}_${Math.random()}`,
-                      arena_id: arena_id,
-                      aluno_id: aluno.id,
-                      points: totalPoints,
-                      type: 'reservation_completed',
-                      description: `Pontos pela reserva #${newItemId.substring(0, 8)}`,
-                      related_reservation_id: newItemId,
-                      related_achievement_id: null,
-                      created_at: new Date().toISOString(),
-                  });
-
-                  // Directly update the aluno's points and level
-                  const alunoIndex = mockDb.alunos.findIndex(a => a.id === aluno.id);
-                  if (alunoIndex > -1) {
-                      const currentPoints = mockDb.alunos[alunoIndex].gamification_points || 0;
-                      const newTotalPoints = currentPoints + totalPoints;
-                      mockDb.alunos[alunoIndex].gamification_points = newTotalPoints;
-
-                      const gamificationLevels = [...(mockDb.gamification_levels || [])];
-                      const newLevel = gamificationLevels
-                          .sort((a, b) => b.points_required - a.points_required)
-                          .find(l => newTotalPoints >= l.points_required) || null;
-                      
-                      mockDb.alunos[alunoIndex].gamification_level_id = newLevel ? newLevel.id : null;
-                  }
-              }
-            }
-          }
-        }
-        // --- END OF GAMIFICATION LOGIC ---
-      }
-    });
-    
-    saveDbToLocalStorage();
-    return new MockQueryBuilder(this.tableName, upsertedData);
-  }
-
-  update(data: any) {
-    return {
-      eq: (column: string, value: any) => {
-        const updatedItems: any[] = [];
-        mockDb[this.tableName] = mockDb[this.tableName].map(item => {
-          if (item[column] === value) {
-            const updatedItem = { ...item, ...data };
-            updatedItems.push(updatedItem);
-            return updatedItem;
-          }
-          return item;
-        });
-        saveDbToLocalStorage();
-        return new MockQueryBuilder(this.tableName, updatedItems);
-      },
-      in: (column: string, values: any[]) => {
-        const updatedItems: any[] = [];
-        mockDb[this.tableName] = mockDb[this.tableName].map(item => {
-          if (values.includes(item[column])) {
-            const updatedItem = { ...item, ...data };
-            updatedItems.push(updatedItem);
-            return updatedItem;
-          }
-          return item;
-        });
-        saveDbToLocalStorage();
-        return new MockQueryBuilder(this.tableName, updatedItems);
-      }
-    };
-  }
-  
-  delete() {
-     return {
-      eq: (column: string, value: any) => {
-        mockDb[this.tableName] = mockDb[this.tableName].filter(item => item[column] !== value);
-        saveDbToLocalStorage();
-        return new MockQueryBuilder(this.tableName, []);
-      },
-      in: (column: string, values: any[]) => {
-        mockDb[this.tableName] = mockDb[this.tableName].filter(item => !values.includes(item[column]));
-        saveDbToLocalStorage();
-        return new MockQueryBuilder(this.tableName, []);
-      }
-    };
-  }
-}
-
-export const supabaseMock = {
-  from: (tableName: string) => new MockTable(tableName),
-  rpc: async (fnName: string, params: any) => {
-    console.log(`Mock RPC call: ${fnName}`, params);
-    await delay(100);
-
-    if (fnName === 'seed_gamification_defaults' && params.p_arena_id) {
-        const arenaId = params.p_arena_id;
-        
-        const settingsExist = mockDb.gamification_settings.some(s => s.arena_id === arenaId);
-        const rewardsExist = mockDb.gamification_rewards.some(r => r.arena_id === arenaId);
-
-        if (settingsExist && rewardsExist) {
-            return { data: null, error: null };
-        }
-
-        mockDb.gamification_settings = mockDb.gamification_settings.filter(s => s.arena_id !== arenaId);
-        mockDb.gamification_levels = mockDb.gamification_levels.filter(l => l.arena_id !== arenaId);
-        mockDb.gamification_rewards = mockDb.gamification_rewards.filter(r => r.arena_id !== arenaId);
-        mockDb.gamification_achievements = mockDb.gamification_achievements.filter(a => a.arena_id !== arenaId);
-
-        mockDb.gamification_settings.push({
-            arena_id: arenaId,
-            is_enabled: true,
-            points_per_reservation: 10,
-            points_per_real: 1,
-        });
-        mockGamificationLevels.forEach(level => {
-            mockDb.gamification_levels.push({ ...level, id: `mock_level_${arenaId}_${level.id}`, arena_id: arenaId });
-        });
-        mockGamificationRewards.forEach(reward => {
-            mockDb.gamification_rewards.push({ ...reward, id: `mock_reward_${arenaId}_${reward.id}`, arena_id: arenaId });
-        });
-        mockGamificationAchievements.forEach(achievement => {
-            mockDb.gamification_achievements.push({ ...achievement, id: `mock_ach_${arenaId}_${achievement.id}`, arena_id: arenaId });
-        });
-
-        saveDbToLocalStorage();
-        return { data: null, error: null };
-    }
-
-    if (fnName === 'add_credit_to_aluno') {
-        const { aluno_id_to_update, amount_to_add } = params;
-        const alunoIndex = mockDb.alunos.findIndex(a => a.id === aluno_id_to_update);
-        if (alunoIndex > -1) {
-            mockDb.alunos[alunoIndex].credit_balance = (mockDb.alunos[alunoIndex].credit_balance || 0) + amount_to_add;
-            saveDbToLocalStorage();
-        }
-        return { data: null, error: null };
-    }
-    
-    if (fnName === 'add_gamification_points') {
-        const { p_aluno_id, p_points_to_add, p_description } = params;
-        const aluno = mockDb.alunos.find(a => a.id === p_aluno_id);
-        if (aluno) {
-            mockDb.gamification_point_transactions.push({
-                id: `mock_tx_${Date.now()}`,
-                arena_id: aluno.arena_id,
-                aluno_id: p_aluno_id,
-                points: p_points_to_add,
-                type: 'manual_adjustment',
-                description: p_description,
-                related_reservation_id: null,
-                related_achievement_id: null,
-                created_at: new Date().toISOString(),
-            });
-            // Directly update aluno points
-            const alunoIndex = mockDb.alunos.findIndex(a => a.id === p_aluno_id);
-            if (alunoIndex > -1) {
-                const currentPoints = mockDb.alunos[alunoIndex].gamification_points || 0;
-                mockDb.alunos[alunoIndex].gamification_points = currentPoints + p_points_to_add;
-            }
-            saveDbToLocalStorage();
-        }
-        return { data: null, error: null };
-    }
-
-    if (fnName === 'create_client_reservation_atomic') {
-        const { p_quadra_id, p_date, p_start_time, p_end_time, p_client_name, p_total_price, p_payment_status, p_arena_id } = params;
-        const newReservationId = `mock_res_${Date.now()}`;
-        mockDb.reservas.push({
-            id: newReservationId,
-            arena_id: p_arena_id,
-            quadra_id: p_quadra_id,
-            date: p_date,
-            start_time: p_start_time,
-            end_time: p_end_time,
-            clientName: p_client_name,
-            total_price: p_total_price,
-            payment_status: p_payment_status,
-            status: 'confirmada',
-            type: 'avulsa',
-            created_at: new Date().toISOString()
-        } as Reserva);
-
-        const aluno = mockDb.alunos.find(a => a.name === p_client_name);
-        const settings = mockDb.gamification_settings.find(s => s.arena_id === p_arena_id);
-        if (aluno && settings && settings.is_enabled) {
-            const pointsFromReservation = settings.points_per_reservation || 0;
-            const pointsFromPrice = (p_total_price || 0) * (settings.points_per_real || 0);
-            const totalPoints = Math.floor(pointsFromReservation + pointsFromPrice);
-
-            if (totalPoints > 0) {
-                mockDb.gamification_point_transactions.push({
-                    id: `mock_tx_${Date.now()}`,
-                    arena_id: p_arena_id,
-                    aluno_id: aluno.id,
-                    points: totalPoints,
-                    type: 'reservation_completed',
-                    description: `Pontos pela reserva #${newReservationId.substring(0, 8)}`,
-                    related_reservation_id: newReservationId,
-                    related_achievement_id: null,
-                    created_at: new Date().toISOString(),
-                });
-                const alunoIndex = mockDb.alunos.findIndex(a => a.id === aluno.id);
-                if (alunoIndex > -1) {
-                    const currentPoints = mockDb.alunos[alunoIndex].gamification_points || 0;
-                    mockDb.alunos[alunoIndex].gamification_points = currentPoints + totalPoints;
-                }
-            }
-        }
-
-        saveDbToLocalStorage();
-        return { data: null, error: null };
-    }
-
-    if (fnName === 'handle_client_cancellation_final') {
-        const { p_reserva_id } = params;
-        const reservaIndex = mockDb.reservas.findIndex(r => r.id === p_reserva_id);
-        if (reservaIndex > -1) {
-            mockDb.reservas[reservaIndex].status = 'cancelada';
-            saveDbToLocalStorage();
-        }
-        return { data: null, error: null };
-    }
-
-    return { data: null, error: null };
-  },
-  auth: {
-    getSession: async () => ({ data: { session: mockSession }, error: null }),
-    onAuthStateChange: (callback: (event: string, session: any) => void) => {
-      authStateChangeCallback = callback;
-      if (typeof callback === 'function') {
-        setTimeout(() => callback('INITIAL_SESSION', mockSession), 0);
-      }
-      return { data: { subscription: { unsubscribe: () => { authStateChangeCallback = null; } } } };
-    },
-    signInWithPassword: async ({ email, password }: any) => {
-      await delay(300);
-      if (email === 'admin@matchplay.com' && password === '123456') {
-        mockSession = {
-          user: {
-            id: mockAdminProfile.id,
-            email: mockAdminProfile.email,
-            created_at: mockAdminProfile.created_at,
-          },
-          profile: mockAdminProfile,
-        };
-        if (authStateChangeCallback) authStateChangeCallback('SIGNED_IN', mockSession);
-        return { data: { session: mockSession }, error: null };
-      } else if (email === 'maria.mock@email.com' && password === '123456') {
-        const clientProfile = mockDb.profiles.find(p => p.email === 'maria.mock@email.com');
-        if (clientProfile) {
-            mockSession = {
-                user: {
-                    id: clientProfile.id,
-                    email: clientProfile.email,
-                    created_at: clientProfile.created_at,
-                },
-                profile: clientProfile,
-            };
-            if (authStateChangeCallback) authStateChangeCallback('SIGNED_IN', mockSession);
-            return { data: { session: mockSession }, error: null };
-        }
-      }
-      return { data: { session: null }, error: { message: 'Credenciais inválidas' } };
-    },
-    signUp: async ({ options }: any) => {
-      await delay(300);
-      console.log("Mock SignUp:", options.data);
-      return { data: {}, error: null };
-    },
-    signOut: async () => {
-      await delay(100);
-      mockSession = null;
-      if (authStateChangeCallback) authStateChangeCallback('SIGNED_OUT', null);
-      return { error: null };
-    }
-  },
-  storage: {
-    from: (bucket: string) => ({
-      upload: async (path: string, file: File) => ({ data: { path }, error: null }),
-      remove: async (paths: string[]) => ({ data: [], error: null }),
-      getPublicUrl: (path: string) => ({ data: { publicUrl: `https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://placehold.co/400x400.png?text=${path.split('/').pop()}` } }),
-    }),
-  },
-  channel: (channelName: string) => {
-    const mockChannel = {
-      on: (event: any, filter: any, callback: any) => {
-        return mockChannel;
-      },
-      subscribe: (callback?: (status: string, err?: Error) => void) => {
-        console.log(`MockClient: Subscribed to channel "${channelName}"`);
-        if (callback) {
-          setTimeout(() => callback('SUBSCRIBED'), 50);
-        }
-        return mockChannel;
-      },
-      unsubscribe: () => {
-        console.log(`MockClient: Unsubscribed from channel "${channelName}"`);
-        return Promise.resolve('ok');
-      }
-    };
-    return mockChannel;
-  },
-  removeChannel: (channel: any) => {
-    console.log(`MockClient: Removing channel.`);
-    if (channel && typeof channel.unsubscribe === 'function') {
-        channel.unsubscribe();
-    }
-    return Promise.resolve({ error: null, data: { status: 'ok' } });
-  },
+      {/* Credit History */}
+      <div>
+        <h4 className="font-semibold mb-3 flex items-center"><History className="h-5 w-5 mr-2 text-brand-blue-500"/> Histórico de Créditos</h4>
+        <div className="max-h-80 overflow-y-auto space-y-2 pr-2">
+          {history.length > 0 ? history.map(tx => (
+            <div key={tx.id} className="flex justify-between items-center p-3 bg-brand-gray-50 dark:bg-brand-gray-800/50 rounded-md">
+              <div>
+                <p className="text-sm font-medium">{tx.description}</p>
+                <p className="text-xs text-brand-gray-500">{tx.created_at ? format(new Date(tx.created_at), 'dd/MM/yyyy HH:mm') : ''}</p>
+              </div>
+              <span className={`font-bold text-lg ${tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {tx.amount >= 0 ? '+' : ''}{tx.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+              </span>
+            </div>
+          )) : (
+            <p className="text-sm text-center text-brand-gray-500 py-8">Nenhuma transação de crédito encontrada.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 };
+
+export default CreditHistoryTab;

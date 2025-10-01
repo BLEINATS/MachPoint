@@ -1,69 +1,57 @@
 /*
-# [Fix] Correct `add_gamification_points` function signature
-[This migration fixes an error where a function could not be updated due to a parameter name change. It safely drops the old function and recreates it with the correct signature.]
+          # Safely Recreate User Profile Trigger and Function
+          [This operation safely recreates the trigger and function responsible for creating user profiles. It resolves a dependency error by first removing the trigger, then updating the function, and finally recreating the trigger.]
 
-## Query Description: [This operation will briefly drop and recreate the function responsible for adding gamification points. This is a safe, non-destructive operation that corrects a function definition mismatch. No user data will be affected.]
+          ## Query Description: [This script addresses a dependency error where a trigger prevented its underlying function from being updated. It works by temporarily dropping the 'on_auth_user_created' trigger, updating the 'handle_new_user_profile' function with the correct logic, and then recreating the trigger. This ensures the user profile creation process is stable and correct without affecting existing data.]
+          
+          ## Metadata:
+          - Schema-Category: ["Structural", "Safe"]
+          - Impact-Level: ["Low"]
+          - Requires-Backup: [false]
+          - Reversible: [false]
+          
+          ## Structure Details:
+          - Drops trigger 'on_auth_user_created' from 'auth.users'.
+          - Drops and recreates the function 'handle_new_user_profile'.
+          - Recreates the trigger 'on_auth_user_created' on 'auth.users'.
+          
+          ## Security Implications:
+          - RLS Status: [Not Applicable]
+          - Policy Changes: [No]
+          - Auth Requirements: [None]
+          
+          ## Performance Impact:
+          - Indexes: [None]
+          - Triggers: [Recreated]
+          - Estimated Impact: [Negligible. The trigger runs once per new user sign-up.]
+          */
 
-## Metadata:
-- Schema-Category: ["Structural"]
-- Impact-Level: ["Low"]
-- Requires-Backup: [false]
-- Reversible: [false]
+-- Step 1: Drop the dependent trigger first.
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 
-## Structure Details:
-- Drops the old `add_gamification_points` function.
-- Recreates the `add_gamification_points` function with corrected parameter names.
+-- Step 2: Drop the old function.
+DROP FUNCTION IF EXISTS public.handle_new_user_profile();
 
-## Security Implications:
-- RLS Status: [N/A]
-- Policy Changes: [No]
-- Auth Requirements: [authenticated]
-
-## Performance Impact:
-- Indexes: [N/A]
-- Triggers: [N/A]
-- Estimated Impact: [None]
-*/
-
--- Drop the existing function with the old signature
-DROP FUNCTION IF EXISTS public.add_gamification_points(uuid, integer, text, public.gamification_point_transaction_type, uuid, uuid);
-
--- Recreate the function with the correct signature and logic
-CREATE OR REPLACE FUNCTION public.add_gamification_points(
-    p_aluno_id uuid,
-    p_points_to_add integer,
-    p_description text,
-    p_transaction_type public.gamification_point_transaction_type,
-    p_related_reservation_id uuid DEFAULT NULL,
-    p_related_achievement_id uuid DEFAULT NULL
-)
-RETURNS void
+-- Step 3: Recreate the function with the correct and secure definition.
+CREATE OR REPLACE FUNCTION public.handle_new_user_profile()
+RETURNS TRIGGER
 LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
+SECURITY DEFINER SET search_path = ''
 AS $$
 BEGIN
-    INSERT INTO public.gamification_point_transactions (
-        aluno_id,
-        points,
-        type,
-        description,
-        related_reservation_id,
-        related_achievement_id,
-        arena_id
-    )
-    SELECT
-        p_aluno_id,
-        p_points_to_add,
-        p_transaction_type,
-        p_description,
-        p_related_reservation_id,
-        p_related_achievement_id,
-        a.arena_id
-    FROM public.alunos a
-    WHERE a.id = p_aluno_id;
+  INSERT INTO public.profiles (id, name, email, role, avatar_url)
+  VALUES (
+    new.id,
+    new.raw_user_meta_data->>'name',
+    new.email,
+    (new.raw_user_meta_data->>'role')::public.user_role,
+    new.raw_user_meta_data->>'avatar_url'
+  );
+  RETURN new;
 END;
 $$;
 
--- Grant execute permissions to the authenticated role
-GRANT EXECUTE ON FUNCTION public.add_gamification_points(uuid, integer, text, public.gamification_point_transaction_type, uuid, uuid) TO authenticated;
+-- Step 4: Recreate the trigger to use the new function.
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user_profile();

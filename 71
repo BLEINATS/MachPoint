@@ -1,81 +1,151 @@
-import React, { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { X, Save, DollarSign, Package } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
+import { supabase } from '../../lib/supabaseClient';
 import { RentalItem } from '../../types';
+import { Loader2, Plus, Edit, Trash2, Package } from 'lucide-react';
 import Button from '../Forms/Button';
-import Input from '../Forms/Input';
+import RentalItemModal from './RentalItemModal';
+import ConfirmationModal from '../Shared/ConfirmationModal';
 
-interface RentalItemModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  onSave: (item: Omit<RentalItem, 'id' | 'arena_id' | 'created_at'> | RentalItem) => void;
-  initialData: RentalItem | null;
-}
+const RentalItemsTab: React.FC = () => {
+  const { arena } = useAuth();
+  const { addToast } = useToast();
+  const [items, setItems] = useState<RentalItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingItem, setEditingItem] = useState<RentalItem | null>(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [itemToDelete, setItemToDelete] = useState<RentalItem | null>(null);
 
-const RentalItemModal: React.FC<RentalItemModalProps> = ({ isOpen, onClose, onSave, initialData }) => {
-  const [formData, setFormData] = useState({ name: '', price: '', stock: '' });
-
-  const isEditing = !!initialData;
+  const loadItems = useCallback(async () => {
+    if (!arena) return;
+    setIsLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('rental_items')
+        .select('*')
+        .eq('arena_id', arena.id)
+        .order('name', { ascending: true });
+      if (error) throw error;
+      setItems(data || []);
+    } catch (error: any) {
+      addToast({ message: `Erro ao carregar itens: ${error.message}`, type: 'error' });
+    } finally {
+      setIsLoading(false);
+    }
+  }, [arena, addToast]);
 
   useEffect(() => {
-    if (initialData) {
-      setFormData({
-        name: initialData.name,
-        price: initialData.price.toString().replace('.', ','),
-        stock: initialData.stock.toString(),
-      });
-    } else {
-      setFormData({ name: '', price: '', stock: '' });
-    }
-  }, [initialData, isOpen]);
+    loadItems();
+  }, [loadItems]);
 
-  const handleSave = () => {
-    const dataToSave = {
-      name: formData.name,
-      price: parseFloat(formData.price.replace(',', '.')) || 0,
-      stock: parseInt(formData.stock, 10) || 0,
-    };
-    if (isEditing && initialData) {
-      onSave({ ...initialData, ...dataToSave });
-    } else {
-      onSave(dataToSave);
+  const handleSave = async (itemData: Omit<RentalItem, 'id' | 'arena_id' | 'created_at'> | RentalItem) => {
+    if (!arena) return;
+    const isEditing = 'id' in itemData;
+    const dataToSave = { ...itemData, arena_id: arena.id };
+
+    try {
+      const { error } = await supabase.from('rental_items').upsert(dataToSave);
+      if (error) throw error;
+      addToast({ message: `Item ${isEditing ? 'atualizado' : 'criado'} com sucesso!`, type: 'success' });
+      await loadItems();
+      setIsModalOpen(false);
+      setEditingItem(null);
+    } catch (error: any) {
+      addToast({ message: `Erro ao salvar item: ${error.message}`, type: 'error' });
     }
   };
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+  const handleDeleteRequest = (item: RentalItem) => {
+    setItemToDelete(item);
+    setIsDeleteModalOpen(true);
   };
+
+  const handleConfirmDelete = async () => {
+    if (!itemToDelete) return;
+    try {
+      const { error } = await supabase.from('rental_items').delete().eq('id', itemToDelete.id);
+      if (error) throw error;
+      addToast({ message: 'Item excluído com sucesso.', type: 'success' });
+      await loadItems();
+    } catch (error: any) {
+      addToast({ message: `Erro ao excluir item: ${error.message}`, type: 'error' });
+    } finally {
+      setIsDeleteModalOpen(false);
+      setItemToDelete(null);
+    }
+  };
+
+  const openModal = (item: RentalItem | null = null) => {
+    setEditingItem(item);
+    setIsModalOpen(true);
+  };
+
+  if (isLoading) {
+    return <div className="flex justify-center p-8"><Loader2 className="h-8 w-8 animate-spin text-brand-blue-500" /></div>;
+  }
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50" onClick={onClose}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.9 }}
-            className="bg-white dark:bg-brand-gray-900 rounded-lg w-full max-w-md shadow-xl"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex justify-between items-center p-6 border-b border-brand-gray-200 dark:border-brand-gray-700">
-              <h3 className="text-xl font-semibold">{isEditing ? 'Editar Item' : 'Novo Item para Aluguel'}</h3>
-              <Button variant="ghost" size="sm" onClick={onClose}><X className="h-5 w-5" /></Button>
-            </div>
-            <div className="p-6 space-y-4">
-              <Input label="Nome do Item" name="name" value={formData.name} onChange={handleChange} required />
-              <Input label="Preço (R$)" name="price" type="text" inputMode="decimal" value={formData.price} onChange={handleChange} icon={<DollarSign className="h-4 w-4 text-brand-gray-400"/>} required />
-              <Input label="Quantidade em Estoque" name="stock" type="number" value={formData.stock} onChange={handleChange} icon={<Package className="h-4 w-4 text-brand-gray-400"/>} required />
-            </div>
-            <div className="p-6 mt-auto border-t border-brand-gray-200 dark:border-brand-gray-700 flex justify-end gap-3">
-              <Button variant="outline" onClick={onClose}>Cancelar</Button>
-              <Button onClick={handleSave}><Save className="h-4 w-4 mr-2"/> Salvar</Button>
-            </div>
-          </motion.div>
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h3 className="text-lg font-semibold text-brand-gray-900 dark:text-white">Itens para Aluguel</h3>
+          <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400">Gerencie os itens que seus clientes podem alugar junto com a reserva.</p>
+        </div>
+        <Button onClick={() => openModal()}><Plus className="h-4 w-4 mr-2" />Adicionar Item</Button>
+      </div>
+      
+      {items.length > 0 ? (
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-brand-gray-200 dark:divide-brand-gray-700">
+            <thead className="bg-brand-gray-50 dark:bg-brand-gray-700/50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase">Item</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase">Preço</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-brand-gray-500 dark:text-brand-gray-300 uppercase">Estoque</th>
+                <th className="relative px-6 py-3"><span className="sr-only">Ações</span></th>
+              </tr>
+            </thead>
+            <tbody className="bg-white dark:bg-brand-gray-800 divide-y divide-brand-gray-200 dark:divide-brand-gray-700">
+              {items.map(item => (
+                <tr key={item.id}>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-brand-gray-900 dark:text-white">{item.name}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-brand-gray-500 dark:text-brand-gray-400">{item.price.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-brand-gray-500 dark:text-brand-gray-400">{item.stock}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <Button variant="ghost" size="sm" onClick={() => openModal(item)}><Edit className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="sm" onClick={() => handleDeleteRequest(item)} className="text-red-500 hover:text-red-700"><Trash2 className="h-4 w-4" /></Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <div className="text-center py-12 border-2 border-dashed border-brand-gray-300 dark:border-brand-gray-700 rounded-lg">
+          <Package className="mx-auto h-12 w-12 text-brand-gray-400" />
+          <h3 className="mt-2 text-sm font-medium text-brand-gray-900 dark:text-white">Nenhum item cadastrado</h3>
+          <p className="mt-1 text-sm text-brand-gray-500 dark:text-brand-gray-400">Comece adicionando itens para aluguel.</p>
         </div>
       )}
-    </AnimatePresence>
+
+      <RentalItemModal 
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSave={handleSave}
+        initialData={editingItem}
+      />
+      <ConfirmationModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => setIsDeleteModalOpen(false)}
+        onConfirm={handleConfirmDelete}
+        title="Confirmar Exclusão"
+        message={<p>Tem certeza que deseja excluir o item <strong>{itemToDelete?.name}</strong>?</p>}
+        confirmText="Sim, Excluir"
+      />
+    </div>
   );
 };
 
-export default RentalItemModal;
+export default RentalItemsTab;

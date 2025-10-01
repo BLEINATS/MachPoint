@@ -1,87 +1,63 @@
 /*
-  # [Fix] Corrige a função de atualização de pontos de gamificação
+# [Fix] Recreate Missing New User Profile Handler
+[This script recreates the essential function and trigger responsible for creating a user profile in the 'public.profiles' table whenever a new user signs up via Supabase Auth. This fixes the "function does not exist" error.]
 
-  ## Descrição da Query:
-  Esta migração corrige um erro de sintaxe na função `update_aluno_gamification_points` que impedia a atualização correta dos pontos e níveis dos clientes. O script primeiro remove o gatilho e a função com erro, depois recria ambos com a sintaxe correta, garantindo que o sistema de gamificação funcione como esperado.
+## Query Description: [This operation is safe and structural. It ensures that new user registrations will function correctly by creating their corresponding profile entries. It will not affect existing users or data. It first creates a 'user_role' type if it's missing, then defines the function to create a profile, and finally attaches this function to a trigger on the user authentication table.]
 
-  ## Metadata:
-  - Schema-Category: "Structural"
-  - Impact-Level: "Medium"
-  - Requires-Backup: false
-  - Reversible: true
+## Metadata:
+- Schema-Category: ["Structural"]
+- Impact-Level: ["Low"]
+- Requires-Backup: [false]
+- Reversible: [true]
 
-  ## Detalhes da Estrutura:
-  - Afeta a função `update_aluno_gamification_points` e o gatilho `on_gamification_transaction_change`.
+## Structure Details:
+- Types: `public.user_role` (if not exists)
+- Functions: `public.handle_new_user_profile`
+- Triggers: `on_auth_user_created` on `auth.users`
 
-  ## Implicações de Segurança:
-  - RLS Status: Inalterado
-  - Policy Changes: Não
-  - Auth Requirements: N/A
+## Security Implications:
+- RLS Status: [No change]
+- Policy Changes: [No]
+- Auth Requirements: [None]
 
-  ## Impacto de Performance:
-  - Indexes: Nenhum
-  - Triggers: Recriado
-  - Estimated Impact: Baixo. A função é executada apenas quando os pontos de um cliente mudam.
+## Performance Impact:
+- Indexes: [None]
+- Triggers: [Adds a trigger to auth.users, which has a negligible performance impact on user creation.]
+- Estimated Impact: [Low. Only affects new user sign-ups.]
 */
 
--- Step 1: Drop the dependent trigger first
-DROP TRIGGER IF EXISTS on_gamification_transaction_change ON public.gamification_point_transactions;
-
--- Step 2: Drop the faulty function
-DROP FUNCTION IF EXISTS public.update_aluno_gamification_points();
-
--- Step 3: Recreate the function with the correct syntax
-CREATE OR REPLACE FUNCTION public.update_aluno_gamification_points()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_total_points INT;
-    v_current_level_id UUID;
-    v_new_level_id UUID;
-    v_new_level_name TEXT;
+-- Create the user_role enum type if it doesn't exist
+DO $$
 BEGIN
-    -- Calculate the new total points for the aluno
-    SELECT COALESCE(SUM(points), 0)
-    INTO v_total_points
-    FROM public.gamification_point_transactions
-    WHERE aluno_id = NEW.aluno_id;
-
-    -- Get the current level of the aluno before the update
-    SELECT gamification_level_id
-    INTO v_current_level_id
-    FROM public.alunos
-    WHERE id = NEW.aluno_id;
-
-    -- Find the new level based on the total points
-    -- It selects the highest level that the user qualifies for
-    SELECT id, name
-    INTO v_new_level_id, v_new_level_name
-    FROM public.gamification_levels
-    WHERE arena_id = NEW.arena_id
-    AND points_required &lt;= v_total_points
-    ORDER BY points_required DESC
-    LIMIT 1;
-
-    -- Update the aluno's total points and new level
-    UPDATE public.alunos
-    SET
-        gamification_points = v_total_points,
-        gamification_level_id = v_new_level_id
-    WHERE id = NEW.aluno_id;
-
-    -- If the level has changed, create a notification
-    IF v_new_level_id IS DISTINCT FROM v_current_level_id AND v_new_level_id IS NOT NULL THEN
-        INSERT INTO public.notificacoes (profile_id, arena_id, message, type)
-        SELECT profile_id, NEW.arena_id, 'Parabéns! Você subiu para o nível ' || v_new_level_name || '!', 'gamification_level_up'
-        FROM public.alunos
-        WHERE id = NEW.aluno_id AND profile_id IS NOT NULL;
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_role') THEN
+        CREATE TYPE public.user_role AS ENUM ('cliente', 'admin_arena');
     END IF;
+END$$;
 
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Step 4: Recreate the trigger to use the new function
-CREATE TRIGGER on_gamification_transaction_change
-AFTER INSERT OR UPDATE OR DELETE ON public.gamification_point_transactions
-FOR EACH ROW
-EXECUTE FUNCTION public.update_aluno_gamification_points();
+-- Create the function to handle new user profiles
+create or replace function public.handle_new_user_profile()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  insert into public.profiles (id, name, email, role, avatar_url)
+  values (
+    new.id,
+    new.raw_user_meta_data->>'name',
+    new.email,
+    (new.raw_user_meta_data->>'role')::public.user_role,
+    new.raw_user_meta_data->>'avatar_url'
+  );
+  return new;
+end;
+$$;
+
+-- Drop the existing trigger if it exists to avoid conflicts
+drop trigger if exists on_auth_user_created on auth.users;
+
+-- Create the trigger to run the function after a new user is created in auth.users
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute procedure public.handle_new_user_profile();

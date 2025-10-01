@@ -1,56 +1,67 @@
 /*
-          # [Patch] Add Compatibility Column 'clientname'
-          Adds a lowercase 'clientname' column to the 'reservas' table and sets up a trigger to automatically synchronize it with the correct '"clientName"' column. This patch resolves persistent "column does not exist" errors caused by multiple database functions referencing the incorrect column name.
+          # [Critical] Fix Function Signature Conflict
+          [This migration resolves a function signature conflict for `check_duplicate_reservation`. The previous update attempted to rename a function parameter, which requires the function to be dropped and recreated. This script performs that action safely, ensuring the function is updated with the correct logic for checking reservation overlaps without causing database errors.]
 
-          ## Query Description:
-          - **Safety:** This is a non-destructive operation. It adds a new column and a trigger without altering or deleting existing data.
-          - **Impact:** All new and updated reservations will have the 'clientname' field automatically populated. An update script is included to backfill data for existing reservations.
-          - **Risk:** Low. The main risk is a minor performance overhead on insert/update operations on the 'reservas' table, which is negligible for most applications.
-
+          ## Query Description: [This operation first removes the old version of the `check_duplicate_reservation` function that is causing the conflict. It then recreates the function with the correct parameter names and improved logic to prevent false overlap detections for adjacent bookings. This is a safe, structural change that does not affect any reservation data.]
+          
           ## Metadata:
-          - Schema-Category: "Structural"
-          - Impact-Level: "Low"
-          - Requires-Backup: false
-          - Reversible: true (The column and trigger can be dropped manually)
-
+          - Schema-Category: ["Structural"]
+          - Impact-Level: ["Low"]
+          - Requires-Backup: [false]
+          - Reversible: [false]
+          
           ## Structure Details:
-          - **Table Modified:** public.reservas
-          - **Column Added:** clientname (TEXT)
-          - **Function Created:** public.sync_clientname_column()
-          - **Trigger Created:** trigger_sync_clientname (BEFORE INSERT OR UPDATE ON public.reservas)
-
+          - Drops function: `check_duplicate_reservation(uuid, uuid, date, time, time, uuid)`
+          - Creates function: `check_duplicate_reservation(uuid, uuid, date, time, time, uuid)` with corrected logic and parameter names.
+          
           ## Security Implications:
-          - RLS Status: Unchanged. The new column will inherit existing RLS policies.
-          - Policy Changes: No
-          - Auth Requirements: None
-
+          - RLS Status: [N/A]
+          - Policy Changes: [No]
+          - Auth Requirements: [N/A]
+          
           ## Performance Impact:
-          - Indexes: None added.
-          - Triggers: One trigger added. The performance impact is minimal as it's a simple assignment operation.
-          - Estimated Impact: Negligible.
+          - Indexes: [N/A]
+          - Triggers: [N/A]
+          - Estimated Impact: [None. The function is only called during reservation creation/update.]
           */
 
--- Step 1: Add the new compatibility column
-ALTER TABLE public.reservas
-ADD COLUMN clientname TEXT;
+-- Drop the function with the conflicting signature.
+-- The signature is taken directly from the error message to ensure the correct function is targeted.
+DROP FUNCTION IF EXISTS public.check_duplicate_reservation(uuid, uuid, date, time without time zone, time without time zone, uuid);
 
--- Step 2: Create a function to sync the columns
-CREATE OR REPLACE FUNCTION public.sync_clientname_column()
-RETURNS TRIGGER AS $$
+-- Recreate the function with a consistent signature and corrected logic.
+-- Note: We are keeping the 6-parameter signature to avoid breaking dependencies, even if p_arena_id is not used in this specific function's logic.
+CREATE OR REPLACE FUNCTION public.check_duplicate_reservation(
+    p_quadra_id uuid,
+    p_arena_id uuid, -- This parameter is kept for signature compatibility.
+    p_date date,
+    p_start_time time,
+    p_end_time time,
+    p_reserva_id_to_exclude uuid DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_conflict_exists boolean;
 BEGIN
-  -- Copy the value from the correct "clientName" column to the new lowercase clientname column
-  NEW.clientname := NEW."clientName";
-  RETURN NEW;
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.reservas r
+        WHERE r.quadra_id = p_quadra_id
+          AND r.date = p_date
+          AND r.status <> 'cancelada'
+          AND (p_reserva_id_to_exclude IS NULL OR r.id <> p_reserva_id_to_exclude)
+          -- Corrected logic to check for overlaps without flagging adjacent slots
+          AND (
+              p_start_time < r.end_time AND p_end_time > r.start_time
+          )
+    ) INTO v_conflict_exists;
+
+    IF v_conflict_exists THEN
+        RAISE EXCEPTION 'Conflito de horário: Já existe uma reserva para esta quadra neste horário.';
+    END IF;
+
+    RETURN FALSE;
 END;
-$$ LANGUAGE plpgsql;
-
--- Step 3: Create a trigger to run the function before inserts or updates
-CREATE TRIGGER trigger_sync_clientname
-BEFORE INSERT OR UPDATE ON public.reservas
-FOR EACH ROW
-EXECUTE FUNCTION public.sync_clientname_column();
-
--- Step 4: Backfill the new column for all existing reservations
-UPDATE public.reservas
-SET clientname = "clientName"
-WHERE clientname IS NULL;
+$$;

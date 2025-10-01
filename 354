@@ -1,111 +1,169 @@
+-- First, create the helper function to ensure an aluno profile exists.
 /*
-          # [Function] handle_client_cancellation
-          [Cria uma função única e segura para que clientes cancelem suas próprias reservas, apliquem créditos e registrem a transação, tudo em uma única operação. Remove todas as funções de cancelamento antigas para evitar conflitos.]
+  # [Function] ensure_aluno_profile_exists
+  [This function checks if an 'aluno' profile exists for a given user in a specific arena. If not, it creates one automatically.]
 
-          ## Query Description: [Esta operação limpa funções de cancelamento antigas e cria uma nova e mais segura. Não há risco de perda de dados. É uma refatoração para corrigir um erro persistente de permissão e cache.]
-          
-          ## Metadata:
-          - Schema-Category: ["Structural"]
-          - Impact-Level: ["Low"]
-          - Requires-Backup: [false]
-          - Reversible: [false]
-          
-          ## Structure Details:
-          - Funções Removidas: cancel_reservation_and_apply_credit, cancel_reservation_and_get_credit, client_cancel_reservation_by_id, cancel_my_booking, client_cancel_booking, cancel_booking_as_client (e suas variações v2, v3, etc.)
-          - Função Criada: handle_client_cancellation(uuid)
-          
-          ## Security Implications:
-          - RLS Status: [Enabled]
-          - Policy Changes: [No]
-          - Auth Requirements: [A nova função usa SECURITY INVOKER, rodando com as permissões do usuário logado, o que é mais seguro.]
-          
-          ## Performance Impact:
-          - Indexes: [N/A]
-          - Triggers: [N/A]
-          - Estimated Impact: [Nenhum impacto de performance esperado.]
-          */
-
--- Limpa todas as funções de cancelamento anteriores para evitar conflitos de cache e nome.
-DROP FUNCTION IF EXISTS public.cancel_reservation_and_apply_credit(uuid);
-DROP FUNCTION IF EXISTS public.cancel_reservation_and_apply_credit_v2(uuid);
-DROP FUNCTION IF EXISTS public.cancel_reservation_and_apply_credit_v3(uuid);
-DROP FUNCTION IF EXISTS public.cancel_reservation_and_get_credit(uuid);
-DROP FUNCTION IF EXISTS public.cancel_reservation_and_get_credit_v2(uuid);
-DROP FUNCTION IF EXISTS public.client_cancel_reservation_by_id(uuid);
-DROP FUNCTION IF EXISTS public.client_cancel_reservation_by_id_v2(uuid);
-DROP FUNCTION IF EXISTS public.client_cancel_reservation_by_id_v3(uuid);
-DROP FUNCTION IF EXISTS public.cancel_my_booking(uuid);
-DROP FUNCTION IF EXISTS public.client_cancel_booking(uuid);
-DROP FUNCTION IF EXISTS public.cancel_booking_as_client(uuid);
-
--- Cria a nova função definitiva e segura
-CREATE OR REPLACE FUNCTION public.handle_client_cancellation(p_reserva_id uuid)
-RETURNS void AS $$
+  ## Query Description: [This operation creates or replaces a database function. It is designed to be safe and will not delete any user data. It ensures that every client making a reservation has a corresponding 'aluno' record, which is crucial for tracking credits and history within an arena.]
+  
+  ## Metadata:
+  - Schema-Category: ["Structural"]
+  - Impact-Level: ["Low"]
+  - Requires-Backup: [false]
+  - Reversible: [true]
+  
+  ## Structure Details:
+  - Function: public.ensure_aluno_profile_exists(uuid, uuid)
+  
+  ## Security Implications:
+  - RLS Status: [Not Applicable]
+  - Policy Changes: [No]
+  - Auth Requirements: [The function is called by other functions that should have appropriate security context (e.g., run as the authenticated user).]
+  
+  ## Performance Impact:
+  - Indexes: [No changes]
+  - Triggers: [No changes]
+  - Estimated Impact: [Negligible. The function performs a simple check and an optional insert.]
+*/
+CREATE OR REPLACE FUNCTION public.ensure_aluno_profile_exists(
+    p_profile_id uuid,
+    p_arena_id uuid
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 DECLARE
-  v_reserva public.reservas;
-  v_aluno public.alunos;
-  v_arena public.arenas;
-  v_credit_amount numeric := 0;
-  v_hours_until_reservation numeric;
+    v_aluno_exists boolean;
+    v_profile_name text;
+    v_profile_phone text;
 BEGIN
-  -- 1. Busca a reserva e garante que o usuário logado é o dono.
-  -- A política de RLS na tabela 'reservas' já deve garantir isso, mas é uma dupla checagem.
-  SELECT *
-  INTO v_reserva
-  FROM public.reservas
-  WHERE id = p_reserva_id AND profile_id = auth.uid();
+    -- Check if an aluno profile already exists for this user in this arena
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.alunos
+        WHERE profile_id = p_profile_id AND arena_id = p_arena_id
+    ) INTO v_aluno_exists;
 
-  IF v_reserva IS NULL THEN
-    RAISE EXCEPTION 'Permissão negada ou reserva não encontrada.';
-  END IF;
+    -- If it doesn't exist, create it
+    IF NOT v_aluno_exists THEN
+        -- Get user's name and phone from the main profiles table
+        SELECT name, phone
+        INTO v_profile_name, v_profile_phone
+        FROM public.profiles
+        WHERE id = p_profile_id;
 
-  -- 2. Busca a arena para obter a política de cancelamento (lógica de crédito).
-  SELECT *
-  INTO v_arena
-  FROM public.arenas
-  WHERE id = v_reserva.arena_id;
-
-  IF v_arena IS NULL THEN
-    RAISE EXCEPTION 'Arena não encontrada para esta reserva.';
-  END IF;
-
-  -- 3. Calcula o valor do crédito com base na antecedência.
-  v_hours_until_reservation := EXTRACT(EPOCH FROM (v_reserva.date + v_reserva.start_time - now())) / 3600;
-
-  IF v_hours_until_reservation >= 24 THEN
-    v_credit_amount := v_reserva.total_price;
-  ELSIF v_hours_until_reservation >= 12 THEN
-    v_credit_amount := v_reserva.total_price * 0.5;
-  ELSE
-    v_credit_amount := 0;
-  END IF;
-
-  -- 4. Atualiza o status da reserva para 'cancelada'.
-  UPDATE public.reservas
-  SET status = 'cancelada'
-  WHERE id = p_reserva_id;
-
-  -- 5. Se houver crédito a ser dado, encontra o perfil de aluno e aplica.
-  IF v_credit_amount > 0 THEN
-    SELECT *
-    INTO v_aluno
-    FROM public.alunos
-    WHERE profile_id = v_reserva.profile_id AND arena_id = v_reserva.arena_id;
-
-    IF v_aluno IS NOT NULL THEN
-      -- Adiciona o crédito ao saldo do aluno.
-      UPDATE public.alunos
-      SET credit_balance = credit_balance + v_credit_amount
-      WHERE id = v_aluno.id;
-
-      -- Registra a transação de crédito.
-      INSERT INTO public.credit_transactions (aluno_id, arena_id, amount, type, description, related_reservation_id, profile_id)
-      VALUES (v_aluno.id, v_reserva.arena_id, v_credit_amount, 'cancellation_credit', 'Crédito por cancelamento da reserva #' || substr(p_reserva_id::text, 1, 8), p_reserva_id, auth.uid());
+        -- Insert a new 'aluno' record with default values
+        INSERT INTO public.alunos (profile_id, arena_id, name, phone, status, plan_name, join_date, credit_balance)
+        VALUES (
+            p_profile_id,
+            p_arena_id,
+            v_profile_name,
+            v_profile_phone,
+            'ativo',
+            'Avulso',
+            CURRENT_DATE,
+            0
+        );
     END IF;
-  END IF;
-
 END;
-$$ LANGUAGE plpgsql SECURITY INVOKER;
+$$;
 
--- Garante que usuários autenticados possam executar esta função.
-GRANT EXECUTE ON FUNCTION public.handle_client_cancellation(uuid) TO authenticated;
+
+-- Then, update the main reservation function to use the helper.
+/*
+  # [Function] create_client_reservation_atomic (Updated)
+  [This function creates a client reservation atomically, ensuring an 'aluno' profile exists and all data is inserted in a single transaction.]
+
+  ## Query Description: [This operation replaces the existing 'create_client_reservation_atomic' function to include a call to 'ensure_aluno_profile_exists'. This makes the reservation process more robust by preventing failures when a client makes their first booking. It is a safe, non-destructive change.]
+  
+  ## Metadata:
+  - Schema-Category: ["Structural"]
+  - Impact-Level: ["Low"]
+  - Requires-Backup: [false]
+  - Reversible: [true]
+  
+  ## Structure Details:
+  - Function: public.create_client_reservation_atomic(...)
+  
+  ## Security Implications:
+  - RLS Status: [Not Applicable]
+  - Policy Changes: [No]
+  - Auth Requirements: [This function should be called by an authenticated user. It uses `auth.uid()` to securely identify the caller.]
+  
+  ## Performance Impact:
+  - Indexes: [No changes]
+  - Triggers: [No changes]
+  - Estimated Impact: [Low. Adds one function call to the reservation process.]
+*/
+CREATE OR REPLACE FUNCTION public.create_client_reservation_atomic(
+    p_arena_id uuid,
+    p_quadra_id uuid,
+    p_date date,
+    p_start_time time,
+    p_end_time time,
+    p_total_price numeric,
+    p_payment_status text,
+    p_sport_type text,
+    p_credit_to_use numeric,
+    p_rented_items jsonb,
+    p_client_name text,
+    p_client_phone text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY INVOKER -- Run as the calling user
+AS $$
+DECLARE
+    v_profile_id uuid := auth.uid();
+    v_aluno_id uuid;
+BEGIN
+    -- Step 1: Ensure an 'aluno' profile exists for the calling user in the target arena.
+    PERFORM public.ensure_aluno_profile_exists(v_profile_id, p_arena_id);
+
+    -- Step 2: Get the aluno_id for credit transaction purposes
+    SELECT id INTO v_aluno_id FROM public.alunos WHERE profile_id = v_profile_id AND arena_id = p_arena_id;
+
+    -- Step 3: Insert the reservation
+    INSERT INTO public.reservas (
+        arena_id,
+        quadra_id,
+        profile_id,
+        date,
+        start_time,
+        end_time,
+        total_price,
+        payment_status,
+        sport_type,
+        credit_used,
+        rented_items,
+        clientName,
+        clientPhone,
+        status,
+        type
+    ) VALUES (
+        p_arena_id,
+        p_quadra_id,
+        v_profile_id,
+        p_date,
+        p_start_time,
+        p_end_time,
+        p_total_price,
+        p_payment_status,
+        p_sport_type,
+        p_credit_to_use,
+        p_rented_items,
+        p_client_name,
+        p_client_phone,
+        'confirmada',
+        'avulsa'
+    );
+
+    -- Step 4: If credit was used, deduct it from the aluno's balance
+    IF p_credit_to_use > 0 AND v_aluno_id IS NOT NULL THEN
+        UPDATE public.alunos
+        SET credit_balance = credit_balance - p_credit_to_use
+        WHERE id = v_aluno_id;
+    END IF;
+END;
+$$;

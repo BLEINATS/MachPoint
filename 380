@@ -1,43 +1,74 @@
 /*
-          # [SECURITY] Set Search Path for Core Functions
-          This migration sets a fixed `search_path` for several critical functions to mitigate security risks, as recommended by Supabase security advisories.
+          # [SECURITY] Set Search Path for create_my_aluno_profile
+          [This operation enhances security by setting a fixed search_path for the function, preventing potential hijacking vulnerabilities.]
 
-          ## Query Description: 
-          - This operation alters existing database functions (`add_credit_to_aluno`, `handle_client_cancellation_final`, `is_arena_admin`).
-          - It sets the `search_path` to `public`, preventing potential hijacking attacks where a malicious user could create functions in other schemas that get executed unintentionally.
-          - This change is purely for security hardening and does not affect the functions' logic or application data. No backup is required.
+          ## Query Description: [This operation modifies an existing function to improve its security posture. It does not alter the function's logic or impact existing data. It is a safe and recommended update.]
           
           ## Metadata:
-          - Schema-Category: "Security"
-          - Impact-Level: "Low"
-          - Requires-Backup: false
-          - Reversible: true (by altering the function again to remove the SET clause)
+          - Schema-Category: ["Security", "Safe"]
+          - Impact-Level: ["Low"]
+          - Requires-Backup: [false]
+          - Reversible: [true]
           
           ## Structure Details:
-          - Functions affected:
-            - `public.add_credit_to_aluno(uuid, uuid, numeric)`
-            - `public.handle_client_cancellation_final(uuid)`
-            - `public.is_arena_admin(uuid)`
+          - Function `public.create_my_aluno_profile()` will be updated.
           
           ## Security Implications:
-          - RLS Status: Not changed
-          - Policy Changes: No
-          - Auth Requirements: None
+          - RLS Status: [No Change]
+          - Policy Changes: [No]
+          - Auth Requirements: [No Change]
           
           ## Performance Impact:
-          - Indexes: None
-          - Triggers: None
-          - Estimated Impact: Negligible performance impact. May slightly improve function execution speed by providing a direct search path.
+          - Indexes: [No Change]
+          - Triggers: [No Change]
+          - Estimated Impact: [None]
           */
 
--- Set search_path for the function that adds credit to a student's account.
-ALTER FUNCTION public.add_credit_to_aluno(aluno_id_to_update uuid, arena_id_to_check uuid, amount_to_add numeric)
-SET search_path = public;
+CREATE OR REPLACE FUNCTION public.create_my_aluno_profile(p_arena_id uuid)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_profile_id uuid;
+  v_aluno_id uuid;
+  v_user_profile profiles;
+BEGIN
+  -- 1. Get the profile of the currently authenticated user
+  SELECT * INTO v_user_profile
+  FROM public.profiles
+  WHERE id = auth.uid();
 
--- Set search_path for the final client cancellation handling function.
-ALTER FUNCTION public.handle_client_cancellation_final(p_reserva_id uuid)
-SET search_path = public;
+  IF v_user_profile IS NULL THEN
+    RAISE EXCEPTION 'User profile not found. Cannot create aluno profile.';
+  END IF;
 
--- Set search_path for the function that checks if a user is an arena admin.
-ALTER FUNCTION public.is_arena_admin(p_arena_id uuid)
-SET search_path = public;
+  -- 2. Check if an aluno profile already exists for this user in this arena
+  SELECT id INTO v_aluno_id
+  FROM public.alunos
+  WHERE profile_id = v_user_profile.id AND arena_id = p_arena_id;
+
+  -- 3. If it already exists, return the existing ID
+  IF v_aluno_id IS NOT NULL THEN
+    RETURN v_aluno_id;
+  END IF;
+
+  -- 4. If it doesn't exist, create a new aluno profile
+  INSERT INTO public.alunos (arena_id, profile_id, name, email, phone, status, plan_name, join_date)
+  VALUES (
+    p_arena_id,
+    v_user_profile.id,
+    v_user_profile.name,
+    v_user_profile.email,
+    v_user_profile.phone,
+    'ativo',
+    'Avulso',
+    CURRENT_DATE
+  )
+  RETURNING id INTO v_aluno_id;
+
+  -- 5. Return the new aluno_id
+  RETURN v_aluno_id;
+END;
+$$;

@@ -1,63 +1,111 @@
 /*
-          # [Operation Name]
-          Correção da Função de Gatilho de Nova Reserva
+# [Critical] Definitive Fix for Gamification Triggers
+This migration corrects a persistent bug in multiple database functions related to the gamification system that was preventing reservations from being saved correctly. It replaces two functions, ensuring they reference the correct column (`is_enabled`) in the gamification settings and hardens their security by setting a fixed `search_path`.
 
-          ## Query Description: [Esta operação corrige uma função no banco de dados que é acionada sempre que uma nova reserva é criada. A função continha uma referência a uma coluna inexistente ('is_active') que causava um erro e impedia o salvamento de novas reservas. A referência foi removida para resolver o erro. Adicionalmente, a segurança da função foi melhorada para prevenir potenciais vulnerabilidades.]
-          
-          ## Metadata:
-          - Schema-Category: "Structural"
-          - Impact-Level: "Low"
-          - Requires-Backup: false
-          - Reversible: true
-          
-          ## Structure Details:
-          - Afeta a função: `public.handle_new_reservation_notification()`
-          
-          ## Security Implications:
-          - RLS Status: [N/A]
-          - Policy Changes: [No]
-          - Auth Requirements: [N/A]
-          - A adição de `SET search_path = public` mitiga o aviso de segurança "Function Search Path Mutable".
-          
-          ## Performance Impact:
-          - Indexes: [N/A]
-          - Triggers: [N/A]
-          - Estimated Impact: [Nenhum impacto de performance esperado.]
-          */
-CREATE OR REPLACE FUNCTION public.handle_new_reservation_notification()
- RETURNS trigger
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path TO 'public'
-AS $function$
+## Query Description:
+- **Operation:** Replaces the `handle_reservation_completion` and `update_aluno_gamification_points` functions.
+- **Impact:** This is a non-destructive operation that only modifies function code. It fixes the bug that was causing reservation creations to fail. Existing data is safe.
+- **Risks:** Low risk. The change is isolated to the function's logic.
+- **Safety:** It is safe to run this migration. No backup is strictly required for this change, but regular backups are always recommended.
+
+## Metadata:
+- Schema-Category: "Structural"
+- Impact-Level: "Low"
+- Requires-Backup: false
+- Reversible: true (by restoring the previous function definitions)
+
+## Structure Details:
+- Function `public.handle_reservation_completion` will be dropped and recreated with the correct logic.
+- Function `public.update_aluno_gamification_points` will be created/recreated with the correct logic.
+
+## Security Implications:
+- RLS Status: Not affected.
+- Policy Changes: No.
+- Auth Requirements: The functions are defined to run with the privileges of the user that calls them (`SECURITY INVOKER`).
+- **Security Hardening:** Both functions' `search_path` is explicitly set to `public`, mitigating potential risks associated with mutable search paths (as pointed out by security advisories).
+
+## Performance Impact:
+- Indexes: None.
+- Triggers: The functions are called by triggers, but the triggers themselves are not modified.
+- Estimated Impact: Negligible performance impact. The fix is a simple column name change.
+*/
+CREATE OR REPLACE FUNCTION public.handle_reservation_completion()
+RETURNS TRIGGER AS $$
 DECLARE
-  v_arena_name TEXT;
-  v_quadra_name TEXT;
-  v_message TEXT;
+    v_gamification_is_enabled BOOLEAN;
+    v_points_per_real INT;
+    v_points_per_reservation INT;
+    v_points_to_add INT;
 BEGIN
-  -- Obter nomes da arena e da quadra para a notificação
-  SELECT name INTO v_arena_name FROM public.arenas WHERE id = NEW.arena_id;
-  SELECT name INTO v_quadra_name FROM public.quadras WHERE id = NEW.quadra_id;
+    -- Check if gamification is enabled for the arena
+    SELECT is_enabled, points_per_real, points_per_reservation
+    INTO v_gamification_is_enabled, v_points_per_real, v_points_per_reservation
+    FROM public.gamification_settings
+    WHERE arena_id = NEW.arena_id;
 
-  -- Construir a mensagem de notificação para o administrador da arena
-  v_message := 'Nova reserva de ' || COALESCE(NEW.clientName, 'Cliente') || 
-               ' na quadra ' || v_quadra_name || 
-               ' em ' || to_char(NEW.date, 'DD/MM') || 
-               ' às ' || to_char(NEW.start_time, 'HH24:MI');
+    -- If gamification is not enabled or no settings found, exit
+    IF NOT FOUND OR v_gamification_is_enabled IS NOT TRUE THEN
+        RETURN NEW;
+    END IF;
 
-  -- Inserir notificação para o administrador da arena
-  INSERT INTO public.notificacoes (arena_id, message, type, link_to)
-  VALUES (NEW.arena_id, v_message, 'nova_reserva', '/reservas?reserva_id=' || NEW.id);
+    -- Only award points if the reservation status is changing to 'realizada'
+    IF NEW.status = 'realizada' AND OLD.status <> 'realizada' THEN
+        -- Calculate points based on price and a flat rate per reservation
+        v_points_to_add := (NEW.total_price * v_points_per_real) + v_points_per_reservation;
 
-  -- Se a reserva estiver associada a um perfil de usuário, notificar o usuário também
-  IF NEW.profile_id IS NOT NULL THEN
-    v_message := 'Sua reserva na quadra ' || v_quadra_name || ' em ' || v_arena_name ||
-                 ' para ' || to_char(NEW.date, 'DD/MM') || ' às ' || to_char(NEW.start_time, 'HH24:MI') ||
-                 ' foi confirmada!';
-    INSERT INTO public.notificacoes (profile_id, arena_id, message, type, link_to)
-    VALUES (NEW.profile_id, NEW.arena_id, v_message, 'nova_reserva', '/perfil');
-  END IF;
+        -- Ensure we have points to add
+        IF v_points_to_add > 0 AND NEW.profile_id IS NOT NULL THEN
+            -- Add points to the user's gamification score
+            UPDATE public.alunos
+            SET gamification_points = COALESCE(gamification_points, 0) + v_points_to_add
+            WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id;
 
-  RETURN NEW;
+            -- Log the transaction if the user was updated
+            IF FOUND THEN
+                INSERT INTO public.gamification_point_transactions(arena_id, aluno_id, points, type, description, related_reservation_id)
+                SELECT NEW.arena_id, id, v_points_to_add, 'reservation_completed', 'Pontos por reserva concluída', NEW.id
+                FROM public.alunos
+                WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id;
+            END IF;
+        END IF;
+    END IF;
+
+    RETURN NEW;
 END;
-$function$;
+$$ LANGUAGE plpgsql SECURITY INVOKER;
+
+ALTER FUNCTION public.handle_reservation_completion() SET search_path = public;
+
+
+CREATE OR REPLACE FUNCTION public.update_aluno_gamification_points()
+RETURNS TRIGGER AS $$
+DECLARE
+    v_gamification_settings RECORD;
+    v_points_to_add INT;
+BEGIN
+    -- Check if the reservation is being marked as 'realizada'
+    IF NEW.status = 'realizada' AND OLD.status <> 'realizada' THEN
+        -- Get gamification settings for the arena
+        SELECT is_enabled, points_per_reservation, points_per_real
+        INTO v_gamification_settings
+        FROM public.gamification_settings
+        WHERE arena_id = NEW.arena_id;
+
+        -- Proceed only if gamification is enabled
+        IF FOUND AND v_gamification_settings.is_enabled THEN
+            -- Calculate points
+            v_points_to_add := v_gamification_settings.points_per_reservation + (NEW.total_price * v_gamification_settings.points_per_real);
+
+            IF v_points_to_add > 0 AND NEW.profile_id IS NOT NULL THEN
+                -- Update aluno's points
+                UPDATE public.alunos
+                SET gamification_points = COALESCE(gamification_points, 0) + v_points_to_add
+                WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id;
+            END IF;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY INVOKER;
+
+ALTER FUNCTION public.update_aluno_gamification_points() SET search_path = public;

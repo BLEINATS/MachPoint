@@ -1,56 +1,46 @@
-/*
-          # [FIX] Recriação Segura do Gatilho de Notificação de Reserva
+-- This script fixes a typo in the notification trigger function that was preventing admins from creating reservations.
 
-          [Este script corrige um erro de dependência ao atualizar a função de notificação de novas reservas. Ele remove o gatilho antigo, atualiza a função e recria o gatilho com a definição correta.]
+-- Drop the existing trigger and function to ensure a clean update
+DROP TRIGGER IF EXISTS on_new_reservation_notification ON public.reservas;
+DROP FUNCTION IF EXISTS public.handle_new_reservation_notification();
 
-          ## Query Description: ["Esta operação é segura e não afeta dados existentes. Ela apenas reestrutura componentes internos do banco de dados para permitir atualizações futuras e garantir que as notificações de novas reservas funcionem corretamente."]
-          
-          ## Metadata:
-          - Schema-Category: ["Structural"]
-          - Impact-Level: ["Low"]
-          - Requires-Backup: [false]
-          - Reversible: [false]
-          
-          ## Structure Details:
-          - Afeta o gatilho `on_new_reservation_notify` na tabela `reservas`.
-          - Afeta a função `handle_new_notification`.
-          
-          ## Security Implications:
-          - RLS Status: [N/A]
-          - Policy Changes: [No]
-          - Auth Requirements: [N/A]
-          
-          ## Performance Impact:
-          - Indexes: [No]
-          - Triggers: [Modified]
-          - Estimated Impact: [Nenhum impacto de performance esperado.]
-          */
--- Etapa 1: Remover o gatilho dependente
-DROP TRIGGER IF EXISTS on_new_reservation_notify ON public.reservas;
-
--- Etapa 2: Remover a função antiga (se existir)
-DROP FUNCTION IF EXISTS public.handle_new_notification();
-
--- Etapa 3: Recriar a função com a lógica correta
-CREATE OR REPLACE FUNCTION public.handle_new_notification()
+-- Recreate the function with the correct column name ("clientName")
+CREATE OR REPLACE FUNCTION public.handle_new_reservation_notification()
 RETURNS TRIGGER AS $$
+DECLARE
+    arena_owner_id uuid;
+    message_text text;
+    quadra_name text;
 BEGIN
-  -- Notificação para o administrador da arena
-  INSERT INTO public.notificacoes (arena_id, message, type, link_to)
-  VALUES (NEW.arena_id, 'Nova reserva de ' || NEW.clientName || ' para a quadra ' || (SELECT name FROM public.quadras WHERE id = NEW.quadra_id) || '.', 'nova_reserva', '/reservas?id=' || NEW.id);
+    -- Get quadra name to use in messages
+    SELECT name INTO quadra_name FROM public.quadras WHERE id = NEW.quadra_id;
 
-  -- Notificação para o cliente (se tiver um perfil associado)
-  IF NEW.profile_id IS NOT NULL THEN
-    INSERT INTO public.notificacoes (profile_id, arena_id, message, type, link_to)
-    VALUES (NEW.profile_id, NEW.arena_id, 'Sua reserva na quadra ' || (SELECT name FROM public.quadras WHERE id = NEW.quadra_id) || ' foi confirmada!', 'nova_reserva', '/perfil');
-  END IF;
-  
-  RETURN NEW;
+    -- Find the arena owner
+    SELECT owner_id INTO arena_owner_id FROM public.arenas WHERE id = NEW.arena_id;
+
+    -- Notify the client if the reservation was made by an admin
+    IF NEW.profile_id IS NOT NULL AND auth.uid() = arena_owner_id THEN
+        message_text := 'Uma nova reserva foi feita para você na quadra ' || quadra_name || ' para ' || to_char(NEW.date, 'DD/MM') || ' às ' || NEW.start_time;
+        INSERT INTO public.notificacoes (arena_id, profile_id, message, type, link_to)
+        VALUES (NEW.arena_id, NEW.profile_id, message_text, 'nova_reserva', '/perfil');
+    END IF;
+
+    -- Notify the admin if the reservation was made by a client
+    IF NEW.profile_id IS NOT NULL AND auth.uid() != arena_owner_id THEN
+        -- Use NEW."clientName" with quotes because of the camelCase column name
+        message_text := 'Nova reserva de ' || NEW."clientName" || ' na quadra ' || quadra_name || ' para ' || to_char(NEW.date, 'DD/MM') || ' às ' || NEW.start_time;
+        INSERT INTO public.notificacoes (arena_id, profile_id, message, type, link_to)
+        VALUES (NEW.arena_id, arena_owner_id, message_text, 'nova_reserva', '/reservas');
+    END IF;
+
+    RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Etapa 4: Recriar o gatilho para usar a nova função
-CREATE TRIGGER on_new_reservation_notify
+-- Re-attach the trigger to the reservations table
+CREATE TRIGGER on_new_reservation_notification
 AFTER INSERT ON public.reservas
-FOR EACH ROW
-EXECUTE FUNCTION public.handle_new_notification();
+FOR EACH ROW EXECUTE FUNCTION public.handle_new_reservation_notification();
+
+-- Grant execute permissions to the authenticated role
+GRANT EXECUTE ON FUNCTION public.handle_new_reservation_notification() TO authenticated;

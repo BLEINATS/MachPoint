@@ -1,8 +1,8 @@
 /*
-# [Function] `cancel_booking_as_client` (v2)
-[This function allows an authenticated client to cancel their own reservation securely.]
+# [Function] Recreate Client Cancellation Function
+[This migration drops any previous versions of the cancellation function and recreates it with a new name and correct permissions to resolve schema cache issues.]
 
-## Query Description: [This operation corrects the security model of the `cancel_booking_as_client` function. By changing it to `SECURITY INVOKER`, the function will run with the permissions of the user calling it, ensuring `auth.uid()` correctly identifies the user and allows them to cancel their own reservations.]
+## Query Description: [This operation is safe. It drops and recreates a database function. No user data is affected. It is designed to fix an application error where the function could not be found.]
 
 ## Metadata:
 - Schema-Category: ["Structural"]
@@ -11,63 +11,46 @@
 - Reversible: [true]
 
 ## Structure Details:
-[
-  - Function: `public.cancel_booking_as_client(p_reserva_id uuid)`
-]
+- Drops function: public.cancel_my_reservation
+- Creates function: public.client_cancel_reservation
+- Grants execute on new function to 'authenticated' role
 
 ## Security Implications:
-- RLS Status: [Enabled]
+- RLS Status: [Not Applicable]
 - Policy Changes: [No]
-- Auth Requirements: [Authenticated User]
+- Auth Requirements: [Function can only be executed by authenticated users on their own reservations.]
 
 ## Performance Impact:
-- Indexes: [N/A]
-- Triggers: [N/A]
-- Estimated Impact: [Low]
+- Indexes: [None]
+- Triggers: [None]
+- Estimated Impact: [Negligible. Function creation is a fast, one-time operation.]
 */
--- Drop the old function if it exists to ensure a clean state
-drop function if exists public.cancel_booking_as_client(uuid);
 
--- Recreate the function with the correct SECURITY INVOKER property
-create or replace function public.cancel_booking_as_client(p_reserva_id uuid)
-returns void
-language plpgsql
-security invoker -- IMPORTANT: Runs with the permissions of the user calling the function
-set search_path = public
-as $$
-declare
-  target_reserva public.reservas;
-begin
-  -- Get the reservation details
-  select *
-  into target_reserva
-  from public.reservas
-  where id = p_reserva_id;
+-- Drop the old function if it exists, under any possible name we've used
+DROP FUNCTION IF EXISTS public.cancel_my_reservation(p_reserva_id uuid);
+DROP FUNCTION IF EXISTS public.cancel_my_reservation(uuid);
 
-  if not found then
-    raise exception 'Reserva não encontrada.';
-  end if;
+-- Create the new, correctly named and secured function
+CREATE OR REPLACE FUNCTION public.client_cancel_reservation(p_reserva_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+BEGIN
+  -- Ensure the caller is the owner of the reservation
+  IF NOT EXISTS (
+    SELECT 1 FROM public.reservas
+    WHERE id = p_reserva_id AND profile_id = auth.uid()
+  ) THEN
+    RAISE EXCEPTION 'Permissão negada: você só pode cancelar suas próprias reservas.';
+  END IF;
 
-  -- Check if the authenticated user is the one who made the reservation
-  -- This check is now redundant if RLS is correctly set up, but adds a layer of safety.
-  if target_reserva.profile_id is null or target_reserva.profile_id <> auth.uid() then
-    -- Also check if the user is an admin of the arena for override
-    if not exists (
-      select 1
-      from public.arenas
-      where id = target_reserva.arena_id and owner_id = auth.uid()
-    ) then
-      raise exception 'Permissão negada: você não é o dono desta reserva ou administrador da arena.';
-    end if;
-  end if;
-
-  -- If checks pass, update the reservation status.
-  -- The RLS policy on the 'reservas' table will enforce the final permission check.
-  update public.reservas
-  set status = 'cancelada'
-  where id = p_reserva_id;
-end;
+  -- Update the reservation status
+  UPDATE public.reservas
+  SET status = 'cancelada'
+  WHERE id = p_reserva_id;
+END;
 $$;
 
--- Grant permission to authenticated users
-grant execute on function public.cancel_booking_as_client(uuid) to authenticated;
+-- Grant execution rights to authenticated users
+GRANT EXECUTE ON FUNCTION public.client_cancel_reservation(uuid) TO authenticated;

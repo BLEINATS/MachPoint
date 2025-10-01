@@ -1,57 +1,46 @@
 /*
-# [Fix Reservation RLS Policies]
-This script corrects the Row-Level Security (RLS) policies for the 'reservas' table to ensure they are created correctly and avoid "policy already exists" errors.
+          # [SECURITY] Enable RLS for Credit Transactions
+          This migration enables Row-Level Security (RLS) on the `credit_transactions` table and adds policies to ensure that users can only view their own transaction history and arena owners can view all transactions in their arena. This is a critical security and privacy enhancement.
 
-## Query Description:
-This operation will drop and recreate the security policies that allow clients to manage their own reservations. It is a safe, structural change that does not affect existing data. It ensures that the security rules are correctly applied, even if the script is run multiple times.
+          ## Query Description: [This operation secures the credit transaction history. It enables RLS and creates policies that allow users to select only the rows that belong to them, and arena owners to see all transactions in their arena. This prevents users from seeing each other's financial data.]
+          
+          ## Metadata:
+          - Schema-Category: ["Structural", "Security"]
+          - Impact-Level: ["Medium"]
+          - Requires-Backup: false
+          - Reversible: true
+          
+          ## Structure Details:
+          - Table `credit_transactions`: Enables RLS and adds new SELECT policies.
+          
+          ## Security Implications:
+          - RLS Status: Enabled
+          - Policy Changes: Yes
+          - Auth Requirements: This policy relies on `auth.uid()` to identify the currently logged-in user.
+          
+          ## Performance Impact:
+          - Indexes: None
+          - Triggers: None
+          - Estimated Impact: Low. RLS may add a minor overhead to queries on this table, but it's essential for security.
+          */
 
-## Metadata:
-- Schema-Category: "Structural"
-- Impact-Level: "Low"
-- Requires-Backup: false
-- Reversible: true
+-- 1. Enable RLS on the credit_transactions table
+ALTER TABLE public.credit_transactions ENABLE ROW LEVEL SECURITY;
 
-## Structure Details:
-- Tables affected: public.reservas
-- Policies affected:
-  - "Allow clients to view their own reservations"
-  - "Allow clients to create their own reservations"
-  - "Allow clients to cancel their own reservations"
+-- 2. Create a policy to allow users to view their own credit transactions
+-- This policy checks if the logged-in user's ID matches the profile_id of the 'aluno' associated with the transaction.
+CREATE POLICY "Allow users to view their own credit transactions"
+ON public.credit_transactions
+FOR SELECT
+USING (
+  auth.uid() = (SELECT profile_id FROM public.alunos WHERE id = credit_transactions.aluno_id)
+);
 
-## Security Implications:
-- RLS Status: Enabled
-- Policy Changes: Yes (recreation of policies)
-- Auth Requirements: Policies are based on `auth.uid()` to ensure users can only access their own data.
-
-## Performance Impact:
-- Indexes: None
-- Triggers: None
-- Estimated Impact: Negligible performance impact. This is a definitional change.
-*/
-
--- Drop existing policies if they exist to ensure idempotency
-DROP POLICY IF EXISTS "Allow clients to view their own reservations" ON public.reservas;
-DROP POLICY IF EXISTS "Allow clients to create their own reservations" ON public.reservas;
-DROP POLICY IF EXISTS "Allow clients to cancel their own reservations" ON public.reservas;
-
--- Enable RLS on the reservas table (it's safe to run this again if it's already enabled)
-ALTER TABLE public.reservas ENABLE ROW LEVEL SECURITY;
-
--- Policy for clients to view their own reservations
-CREATE POLICY "Allow clients to view their own reservations"
-ON public.reservas FOR SELECT
-TO authenticated
-USING (auth.uid() = profile_id);
-
--- Policy for clients to create their own reservations
-CREATE POLICY "Allow clients to create their own reservations"
-ON public.reservas FOR INSERT
-TO authenticated
-WITH CHECK (auth.uid() = profile_id);
-
--- Policy for clients to cancel (update) their own reservations
-CREATE POLICY "Allow clients to cancel their own reservations"
-ON public.reservas FOR UPDATE
-TO authenticated
-USING (auth.uid() = profile_id)
-WITH CHECK (auth.uid() = profile_id);
+-- 3. Create a policy to allow the owner of the arena to view all transactions in their arena.
+-- This is important for the admin dashboard functionality.
+CREATE POLICY "Allow arena owners to view transactions in their arena"
+ON public.credit_transactions
+FOR SELECT
+USING (
+  auth.uid() = (SELECT owner_id FROM public.arenas WHERE id = credit_transactions.arena_id)
+);

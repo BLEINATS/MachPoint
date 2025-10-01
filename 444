@@ -1,82 +1,101 @@
 /*
-          # [Operation Name]
-          Secure `add_gamification_points` Function
+          # [Fix] Corrige dependências da função is_arena_admin
+          [Este script remove temporariamente as políticas de segurança que dependem da função 'is_arena_admin', atualiza a função e recria as políticas. Isso é necessário para evitar erros de dependência ao modificar a função.]
 
-          ## Query Description: [This operation secures the `add_gamification_points` function by explicitly setting the `search_path`. This is a preventative security measure to ensure the function operates in the expected schema context, mitigating potential risks associated with mutable search paths. It does not alter the function's logic or impact existing data.]
+          ## Query Description: [Este script é seguro. Ele preserva as regras de segurança existentes, apenas as recriando para apontar para a versão atualizada da função. Não há risco de perda de dados.]
           
           ## Metadata:
-          - Schema-Category: "Security"
-          - Impact-Level: "Low"
-          - Requires-Backup: false
-          - Reversible: true
+          - Schema-Category: ["Structural"]
+          - Impact-Level: ["Low"]
+          - Requires-Backup: [false]
+          - Reversible: [false]
           
           ## Structure Details:
-          - Function `add_gamification_points` will be dropped and recreated with a security definer.
+          - Funções afetadas: is_arena_admin
+          - Políticas afetadas: Políticas de gerenciamento de gamificação em várias tabelas.
           
           ## Security Implications:
-          - RLS Status: Not Applicable
-          - Policy Changes: No
-          - Auth Requirements: None
+          - RLS Status: [Enabled]
+          - Policy Changes: [Yes]
+          - Auth Requirements: [Nenhum]
           
           ## Performance Impact:
-          - Indexes: None
-          - Triggers: None
-          - Estimated Impact: Negligible. This is a definition change with no impact on query performance.
+          - Indexes: [Nenhum]
+          - Triggers: [Nenhum]
+          - Estimated Impact: [Nenhum impacto de performance esperado.]
           */
 
-DROP FUNCTION IF EXISTS public.add_gamification_points(uuid,integer,text,gamification_point_transaction_type,uuid,uuid);
+-- Step 1: Drop a política da tabela gamification_settings
+DROP POLICY IF EXISTS "Admins can manage their arena's gamification" ON public.gamification_settings;
 
-CREATE OR REPLACE FUNCTION public.add_gamification_points(
-    p_aluno_id uuid,
-    p_points_to_add integer,
-    p_description text,
-    p_transaction_type gamification_point_transaction_type DEFAULT 'manual_adjustment'::gamification_point_transaction_type,
-    p_related_reservation_id uuid DEFAULT NULL::uuid,
-    p_related_achievement_id uuid DEFAULT NULL::uuid)
- RETURNS void
- LANGUAGE plpgsql
- SECURITY DEFINER
- SET search_path = public
-AS $function$
-DECLARE
-    v_arena_id UUID;
-    v_total_points INT;
-    v_current_level_id UUID;
-    v_new_level_id UUID;
+-- Step 2: Drop a política da tabela gamification_levels
+DROP POLICY IF EXISTS "Admins can manage their arena's gamification" ON public.gamification_levels;
+
+-- Step 3: Drop a política da tabela gamification_rewards
+DROP POLICY IF EXISTS "Admins can manage their arena's gamification" ON public.gamification_rewards;
+
+-- Step 4: Drop a política da tabela gamification_achievements
+DROP POLICY IF EXISTS "Admins can manage their arena's gamification" ON public.gamification_achievements;
+
+-- Step 5: Drop a política da tabela aluno_achievements
+DROP POLICY IF EXISTS "Admins can manage their arena's achievements" ON public.aluno_achievements;
+
+-- Step 6: Drop a política da tabela gamification_point_transactions
+DROP POLICY IF EXISTS "Admins can manage point transactions for their arena" ON public.gamification_point_transactions;
+
+-- Step 7: Agora que as dependências foram removidas, drop a função antiga.
+DROP FUNCTION IF EXISTS public.is_arena_admin(uuid);
+
+-- Step 8: Recrie a função com a definição correta.
+CREATE OR REPLACE FUNCTION public.is_arena_admin(p_arena_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
 BEGIN
-    -- Get the arena_id from the aluno's profile
-    SELECT arena_id INTO v_arena_id
-    FROM public.alunos
-    WHERE id = p_aluno_id;
-
-    IF v_arena_id IS NULL THEN
-        RAISE EXCEPTION 'Aluno com ID % não encontrado.', p_aluno_id;
-    END IF;
-
-    -- Insert the transaction
-    INSERT INTO public.gamification_point_transactions (arena_id, aluno_id, points, type, description, related_reservation_id, related_achievement_id)
-    VALUES (v_arena_id, p_aluno_id, p_points_to_add, p_transaction_type, p_description, p_related_reservation_id, p_related_achievement_id);
-
-    -- Update the total points on the alunos table
-    UPDATE public.alunos
-    SET gamification_points = COALESCE(gamification_points, 0) + p_points_to_add
-    WHERE id = p_aluno_id
-    RETURNING gamification_points, gamification_level_id INTO v_total_points, v_current_level_id;
-
-    -- Determine the new level
-    SELECT id INTO v_new_level_id
-    FROM public.gamification_levels
-    WHERE arena_id = v_arena_id
-    AND points_required &lt;= v_total_points
-    ORDER BY points_required DESC
-    LIMIT 1;
-
-    -- Update the level if it has changed
-    IF v_new_level_id IS NOT NULL AND v_new_level_id &lt;> v_current_level_id THEN
-        UPDATE public.alunos
-        SET gamification_level_id = v_new_level_id
-        WHERE id = p_aluno_id;
-    END IF;
+  RETURN EXISTS (
+    SELECT 1
+    FROM public.arenas
+    WHERE id = p_arena_id AND owner_id = auth.uid()
+  );
 END;
-$function$
-;
+$$;
+
+-- Step 9: Recrie as políticas de segurança que foram removidas.
+
+CREATE POLICY "Admins can manage their arena's gamification"
+ON public.gamification_settings
+FOR ALL
+USING (is_arena_admin(arena_id))
+WITH CHECK (is_arena_admin(arena_id));
+
+CREATE POLICY "Admins can manage their arena's gamification"
+ON public.gamification_levels
+FOR ALL
+USING (is_arena_admin(arena_id))
+WITH CHECK (is_arena_admin(arena_id));
+
+CREATE POLICY "Admins can manage their arena's gamification"
+ON public.gamification_rewards
+FOR ALL
+USING (is_arena_admin(arena_id))
+WITH CHECK (is_arena_admin(arena_id));
+
+CREATE POLICY "Admins can manage their arena's gamification"
+ON public.gamification_achievements
+FOR ALL
+USING (is_arena_admin(arena_id))
+WITH CHECK (is_arena_admin(arena_id));
+
+CREATE POLICY "Admins can manage their arena's achievements"
+ON public.aluno_achievements
+FOR ALL
+USING (is_arena_admin((SELECT arena_id FROM public.alunos WHERE id = aluno_id)))
+WITH CHECK (is_arena_admin((SELECT arena_id FROM public.alunos WHERE id = aluno_id)));
+
+CREATE POLICY "Admins can manage point transactions for their arena"
+ON public.gamification_point_transactions
+FOR ALL
+USING (is_arena_admin(arena_id))
+WITH CHECK (is_arena_admin(arena_id));

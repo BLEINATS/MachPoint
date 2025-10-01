@@ -1,81 +1,28 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Aluno, CreditTransaction } from '../../types';
-import { supabase } from '../../lib/supabaseClient';
-import { useToast } from '../../context/ToastContext';
-import { Loader2, DollarSign, History } from 'lucide-react';
-import { format } from 'date-fns';
+import React from 'react';
+import { Navigate } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
+import { Loader2 } from 'lucide-react';
 
-interface CreditHistoryTabProps {
-  aluno: Aluno;
+interface ProtectedRouteProps {
+  children: React.ReactNode;
 }
 
-const CreditHistoryTab: React.FC<CreditHistoryTabProps> = ({ aluno }) => {
-  const { addToast } = useToast();
-  const [history, setHistory] = useState<CreditTransaction[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-
-  const loadCreditHistory = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('credit_transactions')
-        .select('*')
-        .eq('aluno_id', aluno.id)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setHistory(data || []);
-    } catch (error: any) {
-      addToast({ message: `Erro ao carregar histórico de créditos: ${error.message}`, type: 'error' });
-    } finally {
-      setIsLoading(false);
-    }
-  }, [aluno.id, addToast]);
-
-  useEffect(() => {
-    loadCreditHistory();
-  }, [loadCreditHistory]);
+const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
+  const { user, isLoading } = useAuth();
 
   if (isLoading) {
-    return <div className="flex justify-center items-center h-40"><Loader2 className="w-6 h-6 animate-spin text-brand-blue-500" /></div>;
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-brand-gray-50 dark:bg-brand-gray-900">
+        <Loader2 className="w-8 h-8 text-brand-blue-500 animate-spin" />
+      </div>
+    );
   }
 
-  return (
-    <div className="space-y-6">
-      {/* Summary Card */}
-      <div className="bg-green-50 dark:bg-green-900/50 rounded-lg p-4 flex justify-between items-center border border-green-200 dark:border-green-800">
-        <div className="flex items-center">
-          <DollarSign className="h-8 w-8 text-green-600 dark:text-green-400 mr-4" />
-          <div>
-            <p className="text-sm text-green-800 dark:text-green-300">Saldo Atual de Crédito</p>
-            <p className="font-bold text-2xl text-green-700 dark:text-green-200">
-              {(aluno.credit_balance || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-            </p>
-          </div>
-        </div>
-      </div>
+  if (!user) {
+    return <Navigate to="/auth" replace />;
+  }
 
-      {/* Credit History */}
-      <div>
-        <h4 className="font-semibold mb-3 flex items-center"><History className="h-5 w-5 mr-2 text-brand-blue-500"/> Histórico de Créditos</h4>
-        <div className="max-h-80 overflow-y-auto space-y-2 pr-2">
-          {history.length > 0 ? history.map(tx => (
-            <div key={tx.id} className="flex justify-between items-center p-3 bg-brand-gray-50 dark:bg-brand-gray-800/50 rounded-md">
-              <div>
-                <p className="text-sm font-medium">{tx.description}</p>
-                <p className="text-xs text-brand-gray-500">{tx.created_at ? format(new Date(tx.created_at), 'dd/MM/yyyy HH:mm') : ''}</p>
-              </div>
-              <span className={`font-bold text-lg ${tx.amount >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {tx.amount >= 0 ? '+' : ''}{tx.amount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-              </span>
-            </div>
-          )) : (
-            <p className="text-sm text-center text-brand-gray-500 py-8">Nenhuma transação de crédito encontrada.</p>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+  return <>{children}</>;
 };
 
-export default CreditHistoryTab;
+export default ProtectedRoute;

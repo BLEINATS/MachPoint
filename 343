@@ -1,106 +1,83 @@
 /*
-          # [Function Update] Log Cancellation Credit
-          Updates the `cancel_reservation_and_get_credit` function to insert a record into the `credit_transactions` table upon successful cancellation with credit.
+# [Function] `get_or_create_client_profile`
+Creates or retrieves a user's 'aluno' profile for a specific arena. This replaces the previous function to ensure correct invocation.
 
-          ## Query Description: [This operation modifies a database function to add logging capabilities. It ensures that when a user cancels a reservation and receives credit, a corresponding entry is made in their credit history, improving transparency and traceability. This change is safe and does not affect existing data integrity.]
-          
-          ## Metadata:
-          - Schema-Category: ["Structural"]
-          - Impact-Level: ["Low"]
-          - Requires-Backup: [false]
-          - Reversible: [true]
-          
-          ## Structure Details:
-          - Modifies the function: `public.cancel_reservation_and_get_credit(uuid)`
-          - Adds an `INSERT` statement into `public.credit_transactions`.
-          
-          ## Security Implications:
-          - RLS Status: [Enabled]
-          - Policy Changes: [No]
-          - Auth Requirements: [The function continues to run with invoker security, ensuring user permissions are respected.]
-          
-          ## Performance Impact:
-          - Indexes: [No change]
-          - Triggers: [No change]
-          - Estimated Impact: [Negligible. Adds a single indexed insert operation to the function's execution.]
-          */
+## Query Description:
+This operation drops the old `ensure_my_aluno_profile` function and creates a new, robust version named `get_or_create_client_profile`. This function is designed to be called by authenticated users to get or create their client profile (`aluno` record) within a specific arena. This centralized database function enhances security and consistency. It uses `SECURITY DEFINER` to safely perform insertions while respecting user boundaries. This script also grants the necessary execution permissions to authenticated users.
 
-DROP FUNCTION IF EXISTS public.cancel_reservation_and_get_credit(uuid);
+## Metadata:
+- Schema-Category: ["Structural", "Safe"]
+- Impact-Level: ["Low"]
+- Requires-Backup: false
+- Reversible: true (the function can be dropped)
 
-CREATE OR REPLACE FUNCTION public.cancel_reservation_and_get_credit(p_reserva_id uuid)
-RETURNS boolean
+## Structure Details:
+- Function: `public.get_or_create_client_profile(p_arena_id uuid, p_profile_id uuid)`
+- Returns: `alunos` (a single row)
+
+## Security Implications:
+- RLS Status: N/A
+- Policy Changes: No.
+- Auth Requirements: Grants `EXECUTE` to the `authenticated` role.
+- `SECURITY DEFINER`: Runs with owner privileges for safe data insertion.
+- `search_path`: Set to prevent search path hijacking.
+
+## Performance Impact:
+- Indexes: No change.
+- Triggers: No change.
+- Estimated Impact: Low.
+*/
+
+-- Drop the previous function if it exists, to ensure a clean state.
+DROP FUNCTION IF EXISTS public.ensure_my_aluno_profile(uuid, uuid);
+
+-- Create the new function with a new name.
+CREATE OR REPLACE FUNCTION public.get_or_create_client_profile(
+    p_arena_id uuid,
+    p_profile_id uuid
+)
+RETURNS alunos
 LANGUAGE plpgsql
-SECURITY INVOKER
+SECURITY DEFINER
+SET search_path = public, pg_temp
 AS $$
 DECLARE
-  v_reserva public.reservas;
-  v_arena_id uuid;
-  v_profile_id uuid;
-  v_aluno_id uuid;
-  v_credit_amount numeric;
-  v_policy_text text;
-  v_hours_until numeric;
+    v_aluno_record alunos;
+    v_profile_record profiles;
 BEGIN
-  -- 1. Get the reservation details
-  SELECT * INTO v_reserva FROM public.reservas WHERE id = p_reserva_id;
+    -- Security check: Ensure the calling user matches the profile ID.
+    IF auth.uid() != p_profile_id THEN
+        RAISE EXCEPTION 'Operation not allowed: You can only manage your own profile.';
+    END IF;
 
-  IF v_reserva IS NULL THEN
-    RAISE EXCEPTION 'Reserva não encontrada.';
-  END IF;
+    -- Attempt to find an existing aluno record.
+    SELECT * INTO v_aluno_record
+    FROM public.alunos
+    WHERE arena_id = p_arena_id AND profile_id = p_profile_id;
 
-  -- 2. Security Check: Ensure the user owns the reservation
-  IF auth.uid() IS NULL OR auth.uid() != v_reserva.profile_id THEN
-    RAISE EXCEPTION 'Permissão negada: Você não pode cancelar esta reserva.';
-  END IF;
+    -- If found, return it.
+    IF FOUND THEN
+        RETURN v_aluno_record;
+    END IF;
 
-  v_arena_id := v_reserva.arena_id;
-  v_profile_id := v_reserva.profile_id;
+    -- If not found, get profile details to create a new aluno record.
+    SELECT * INTO v_profile_record
+    FROM public.profiles
+    WHERE id = p_profile_id;
 
-  -- 3. Find the associated 'aluno' profile for credit application
-  SELECT id INTO v_aluno_id FROM public.alunos WHERE profile_id = v_profile_id AND arena_id = v_arena_id LIMIT 1;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Profile not found for the current user.';
+    END IF;
 
-  IF v_aluno_id IS NULL THEN
-    RAISE EXCEPTION 'Perfil de cliente não encontrado nesta arena para aplicar o crédito.';
-  END IF;
+    -- Create the new aluno record.
+    INSERT INTO public.alunos (arena_id, profile_id, name, email, phone, status, plan_name, join_date)
+    VALUES (p_arena_id, p_profile_id, v_profile_record.name, v_profile_record.email, null, 'ativo', 'Avulso', now())
+    RETURNING * INTO v_aluno_record;
 
-  -- 4. Calculate credit based on cancellation policy
-  v_hours_until := EXTRACT(EPOCH FROM (v_reserva.date + v_reserva.start_time - NOW())) / 3600;
-  
-  IF v_hours_until >= 24 THEN
-    v_credit_amount := v_reserva.total_price;
-    v_policy_text := 'Cancelamento com +24h';
-  ELSIF v_hours_until >= 12 THEN
-    v_credit_amount := v_reserva.total_price * 0.5;
-    v_policy_text := 'Cancelamento entre 12-24h';
-  ELSE
-    v_credit_amount := 0;
-    v_policy_text := 'Cancelamento com -12h';
-  END IF;
-
-  -- 5. Update the reservation status
-  UPDATE public.reservas
-  SET status = 'cancelada'
-  WHERE id = p_reserva_id;
-
-  -- 6. Apply credit and log the transaction
-  IF v_credit_amount > 0 THEN
-    -- Add credit to the aluno's balance
-    UPDATE public.alunos
-    SET credit_balance = credit_balance + v_credit_amount
-    WHERE id = v_aluno_id;
-
-    -- **NEW**: Insert a record into the credit transactions history
-    INSERT INTO public.credit_transactions (aluno_id, arena_id, amount, type, description, related_reservation_id)
-    VALUES (
-      v_aluno_id,
-      v_arena_id,
-      v_credit_amount,
-      'cancellation_credit',
-      'Crédito (' || v_policy_text || ') da reserva #' || substr(p_reserva_id::text, 1, 8),
-      p_reserva_id
-    );
-  END IF;
-
-  RETURN true;
+    -- Return the newly created record.
+    RETURN v_aluno_record;
 END;
 $$;
+
+-- Grant execution permission to authenticated users.
+GRANT EXECUTE ON FUNCTION public.get_or_create_client_profile(uuid, uuid) TO authenticated;

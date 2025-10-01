@@ -1,354 +1,494 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Plus, Loader2, LayoutGrid, ShoppingBag, Percent } from 'lucide-react';
+{/*
+  ====================================================================
+  || ATENÇÃO: CÓDIGO PROTEGIDO (BLINDADO) POR SOLICITAÇÃO DO USUÁRIO ||
+  ====================================================================
+  || Este arquivo contém a lógica crítica para salvar e cancelar     ||
+  || reservas, incluindo a aplicação de créditos.                   ||
+  ||                                                                ||
+  || NÃO FAÇA ALTERAÇÕES NESTA LÓGICA SEM CONFIRMAÇÃO EXPLÍCITA.    ||
+  || Antes de qualquer mudança, pergunte ao usuário:                ||
+  || "Você confirma que deseja alterar a lógica de crédito/reserva?"  ||
+  ====================================================================
+*/}
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { LayoutGrid, Calendar, List, Plus, SlidersHorizontal, ArrowLeft, Loader2 } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
+import { supabase } from '../lib/supabaseClient';
 import Layout from '../components/Layout/Layout';
 import Button from '../components/Forms/Button';
-import QuadraCard from '../components/Dashboard/QuadraCard';
-import QuadraFormTabs from '../components/Forms/QuadraFormTabs';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Quadra, PricingRule } from '../types';
-import { useAuth } from '../context/AuthContext';
-import { supabase } from '../lib/supabaseClient';
-import { useToast } from '../context/ToastContext';
-import { v4 as uuidv4 } from 'uuid';
-import { parse, addDays, eachDayOfInterval, startOfMonth, endOfMonth, getDay } from 'date-fns';
-import RentalItemsTab from '../components/Quadras/RentalItemsTab';
-import DiscountsTab from '../components/Quadras/DiscountsTab';
+import Input from '../components/Forms/Input';
+import { Quadra, Reserva, ReservationType, Aluno } from '../types';
+import AgendaView from '../components/Reservations/AgendaView';
+import ListView from '../components/Reservations/ListView';
+import CalendarView from '../components/Reservations/CalendarView';
+import ReservationModal from '../components/Reservations/ReservationModal';
+import CancellationModal from '../components/Reservations/CancellationModal';
+import ManualCancellationModal from '../components/Reservations/ManualCancellationModal';
+import ReservationLegend from '../components/Reservations/ReservationLegend';
+import FilterPanel from '../components/Reservations/FilterPanel';
+import { startOfDay, format, startOfMonth, endOfMonth, isBefore, parse, addYears, subDays, getDay, addDays, endOfDay } from 'date-fns';
+import { expandRecurringReservations } from '../utils/reservationUtils';
+import { parseDateStringAsLocal } from '../utils/dateUtils';
 
-const Quadras: React.FC = () => {
-  const { user, arena } = useAuth();
+type ViewMode = 'agenda' | 'calendar' | 'list';
+
+const Reservations: React.FC = () => {
+  const { arena, profile } = useAuth();
   const { addToast } = useToast();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [quadras, setQuadras] = useState<Quadra[]>([]);
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [selectedQuadra, setSelectedQuadra] = useState<Quadra | null>(null);
+  const [reservas, setReservas] = useState<Reserva[]>([]);
+  const [alunos, setAlunos] = useState<Aluno[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'quadras' | 'itens' | 'promocoes'>('quadras');
+  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const [selectedDate, setSelectedDate] = useState(startOfDay(new Date()));
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedReservation, setSelectedReservation] = useState<Reserva | null>(null);
+  const [newReservationSlot, setNewReservationSlot] = useState<{ quadraId: string, time: string, type?: ReservationType } | null>(null);
+  
+  const [isFilterPanelOpen, setIsFilterPanelOpen] = useState(false);
+  const [filters, setFilters] = useState({
+    status: 'all' as 'all' | Reserva['status'],
+    type: 'all' as 'all' | ReservationType,
+    clientName: '',
+    quadraId: 'all' as 'all' | string,
+  });
 
-  const fetchQuadras = useCallback(async () => {
+  const [isCancellationModalOpen, setIsCancellationModalOpen] = useState(false);
+  const [isManualCancelModalOpen, setIsManualCancelModalOpen] = useState(false);
+  const [reservationToCancel, setReservationToCancel] = useState<Reserva | null>(null);
+
+  const loadData = useCallback(async () => {
     if (!arena) return;
     setIsLoading(true);
     try {
-      const { data, error } = await supabase
-        .from('quadras')
-        .select('*, pricing_rules(*)')
-        .eq('arena_id', arena.id)
-        .order('name', { ascending: true });
+      const { data: quadrasData, error: quadrasError } = await supabase.from('quadras').select('*, pricing_rules(*)').eq('arena_id', arena.id);
+      if (quadrasError) throw quadrasError;
+      setQuadras(quadrasData || []);
 
-      if (error) throw error;
-      setQuadras(data || []);
+      const { data: reservasData, error: reservasError } = await supabase
+        .from('reservas')
+        .select('id, arena_id, quadra_id, profile_id, turma_id, torneio_id, evento_id, clientName, clientPhone, date, start_time, end_time, status, type, total_price, credit_used, payment_status, sport_type, notes, isRecurring, recurringType, recurringEndDate, master_id, created_at, created_by_name, updated_at, rented_items')
+        .eq('arena_id', arena.id);
+      if (reservasError) throw reservasError;
+      setReservas(reservasData || []);
+
+      const { data: alunosData, error: alunosError } = await supabase
+        .from('alunos')
+        .select('id, arena_id, profile_id, name, email, phone, status, sport, plan_name, monthly_fee, join_date, created_at, avatar_url, credit_balance')
+        .eq('arena_id', arena.id);
+      if (alunosError) throw alunosError;
+      setAlunos(alunosData || []);
+
     } catch (error: any) {
-      addToast({ message: `Erro ao carregar quadras: ${error.message}`, type: 'error' });
+      addToast({ message: `Erro ao carregar dados: ${error.message}`, type: 'error' });
     } finally {
       setIsLoading(false);
     }
   }, [arena, addToast]);
 
   useEffect(() => {
-    fetchQuadras();
-  }, [fetchQuadras]);
+    loadData();
+  }, [loadData]);
 
-  const handleOpenModal = (quadra: Quadra | null = null) => {
-    setSelectedQuadra(quadra);
+  useEffect(() => {
+    let stateHandled = false;
+    if (location.state?.selectedDate) {
+      const dateFromState = new Date(location.state.selectedDate);
+      if (!isNaN(dateFromState.getTime())) {
+        setSelectedDate(startOfDay(dateFromState));
+        stateHandled = true;
+      }
+    }
+    if (location.state?.quadraId) {
+      setFilters(prev => ({ ...prev, quadraId: location.state.quadraId }));
+      setIsFilterPanelOpen(true);
+      setViewMode('agenda');
+      stateHandled = true;
+    }
+     if (location.state?.openModal) {
+      const type = location.state.type || 'avulsa';
+      setNewReservationSlot({ quadraId: '', time: '', type });
+      setSelectedReservation(null);
+      setIsModalOpen(true);
+      stateHandled = true;
+    }
+    if (stateHandled) navigate(location.pathname, { replace: true });
+  }, [location.state, navigate]);
+
+  const displayedReservations = useMemo(() => {
+    let viewStartDate, viewEndDate;
+
+    if (viewMode === 'calendar') {
+      const monthStart = startOfMonth(selectedDate);
+      const monthEnd = endOfMonth(selectedDate);
+      viewStartDate = startOfDay(subDays(monthStart, getDay(monthStart)));
+      viewEndDate = endOfDay(addDays(monthEnd, 6 - getDay(monthEnd)));
+    } else { // 'agenda' and 'list' now behave similarly regarding date filtering
+      viewStartDate = startOfDay(selectedDate);
+      viewEndDate = endOfDay(selectedDate);
+    }
+
+    let allExpanded = expandRecurringReservations(reservas, viewStartDate, viewEndDate, quadras);
+
+    if (filters.quadraId !== 'all') {
+      allExpanded = allExpanded.filter(r => r.quadra_id === filters.quadraId);
+    }
+    if (filters.status !== 'all') {
+      allExpanded = allExpanded.filter(r => r.status === filters.status);
+    }
+    if (filters.type !== 'all') {
+      allExpanded = allExpanded.filter(r => r.type === filters.type);
+    }
+    if (filters.clientName.trim() !== '') {
+      allExpanded = allExpanded.filter(r => r.clientName?.toLowerCase().includes(filters.clientName.trim().toLowerCase()));
+    }
+    
+    return allExpanded;
+  }, [reservas, selectedDate, quadras, filters, viewMode]);
+
+  const filteredQuadras = useMemo(() => {
+    if (filters.quadraId === 'all') return quadras;
+    return quadras.filter(q => q.id === filters.quadraId);
+  }, [quadras, filters.quadraId]);
+
+  const activeFilterCount = Object.values(filters).filter(value => value !== 'all' && value !== '').length;
+
+  const handleClearFilters = () => {
+    setFilters({ status: 'all', type: 'all', clientName: '', quadraId: 'all' });
+    setIsFilterPanelOpen(false);
+  };
+
+  const handleSaveReservation = async (reservaData: Omit<Reserva, 'id' | 'created_at'> | Reserva) => {
+    if (!arena || !profile) return;
+    const isEditing = !!(reservaData as Reserva).id;
+  
+    try {
+      const startTime = parse(reservaData.start_time, 'HH:mm', new Date());
+      const endTime = parse(reservaData.end_time, 'HH:mm', new Date());
+      if (isBefore(endTime, startTime) || startTime.getTime() === endTime.getTime()) {
+        addToast({ message: "O horário de fim não pode ser anterior ou igual ao horário de início.", type: 'error' });
+        return;
+      }
+      
+      let alunoForReservation: { id: string; profile_id: string | null | undefined; } | null = null;
+      
+      if (reservaData.clientName) {
+        const existingAluno = alunos.find(a => a.name.toLowerCase() === reservaData.clientName.toLowerCase());
+
+        if (existingAluno) {
+            alunoForReservation = existingAluno;
+        } else {
+            const { data: newAlunoData, error: newAlunoError } = await supabase.from('alunos').insert({
+                arena_id: arena.id,
+                name: reservaData.clientName,
+                phone: reservaData.clientPhone || null,
+                email: null,
+                status: 'ativo',
+                plan_name: 'Avulso',
+                join_date: format(new Date(), 'yyyy-MM-dd'),
+            }).select('id, profile_id').single();
+
+            if (newAlunoError) {
+                addToast({ message: `Reserva salva, mas falha ao criar novo cliente: ${newAlunoError.message}`, type: 'info' });
+            } else if (newAlunoData) {
+                alunoForReservation = newAlunoData;
+            }
+        }
+      }
+  
+      const dataToUpsert: Partial<Reserva> = { 
+        ...reservaData, 
+        arena_id: arena.id,
+        profile_id: alunoForReservation?.profile_id || null,
+      };
+      
+      delete (dataToUpsert as any).originalCreditUsed;
+        
+      if (!dataToUpsert.profile_id) {
+        delete dataToUpsert.profile_id;
+      }
+      
+      if (isEditing) {
+        delete dataToUpsert.created_at;
+        delete dataToUpsert.created_by_name;
+      } else {
+        dataToUpsert.created_by_name = profile.name;
+        delete dataToUpsert.id;
+        delete dataToUpsert.created_at;
+      }
+      
+      const { data: savedReserva, error } = await supabase.from('reservas').upsert(dataToUpsert).select().single();
+      if (error) throw error;
+  
+      if (savedReserva && savedReserva.credit_used && savedReserva.credit_used > 0) {
+        const creditAmountUsed = savedReserva.credit_used;
+        const originalCreditUsed = (reservaData as any).originalCreditUsed || 0;
+        const newlyAppliedCredit = creditAmountUsed - originalCreditUsed;
+        
+        if (newlyAppliedCredit > 0 && alunoForReservation?.id) {
+          const { error: rpcError } = await supabase.rpc('add_credit_to_aluno', {
+            aluno_id_to_update: alunoForReservation.id,
+            arena_id_to_check: arena.id,
+            amount_to_add: -newlyAppliedCredit
+          });
+          if (rpcError) throw rpcError;
+  
+          await supabase.from('credit_transactions').insert({
+            aluno_id: alunoForReservation.id,
+            arena_id: arena.id,
+            amount: -newlyAppliedCredit,
+            type: 'reservation_payment',
+            description: `Pagamento da reserva #${savedReserva.id.substring(0, 8)}`,
+            related_reservation_id: savedReserva.id,
+          });
+        }
+      }
+  
+      addToast({ message: `Reserva ${isEditing ? 'atualizada' : 'criada'} com sucesso!`, type: 'success' });
+      closeModal();
+      await loadData();
+  
+    } catch (error: any) {
+      addToast({ message: `Erro ao salvar reserva: ${error.message}`, type: 'error' });
+    }
+  };
+
+  const handleCancelReservation = async (reserva: Reserva) => {
+    const masterId = reserva.masterId || reserva.id;
+
+    const { data: masterReserva, error } = await supabase
+      .from('reservas')
+      .select('*')
+      .eq('id', masterId)
+      .single();
+
+    if (error || !masterReserva) {
+      addToast({ message: 'Erro ao encontrar a reserva original para cancelar.', type: 'error' });
+      return;
+    }
+  
+    if (masterReserva.total_price && masterReserva.total_price > 0) {
+      setReservationToCancel(masterReserva);
+      setIsCancellationModalOpen(true);
+    } else {
+      setReservationToCancel(masterReserva);
+      setIsManualCancelModalOpen(true);
+    }
+    closeModal();
+  };
+
+  const handleConfirmManualCancel = async (reservaId: string) => {
+    try {
+        const { data: reserva, error: fetchError } = await supabase
+            .from('reservas')
+            .select('total_price')
+            .eq('id', reservaId)
+            .single();
+        
+        if (fetchError) throw fetchError;
+
+        const updatePayload: { status: 'cancelada', payment_status?: 'pago' } = { status: 'cancelada' };
+        if (reserva && reserva.total_price && reserva.total_price > 0) {
+            updatePayload.payment_status = 'pago';
+        }
+
+        const { error } = await supabase.from('reservas').update(updatePayload).eq('id', reservaId);
+        if (error) throw error;
+        addToast({ message: 'Reserva cancelada com sucesso!', type: 'success' });
+        await loadData();
+    } catch (error: any) {
+        addToast({ message: `Erro ao cancelar reserva: ${error.message}`, type: 'error' });
+    } finally {
+        setIsManualCancelModalOpen(false);
+        setReservationToCancel(null);
+    }
+  };
+
+  const handleConfirmCancellation = async (reservaId: string, creditAmount: number, reason: string) => {
+    if (!arena) return;
+
+    try {
+        const { data: reserva, error: fetchError } = await supabase
+            .from('reservas')
+            .select('*')
+            .eq('id', reservaId)
+            .single();
+
+        if (fetchError || !reserva) {
+            throw fetchError || new Error('Reserva não encontrada para cancelamento.');
+        }
+
+        const updatePayload: { status: 'cancelada', payment_status?: 'pago' } = { status: 'cancelada' };
+        if (creditAmount === 0 && reserva.total_price && reserva.total_price > 0) {
+            updatePayload.payment_status = 'pago';
+        }
+
+        await supabase.from('reservas').update(updatePayload).eq('id', reservaId);
+
+        if (creditAmount > 0) {
+            let targetAluno: Aluno | undefined = undefined;
+
+            if (reserva.profile_id) {
+                targetAluno = alunos.find(a => a.profile_id === reserva.profile_id);
+            }
+
+            if (!targetAluno && reserva.clientName) {
+                targetAluno = alunos.find(a => a.name === reserva.clientName);
+            }
+
+            if (targetAluno) {
+                const { error: rpcError } = await supabase.rpc('add_credit_to_aluno', {
+                    aluno_id_to_update: targetAluno.id,
+                    arena_id_to_check: arena.id,
+                    amount_to_add: creditAmount
+                });
+                if (rpcError) throw rpcError;
+                
+                await supabase.from('credit_transactions').insert({
+                    aluno_id: targetAluno.id,
+                    arena_id: arena.id,
+                    amount: creditAmount,
+                    type: 'cancellation_credit',
+                    description: `Crédito (${reason}) da reserva #${reserva.id.substring(0, 8)}`,
+                    related_reservation_id: reserva.id,
+                });
+                
+                addToast({ message: 'Reserva cancelada e crédito aplicado com sucesso!', type: 'success' });
+            } else {
+                addToast({ 
+                    message: `Reserva cancelada. O crédito de ${creditAmount.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} deve ser gerenciado manualmente, pois o cliente não foi encontrado.`, 
+                    type: 'info' 
+                });
+            }
+        } else {
+            addToast({ message: 'Reserva cancelada com sucesso!', type: 'success' });
+        }
+
+        setIsCancellationModalOpen(false);
+        setReservationToCancel(null);
+        await loadData();
+
+    } catch (error: any) {
+        addToast({ message: `Erro ao processar cancelamento: ${error.message}`, type: 'error' });
+    }
+  };
+
+  const openNewReservationModal = (quadraId: string, time: string) => {
+    setNewReservationSlot({ quadraId, time, type: 'avulsa' });
+    setSelectedReservation(null);
+    setIsModalOpen(true);
+  };
+  
+  const openNewReservationOnDay = (date: Date, time?: string) => {
+    setSelectedDate(date);
+    setNewReservationSlot({ quadraId: filters.quadraId !== 'all' ? filters.quadraId : '', time: time || '' });
+    setSelectedReservation(null);
     setIsModalOpen(true);
   };
 
-  const handleCloseModal = () => {
+  const openEditReservationModal = (reserva: Reserva) => {
+    const master = reserva.masterId ? reservas.find(r => r.id === reserva.masterId) : reserva;
+    setSelectedReservation(master || null);
+    setNewReservationSlot(null);
+    setIsModalOpen(true);
+  };
+
+  const closeModal = () => {
     setIsModalOpen(false);
-    setSelectedQuadra(null);
+    setSelectedReservation(null);
+    setNewReservationSlot(null);
   };
 
-  const handleSaveQuadra = async (quadraData: Omit<Quadra, 'id' | 'created_at' | 'arena_id'>, photosToUpload: File[], photosToDelete: string[], pricingRules: PricingRule[]) => {
-    if (!user || !arena) return;
-    
-    if (!quadraData.name?.trim()) {
-      addToast({ message: 'O nome da quadra é obrigatório.', type: 'error' });
-      return;
-    }
-
-    try {
-      setIsLoading(true);
-      const { id: quadraId, ...quadraPayload } = quadraData;
-
-      const uploadedPhotoUrls: string[] = [...(quadraData.photos || [])];
-      for (const photo of photosToUpload) {
-        const cleanFileName = photo.name.replace(/[^a-zA-Z0-9.\-_]/g, '');
-        const fileName = `public/${uuidv4()}-${cleanFileName}`;
-        const { data: uploadData, error: uploadError } = await supabase.storage
-          .from('quadra-photos')
-          .upload(fileName, photo);
-
-        if (uploadError) throw uploadError;
-
-        const { data: urlData } = supabase.storage.from('quadra-photos').getPublicUrl(uploadData.path);
-        uploadedPhotoUrls.push(urlData.publicUrl);
-      }
-
-      const photosToRemoveFromStorage = photosToDelete.map(url => url.split('/').pop()!).filter(Boolean);
-      if (photosToRemoveFromStorage.length > 0) {
-        await supabase.storage.from('quadra-photos').remove(photosToRemoveFromStorage);
-      }
-      
-      const finalPhotoUrls = uploadedPhotoUrls.filter(url => !photosToDelete.includes(url));
-
-      const finalQuadraPayload = {
-        ...quadraPayload,
-        photos: finalPhotoUrls,
-        cover_photo: finalPhotoUrls.includes(quadraData.cover_photo as string) ? quadraData.cover_photo : finalPhotoUrls[0] || null,
-        arena_id: arena.id,
-      };
-      
-      delete (finalQuadraPayload as any).pricing_rules;
-
-      let savedQuadra: Quadra;
-      if (quadraId) {
-        const { data, error } = await supabase
-          .from('quadras')
-          .update(finalQuadraPayload)
-          .eq('id', quadraId)
-          .select()
-          .single();
-        if (error) throw error;
-        savedQuadra = data;
-      } else {
-        const { data, error } = await supabase
-          .from('quadras')
-          .insert(finalQuadraPayload)
-          .select()
-          .single();
-        if (error) throw error;
-        savedQuadra = data;
-      }
-
-      // Simplified and robust pricing rule handling: Delete all and re-insert
-      const { error: deleteError } = await supabase
-        .from('pricing_rules')
-        .delete()
-        .eq('quadra_id', savedQuadra.id);
-      
-      if (deleteError) throw deleteError;
-
-      if (pricingRules.length > 0) {
-        const newRulesPayload = pricingRules.map(({ client_id, id, ...rest }) => ({
-          ...rest,
-          quadra_id: savedQuadra.id,
-          arena_id: arena.id,
-        }));
-        const { error: insertError } = await supabase.from('pricing_rules').insert(newRulesPayload);
-        if (insertError) throw insertError;
-      }
-
-      addToast({ message: `Quadra ${quadraId ? 'atualizada' : 'criada'} com sucesso!`, type: 'success' });
-      handleCloseModal();
-      fetchQuadras();
-
-    } catch (error: any) {
-      console.error("Detailed error:", error);
-      addToast({ message: `Erro ao salvar quadra: ${error.message}`, type: 'error' });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleDeleteQuadra = async (id: string) => {
-    if (window.confirm('Tem certeza que deseja excluir esta quadra? Esta ação não pode ser desfeita.')) {
-      try {
-        setIsLoading(true);
-        const { error } = await supabase.from('quadras').delete().eq('id', id);
-        if (error) throw error;
-        addToast({ message: 'Quadra excluída com sucesso.', type: 'success' });
-        fetchQuadras();
-      } catch (error: any) {
-        addToast({ message: `Erro ao excluir quadra: ${error.message}`, type: 'error' });
-      } finally {
-        setIsLoading(false);
-      }
-    }
-  };
-
-  const calculateEstimatedRevenue = (quadra: Quadra): number => {
-    if (quadra.status !== 'ativa' || !quadra.pricing_rules || quadra.pricing_rules.length === 0) {
-        return 0;
-    }
-
-    const defaultRule = quadra.pricing_rules.find(r => r.is_default && r.is_active);
-    let representativePrice = 0;
-    if (defaultRule) {
-        representativePrice = defaultRule.price_single;
-    } else {
-        const activePrices = quadra.pricing_rules.filter(r => r.is_active).map(r => r.price_single);
-        if (activePrices.length > 0) {
-            representativePrice = activePrices.reduce((sum, p) => sum + p, 0) / activePrices.length;
-        }
-    }
-
-    if (representativePrice === 0) return 0;
-
-    const calculateHours = (horario?: { start: string; end: string }): number => {
-        if (!horario || !horario.start || !horario.end) return 0;
-        try {
-            const start = parse(horario.start, 'HH:mm', new Date());
-            let end = parse(horario.end, 'HH:mm', new Date());
-            if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-                return 0;
-            }
-
-            if (end <= start) end = addDays(end, 1);
-            
-            const diff = (end.getTime() - start.getTime()) / (1000 * 60 * 60);
-            return isNaN(diff) || diff < 0 ? 0 : diff;
-        } catch {
-            return 0;
-        }
-    };
-
-    const weekdayHours = calculateHours(quadra.horarios?.weekday);
-    const saturdayHours = calculateHours(quadra.horarios?.saturday);
-    const sundayHours = calculateHours(quadra.horarios?.sunday);
-
-    const today = new Date();
-    const daysInMonth = eachDayOfInterval({ start: startOfMonth(today), end: endOfMonth(today) });
-
-    let totalMonthlyHours = 0;
-    daysInMonth.forEach(day => {
-        const dayOfWeek = getDay(day);
-        if (dayOfWeek === 0) {
-            totalMonthlyHours += sundayHours;
-        } else if (dayOfWeek === 6) {
-            totalMonthlyHours += saturdayHours;
-        } else {
-            totalMonthlyHours += weekdayHours;
-        }
-    });
-    
-    const OCCUPANCY_RATE = 0.70;
-    return totalMonthlyHours * representativePrice * OCCUPANCY_RATE;
+  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newDate = parseDateStringAsLocal(e.target.value);
+    if (!isNaN(newDate.getTime())) setSelectedDate(newDate);
   };
 
   return (
     <Layout>
-      <main className="flex-1 p-4 sm:p-6 bg-brand-gray-50 dark:bg-brand-gray-950">
-        <div className="flex justify-between items-center mb-6">
-          <h1 className="text-2xl font-semibold text-brand-gray-800 dark:text-white">Gerenciamento de Quadras</h1>
-          {activeTab === 'quadras' && (
-            <Button onClick={() => handleOpenModal()}>
-              <Plus className="h-4 w-4 mr-2" />
-              Adicionar Quadra
-            </Button>
-          )}
+      <div className="max-w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="mb-8">
+          <Link to="/dashboard" className="inline-flex items-center text-sm font-medium text-brand-gray-600 dark:text-brand-gray-400 hover:text-brand-blue-500 dark:hover:text-brand-blue-400 transition-colors mb-4"><ArrowLeft className="h-4 w-4 mr-2" />Voltar para o Dashboard</Link>
+          <div>
+            <h1 className="text-3xl font-bold text-brand-gray-900 dark:text-white">Hub de Reservas</h1>
+            <p className="text-brand-gray-600 dark:text-brand-gray-400 mt-2">Visualize e gerencie todas as suas reservas em um só lugar.</p>
+          </div>
         </div>
-
-        <div className="mb-8 border-b border-brand-gray-200 dark:border-brand-gray-700">
-          <nav className="-mb-px flex space-x-4 overflow-x-auto" aria-label="Tabs">
-            <button
-              onClick={() => setActiveTab('quadras')}
-              className={`whitespace-nowrap py-4 px-3 border-b-2 font-medium text-sm flex items-center transition-colors ${
-                activeTab === 'quadras'
-                  ? 'border-brand-blue-500 text-brand-blue-600 dark:text-brand-blue-400'
-                  : 'border-transparent text-brand-gray-500 hover:text-brand-gray-700 hover:border-brand-gray-300 dark:text-brand-gray-400 dark:hover:text-brand-gray-200 dark:hover:border-brand-gray-600'
-              }`}
-            >
-              <LayoutGrid className="mr-2 h-5 w-5" />
-              Minhas Quadras
-            </button>
-            <button
-              onClick={() => setActiveTab('itens')}
-              className={`whitespace-nowrap py-4 px-3 border-b-2 font-medium text-sm flex items-center transition-colors ${
-                activeTab === 'itens'
-                  ? 'border-brand-blue-500 text-brand-blue-600 dark:text-brand-blue-400'
-                  : 'border-transparent text-brand-gray-500 hover:text-brand-gray-700 hover:border-brand-gray-300 dark:text-brand-gray-400 dark:hover:text-brand-gray-200 dark:hover:border-brand-gray-600'
-              }`}
-            >
-              <ShoppingBag className="mr-2 h-5 w-5" />
-              Itens para Aluguel
-            </button>
-            <button
-              onClick={() => setActiveTab('promocoes')}
-              className={`whitespace-nowrap py-4 px-3 border-b-2 font-medium text-sm flex items-center transition-colors ${
-                activeTab === 'promocoes'
-                  ? 'border-brand-blue-500 text-brand-blue-600 dark:text-brand-blue-400'
-                  : 'border-transparent text-brand-gray-500 hover:text-brand-gray-700 hover:border-brand-gray-300 dark:text-brand-gray-400 dark:hover:text-brand-gray-200 dark:hover:border-brand-gray-600'
-              }`}
-            >
-              <Percent className="mr-2 h-5 w-5" />
-              Promoções
-            </button>
-          </nav>
+        <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-4 mb-8 border border-brand-gray-200 dark:border-brand-gray-700">
+          <div className="flex flex-col sm:flex-row justify-between items-center flex-wrap gap-4">
+            <div className="flex items-center space-x-1 bg-brand-gray-100 dark:bg-brand-gray-900 p-1 rounded-lg">
+              {(['agenda', 'calendar', 'list'] as ViewMode[]).map(mode => (
+                <button key={mode} onClick={() => setViewMode(mode)} className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors flex items-center ${viewMode === mode ? 'bg-white dark:bg-brand-gray-700 text-brand-blue-600 dark:text-white shadow' : 'text-brand-gray-600 dark:text-brand-gray-300 hover:bg-white/50 dark:hover:bg-brand-gray-700/50'}`}>
+                  {mode === 'agenda' && <LayoutGrid className="h-4 w-4 inline-block sm:mr-1" />}
+                  {mode === 'calendar' && <Calendar className="h-4 w-4 inline-block sm:mr-1" />}
+                  {mode === 'list' && <List className="h-4 w-4 inline-block sm:mr-1" />}
+                  <span className="capitalize hidden sm:inline-block">{mode}</span>
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center flex-wrap justify-center gap-4">
+              <Input type="date" value={format(selectedDate, 'yyyy-MM-dd')} onChange={handleDateChange} className="py-1.5"/>
+              <div className="relative">
+                <Button variant={activeFilterCount > 0 ? 'primary' : 'outline'} onClick={() => setIsFilterPanelOpen(prev => !prev)}>
+                  <SlidersHorizontal className="h-4 w-4 sm:mr-2" /> <span className="hidden sm:inline">Filtros</span>
+                  {activeFilterCount > 0 && <span className="ml-2 bg-white dark:bg-brand-gray-900 text-brand-blue-500 dark:text-brand-blue-400 text-xs font-bold rounded-full h-5 w-5 flex items-center justify-center">{activeFilterCount}</span>}
+                </Button>
+              </div>
+              <Button onClick={() => openNewReservationModal(filters.quadraId !== 'all' ? filters.quadraId : '', '')}><Plus className="h-4 w-4 sm:mr-2" /> <span className="hidden sm:inline">Nova Reserva</span></Button>
+            </div>
+          </div>
+          <AnimatePresence>{isFilterPanelOpen && <FilterPanel filters={filters} onFilterChange={setFilters} onClearFilters={handleClearFilters} quadras={quadras}/>}</AnimatePresence>
         </div>
-
+        <ReservationLegend />
         <AnimatePresence mode="wait">
-          <motion.div
-            key={activeTab}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-          >
-            {activeTab === 'quadras' ? (
-              <>
-                {isLoading && quadras.length === 0 ? (
-                  <div className="flex justify-center items-center h-64">
-                    <Loader2 className="h-8 w-8 animate-spin text-brand-blue-500" />
-                  </div>
-                ) : quadras.length > 0 ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-                    {quadras.map((quadra, index) => {
-                      const revenue = calculateEstimatedRevenue(quadra);
-                      return (
-                        <QuadraCard
-                          key={quadra.id}
-                          index={index}
-                          quadra={quadra}
-                          onEdit={() => handleOpenModal(quadra)}
-                          onDelete={() => handleDeleteQuadra(quadra.id)}
-                          monthlyEstimatedRevenue={revenue}
-                        />
-                      );
-                    })}
-                  </div>
-                ) : (
-                  <div className="text-center py-12 px-6 bg-white dark:bg-brand-gray-900 rounded-lg shadow-sm">
-                    <h3 className="text-lg font-medium text-brand-gray-800 dark:text-white">Nenhuma quadra cadastrada</h3>
-                    <p className="mt-2 text-sm text-brand-gray-500 dark:text-brand-gray-400">Comece adicionando sua primeira quadra para gerenciar reservas e horários.</p>
-                    <Button className="mt-4" onClick={() => handleOpenModal()}>
-                      <Plus className="h-4 w-4 mr-2" />
-                      Adicionar Primeira Quadra
-                    </Button>
-                  </div>
-                )}
-              </>
-            ) : activeTab === 'itens' ? (
-              <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-6 border border-brand-gray-200 dark:border-brand-gray-700">
-                <RentalItemsTab />
-              </div>
-            ) : (
-              <div className="bg-white dark:bg-brand-gray-800 rounded-xl shadow-lg p-6 border border-brand-gray-200 dark:border-brand-gray-700">
-                <DiscountsTab />
-              </div>
-            )}
+          <motion.div key={viewMode + filters.quadraId} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} transition={{ duration: 0.3 }}>
+            {isLoading ? <div className="text-center py-16"><Loader2 className="w-8 h-8 border-4 border-brand-blue-500 border-t-transparent rounded-full animate-spin mx-auto" /></div> : (() => {
+              switch (viewMode) {
+                case 'agenda': return <AgendaView quadras={filteredQuadras} reservas={displayedReservations} selectedDate={selectedDate} onSlotClick={openNewReservationModal} onReservationClick={openEditReservationModal} />;
+                case 'calendar': return <CalendarView quadras={quadras} reservas={displayedReservations} onReservationClick={openEditReservationModal} selectedDate={selectedDate} onDateChange={setSelectedDate} onDayDoubleClick={openNewReservationOnDay} onSlotClick={openNewReservationOnDay} />;
+                case 'list': return <ListView quadras={quadras} reservas={displayedReservations} onReservationClick={openEditReservationModal} />;
+                default: return null;
+              }
+            })()}
           </motion.div>
         </AnimatePresence>
-      </main>
-
+      </div>
       <AnimatePresence>
-        {isModalOpen && (
-          <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50" onClick={handleCloseModal}>
-            <motion.div
-              initial={{ opacity: 0, y: 50 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 50 }}
-              className="bg-white dark:bg-brand-gray-900 rounded-lg w-full max-w-4xl shadow-xl flex flex-col max-h-[95vh]"
-              onClick={e => e.stopPropagation()}
-            >
-              <QuadraFormTabs
-                initialData={selectedQuadra}
-                onSave={handleSaveQuadra}
-                onClose={handleCloseModal}
-                addToast={addToast}
-              />
-            </motion.div>
-          </div>
+        {isModalOpen && <ReservationModal isOpen={isModalOpen} onClose={closeModal} onSave={handleSaveReservation} onCancelReservation={handleCancelReservation} reservation={selectedReservation} newReservationSlot={newReservationSlot} quadras={quadras} alunos={alunos} allReservations={reservas} arenaId={arena?.id || ''} selectedDate={selectedDate} />}
+      </AnimatePresence>
+      <AnimatePresence>
+        {isCancellationModalOpen && (
+            <CancellationModal
+                isOpen={isCancellationModalOpen}
+                onClose={() => {
+                    setIsCancellationModalOpen(false);
+                    setReservationToCancel(null);
+                }}
+                onConfirm={handleConfirmCancellation}
+                reserva={reservationToCancel}
+            />
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {isManualCancelModalOpen && (
+            <ManualCancellationModal
+                isOpen={isManualCancelModalOpen}
+                onClose={() => {
+                    setIsManualCancelModalOpen(false);
+                    setReservationToCancel(null);
+                }}
+                onConfirm={() => reservationToCancel && handleConfirmManualCancel(reservationToCancel.id)}
+                reservaName={reservationToCancel?.clientName || 'Reserva'}
+            />
         )}
       </AnimatePresence>
     </Layout>
   );
 };
 
-export default Quadras;
+export default Reservations;

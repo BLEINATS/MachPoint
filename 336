@@ -1,99 +1,98 @@
 /*
-# [SECURITY] Secure `handle_reservation_completion` Function
-This operation secures the `handle_reservation_completion` function, which is responsible for awarding gamification points when a reservation is completed.
+          # [SECURITY] Add Row-Level Security Policies to 'reservas' table
+          This migration enables Row-Level Security (RLS) on the 'reservas' table and adds policies to allow users to manage their own reservations and admins to manage all reservations in their arena.
 
-## Query Description: [This operation will temporarily drop and then recreate the trigger that uses this function. It sets a secure search path to prevent potential vulnerabilities. There is no risk to existing data, and the change is fully reversible.]
+          ## Query Description:
+          - Enables RLS on the 'reservas' table.
+          - Creates policies for SELECT, INSERT, UPDATE, and DELETE, allowing authenticated users to perform these actions only on rows where their user ID matches the 'profile_id'.
+          - Creates a policy to give full access to arena administrators for reservations within their own arena.
+          - This operation is safe and does not affect existing data, but it enforces new access rules.
 
-## Metadata:
-- Schema-Category: ["Structural"]
-- Impact-Level: ["Low"]
-- Requires-Backup: [false]
-- Reversible: [true]
+          ## Metadata:
+          - Schema-Category: "Security"
+          - Impact-Level: "Medium"
+          - Requires-Backup: false
+          - Reversible: true
 
-## Structure Details:
-- Drops trigger: `on_reservation_completed_add_points` on table `reservas`.
-- Recreates function: `handle_reservation_completion()`.
-- Adds `SECURITY DEFINER` and sets `search_path`.
-- Recreates trigger: `on_reservation_completed_add_points` on table `reservas`.
+          ## Structure Details:
+          - Table Affected: public.reservas
 
-## Security Implications:
-- RLS Status: [Not Applicable]
-- Policy Changes: [No]
-- Auth Requirements: [None]
+          ## Security Implications:
+          - RLS Status: Enabled
+          - Policy Changes: Yes, new policies are added for 'reservas'.
+          - Auth Requirements: Policies are based on `auth.uid()` and the user's role in the `profiles` table.
+          
+          ## Performance Impact:
+          - Indexes: None
+          - Triggers: None
+          - Estimated Impact: Negligible. RLS checks are highly optimized in PostgreSQL.
+          */
 
-## Performance Impact:
-- Indexes: [None]
-- Triggers: [Modified]
-- Estimated Impact: [Negligible. The trigger is momentarily unavailable during the transaction but is restored immediately.]
-*/
+-- Enable RLS on the 'reservas' table
+ALTER TABLE public.reservas ENABLE ROW LEVEL SECURITY;
 
--- 1. Drop the existing trigger that depends on the function
-DROP TRIGGER IF EXISTS on_reservation_completed_add_points ON public.reservas;
+-- Drop existing policies if they exist to avoid conflicts
+DROP POLICY IF EXISTS "Allow authenticated users to select their own reservations" ON public.reservas;
+DROP POLICY IF EXISTS "Allow authenticated users to insert their own reservations" ON public.reservas;
+DROP POLICY IF EXISTS "Allow authenticated users to update their own reservations" ON public.reservas;
+DROP POLICY IF EXISTS "Allow authenticated users to delete their own reservations" ON public.reservas;
+DROP POLICY IF EXISTS "Allow admin users full access to arena reservations" ON public.reservas;
 
--- 2. Recreate the function with security settings
-CREATE OR REPLACE FUNCTION public.handle_reservation_completion()
-RETURNS TRIGGER AS $$
-DECLARE
-    v_aluno_id UUID;
-    v_arena_id UUID;
-    v_settings RECORD;
-    v_points_to_add INT;
-BEGIN
-    -- Only run for 'confirmada' to 'realizada' transitions
-    IF OLD.status = 'confirmada' AND NEW.status = 'realizada' THEN
-        -- Find the corresponding aluno profile
-        SELECT id, arena_id INTO v_aluno_id, v_arena_id
-        FROM public.alunos
-        WHERE profile_id = NEW.profile_id
-        LIMIT 1;
 
-        -- If an aluno profile exists for this user in this arena
-        IF v_aluno_id IS NOT NULL THEN
-            -- Get gamification settings for the arena
-            SELECT is_enabled, points_per_reservation, points_per_real
-            INTO v_settings
-            FROM public.gamification_settings
-            WHERE arena_id = v_arena_id
-            LIMIT 1;
+-- Policy for SELECT: Users can see their own reservations.
+CREATE POLICY "Allow authenticated users to select their own reservations"
+ON public.reservas FOR SELECT
+TO authenticated
+USING (auth.uid() = profile_id);
 
-            -- If gamification is enabled
-            IF v_settings.is_enabled THEN
-                v_points_to_add := 0;
+-- Policy for INSERT: Users can create reservations for themselves.
+CREATE POLICY "Allow authenticated users to insert their own reservations"
+ON public.reservas FOR INSERT
+TO authenticated
+WITH CHECK (auth.uid() = profile_id);
 
-                -- Add points for the reservation itself
-                IF v_settings.points_per_reservation > 0 THEN
-                    v_points_to_add := v_points_to_add + v_settings.points_per_reservation;
-                END IF;
+-- Policy for UPDATE: Users can update their own reservations.
+CREATE POLICY "Allow authenticated users to update their own reservations"
+ON public.reservas FOR UPDATE
+TO authenticated
+USING (auth.uid() = profile_id)
+WITH CHECK (auth.uid() = profile_id);
 
-                -- Add points based on the value of the reservation
-                IF v_settings.points_per_real > 0 AND NEW.total_price > 0 THEN
-                    v_points_to_add := v_points_to_add + floor(NEW.total_price * v_settings.points_per_real);
-                END IF;
+-- Policy for DELETE: Users can delete their own reservations.
+CREATE POLICY "Allow authenticated users to delete their own reservations"
+ON public.reservas FOR DELETE
+TO authenticated
+USING (auth.uid() = profile_id);
 
-                -- If there are points to add, call the function
-                IF v_points_to_add > 0 THEN
-                    PERFORM public.add_gamification_points(
-                        p_aluno_id := v_aluno_id,
-                        p_points_to_add := v_points_to_add,
-                        p_description := 'Conclusão da reserva #' || substr(NEW.id::text, 1, 8),
-                        p_transaction_type := 'reservation_completed',
-                        p_related_reservation_id := NEW.id,
-                        p_arena_id := v_arena_id
-                    );
-                END IF;
-            END IF;
-        END IF;
-    END IF;
-
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- Set a secure search path for the function
-ALTER FUNCTION public.handle_reservation_completion() SET search_path = public;
-
--- 3. Recreate the trigger
-CREATE TRIGGER on_reservation_completed_add_points
-AFTER UPDATE OF status ON public.reservas
-FOR EACH ROW
-EXECUTE FUNCTION public.handle_reservation_completion();
+-- Policy for Arena Admins: Allow full access to reservations within their arena.
+CREATE POLICY "Allow admin users full access to arena reservations"
+ON public.reservas FOR ALL
+TO authenticated
+USING (
+  (
+    SELECT role
+    FROM public.profiles
+    WHERE id = auth.uid()
+  ) = 'admin_arena'::text
+  AND
+  arena_id = (
+    SELECT id
+    FROM public.arenas
+    WHERE owner_id = auth.uid()
+    LIMIT 1
+  )
+)
+WITH CHECK (
+  (
+    SELECT role
+    FROM public.profiles
+    WHERE id = auth.uid()
+  ) = 'admin_arena'::text
+  AND
+  arena_id = (
+    SELECT id
+    FROM public.arenas
+    WHERE owner_id = auth.uid()
+    LIMIT 1
+  )
+);

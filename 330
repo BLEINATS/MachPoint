@@ -1,95 +1,107 @@
 /*
-          # [Fix] Recriar Tipo de Transação de Gamificação e Função Dependente
-          [Este script corrige um erro de tipo de dado ausente, recriando o ENUM 'gamification_point_transaction_type' e a função 'add_gamification_points' que o utiliza.]
+          # [Function Security] Secure Client Cancellation Function
+          [This operation secures the client cancellation function by setting a strict search_path.]
 
-          ## Query Description: [Este script primeiro cria um tipo de dado personalizado para transações de gamificação e, em seguida, recria a função que adiciona pontos para usar esse tipo. Esta operação é segura e não afeta dados existentes, apenas corrige a estrutura do banco de dados para permitir que as migrações continuem.]
+          ## Query Description: [This operation will recreate the `handle_client_cancellation_final` function to include `SET search_path = ''`. This is a security best practice to prevent hijacking attacks by ensuring the function only uses objects from schemas explicitly defined. It does not change the function's logic.]
           
           ## Metadata:
-          - Schema-Category: ["Structural"]
+          - Schema-Category: ["Security"]
           - Impact-Level: ["Low"]
           - Requires-Backup: [false]
-          - Reversible: [false]
+          - Reversible: [true]
           
           ## Structure Details:
-          - Cria o tipo ENUM 'gamification_point_transaction_type'.
-          - Recria a função 'add_gamification_points' para usar o novo tipo.
+          - Function: `public.handle_client_cancellation_final(uuid)`
           
           ## Security Implications:
-          - RLS Status: [Enabled]
+          - RLS Status: [Not Applicable]
           - Policy Changes: [No]
-          - Auth Requirements: [admin]
+          - Auth Requirements: [authenticated]
           
           ## Performance Impact:
           - Indexes: [No]
           - Triggers: [No]
-          - Estimated Impact: [Nenhum impacto de performance esperado.]
+          - Estimated Impact: [None. This is a security enhancement with no expected performance impact.]
           */
 
--- Step 1: Drop the function if it exists to avoid conflicts
-DROP FUNCTION IF EXISTS public.add_gamification_points(uuid, integer, text);
+DROP FUNCTION IF EXISTS public.handle_client_cancellation_final(uuid);
 
--- Step 2: Create the ENUM type if it doesn't exist
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'gamification_point_transaction_type') THEN
-        CREATE TYPE public.gamification_point_transaction_type AS ENUM (
-            'reservation_completed',
-            'manual_adjustment',
-            'achievement_unlocked',
-            'reward_redemption'
-        );
-    END IF;
-END$$;
-
--- Step 3: Recreate the function with the correct type
-CREATE OR REPLACE FUNCTION public.add_gamification_points(
-    p_aluno_id uuid,
-    p_points_to_add integer,
-    p_description text,
-    p_transaction_type public.gamification_point_transaction_type DEFAULT 'manual_adjustment'::public.gamification_point_transaction_type,
-    p_related_reservation_id uuid DEFAULT NULL,
-    p_related_achievement_id uuid DEFAULT NULL
-)
-RETURNS void
+CREATE OR REPLACE FUNCTION public.handle_client_cancellation_final(p_reserva_id uuid)
+RETURNS json
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
 AS $$
 DECLARE
-    v_arena_id uuid;
-    v_new_total_points integer;
+  v_reserva RECORD;
+  v_aluno RECORD;
+  v_arena RECORD;
+  v_credit_amount NUMERIC := 0;
+  v_policy_text TEXT;
+  v_cancellation_reason TEXT;
+  v_hours_until_reservation INT;
 BEGIN
-    -- Get the arena_id from the aluno
-    SELECT arena_id INTO v_arena_id
-    FROM public.alunos
-    WHERE id = p_aluno_id;
+  -- Set a secure search_path
+  SET search_path = '';
 
-    IF v_arena_id IS NULL THEN
-        RAISE EXCEPTION 'Aluno com ID % não encontrado.', p_aluno_id;
+  -- Get reservation details
+  SELECT * INTO v_reserva FROM public.reservas WHERE id = p_reserva_id;
+
+  -- Check if reservation exists
+  IF v_reserva IS NULL THEN
+    RETURN json_build_object('success', false, 'message', 'Reserva não encontrada.');
+  END IF;
+
+  -- Check if the user is authorized to cancel this reservation
+  IF v_reserva.profile_id IS NULL OR v_reserva.profile_id != auth.uid() THEN
+    RETURN json_build_object('success', false, 'message', 'Você não tem permissão para cancelar esta reserva.');
+  END IF;
+
+  -- Get arena details to fetch cancellation policy
+  SELECT cancellation_policy INTO v_policy_text FROM public.arenas WHERE id = v_reserva.arena_id;
+
+  -- Calculate hours until reservation
+  v_hours_until_reservation := EXTRACT(EPOCH FROM (v_reserva.date + v_reserva.start_time - now())) / 3600;
+
+  -- Cancellation logic
+  IF v_hours_until_reservation >= 24 THEN
+    v_credit_amount := v_reserva.total_price;
+    v_cancellation_reason := 'Cancelamento com +24h de antecedência';
+  ELSIF v_hours_until_reservation >= 12 THEN
+    v_credit_amount := v_reserva.total_price * 0.5;
+    v_cancellation_reason := 'Cancelamento entre 12h e 24h';
+  ELSE
+    v_credit_amount := 0;
+    v_cancellation_reason := 'Cancelamento com -12h de antecedência';
+  END IF;
+
+  -- Update reservation status
+  UPDATE public.reservas
+  SET status = 'cancelada'
+  WHERE id = p_reserva_id;
+
+  -- Add credit if applicable
+  IF v_credit_amount > 0 THEN
+    -- Find the corresponding 'aluno' profile
+    SELECT * INTO v_aluno FROM public.alunos WHERE profile_id = v_reserva.profile_id AND arena_id = v_reserva.arena_id;
+    
+    IF v_aluno IS NOT NULL THEN
+      -- Add credit using the dedicated function
+      PERFORM public.add_credit_to_aluno(v_aluno.id, v_reserva.arena_id, v_credit_amount);
+
+      -- Log the credit transaction
+      INSERT INTO public.credit_transactions (aluno_id, arena_id, amount, type, description, related_reservation_id)
+      VALUES (v_aluno.id, v_reserva.arena_id, v_credit_amount, 'cancellation_credit', v_cancellation_reason, p_reserva_id);
+    ELSE
+      -- Handle case where aluno profile is not found (should be rare)
+      RETURN json_build_object('success', true, 'message', 'Reserva cancelada, mas o perfil de cliente não foi encontrado para aplicar o crédito.');
     END IF;
+  END IF;
 
-    -- Insert the transaction
-    INSERT INTO public.gamification_point_transactions (arena_id, aluno_id, points, type, description, related_reservation_id, related_achievement_id)
-    VALUES (v_arena_id, p_aluno_id, p_points_to_add, p_transaction_type, p_description, p_related_reservation_id, p_related_achievement_id);
-
-    -- Update the total points on the alunos table
-    UPDATE public.alunos
-    SET gamification_points = COALESCE(gamification_points, 0) + p_points_to_add
-    WHERE id = p_aluno_id
-    RETURNING gamification_points INTO v_new_total_points;
-
-    -- Update the level based on the new total points
-    UPDATE public.alunos
-    SET gamification_level_id = (
-        SELECT id
-        FROM public.gamification_levels
-        WHERE arena_id = v_arena_id
-          AND points_required <= v_new_total_points
-        ORDER BY points_required DESC
-        LIMIT 1
-    )
-    WHERE id = p_aluno_id;
+  RETURN json_build_object('success', true, 'message', 'Reserva cancelada com sucesso.', 'credit_added', v_credit_amount);
+EXCEPTION
+  WHEN others THEN
+    RETURN json_build_object('success', false, 'message', 'Ocorreu um erro inesperado: ' || SQLERRM);
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.add_gamification_points(uuid, integer, text, public.gamification_point_transaction_type, uuid, uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.handle_client_cancellation_final(uuid) TO authenticated;

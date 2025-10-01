@@ -1,24 +1,52 @@
 /*
-  # [Structural] Torna o E-mail de Alunos Opcional
-  ## Query Description:
-  Este script modifica a tabela `alunos` para tornar o campo `email` opcional. Atualmente, ele é obrigatório, o que força o sistema a criar um e-mail temporário ("placeholder-...") ao cadastrar um cliente durante uma reserva. Esta alteração permitirá que o campo fique em branco. O script também limpará os e-mails temporários existentes, definindo-os como nulos.
-  **Impacto:** O campo de e-mail não será mais obrigatório ao criar um novo aluno. Os e-mails temporários existentes serão removidos.
-  ## Metadata:
-  - Schema-Category: "Structural"
-  - Impact-Level: "Low"
-  - Requires-Backup: false
-  - Reversible: true
-  ## Structure Details:
-  - Tabela `alunos`: A coluna `email` passará a aceitar valores nulos.
-  ## Security Implications:
-  - RLS Status: Sem alterações.
-  - Policy Changes: Não.
-  - Auth Requirements: Sem alterações.
+# [Fix] Corrigir a Função de Adicionar Crédito
+[Este script corrige a implementação da função `add_credit_to_profile` para usar o método correto de verificação de permissão dentro de um contexto SECURITY DEFINER.]
+## Query Description: [A versão anterior da função usava `auth.uid()`, que não funciona como esperado em funções `SECURITY DEFINER`. Esta nova versão usa `(current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid` para obter o ID do usuário que está chamando a função, garantindo que a verificação de dono da arena funcione corretamente. Isso permite que o saldo de crédito seja atualizado de forma segura, resolvendo o bug em que os créditos não eram salvos.]
+## Metadata:
+- Schema-Category: ["Structural"]
+- Impact-Level: ["Low"]
+- Requires-Backup: [false]
+- Reversible: [true]
+## Structure Details:
+- Function Modified: `public.add_credit_to_profile`
+## Security Implications:
+- RLS Status: [N/A]
+- Policy Changes: [No]
+- Auth Requirements: [A função continua segura, verificando se o chamador é o dono da arena antes de permitir a atualização do saldo de crédito.]
+## Performance Impact:
+- Indexes: [N/A]
+- Triggers: [None]
+- Estimated Impact: [Baixo. A lógica da função foi corrigida, sem impacto de desempenho.]
 */
--- Passo 1: Remover a restrição NOT NULL da coluna de e-mail
-ALTER TABLE public.alunos ALTER COLUMN email DROP NOT NULL;
+CREATE OR REPLACE FUNCTION public.add_credit_to_profile(
+    profile_id_to_update UUID,
+    arena_id_to_check UUID,
+    amount_to_add NUMERIC
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+  caller_id UUID;
+BEGIN
+  -- Obtém o UID do usuário que está chamando a função a partir do JWT.
+  -- Este é o método correto para obter o ID do chamador dentro de uma função SECURITY DEFINER.
+  caller_id := (current_setting('request.jwt.claims', true)::jsonb ->> 'sub')::uuid;
 
--- Passo 2: Limpar os e-mails temporários existentes, definindo-os como NULL
-UPDATE public.alunos
-SET email = NULL
-WHERE email LIKE 'placeholder-%@matchplay.com';
+  -- Verifica se o chamador é o dono da arena.
+  IF EXISTS (
+    SELECT 1
+    FROM public.arenas
+    WHERE id = arena_id_to_check AND owner_id = caller_id
+  ) THEN
+    -- Se a verificação for bem-sucedida, atualiza o saldo de crédito.
+    UPDATE public.profiles
+    SET credit_balance = credit_balance + amount_to_add
+    WHERE id = profile_id_to_update;
+  ELSE
+    -- Se o usuário não for o dono, lança um erro.
+    RAISE EXCEPTION 'Permissão negada. Você não é o dono desta arena.';
+  END IF;
+END;
+$$;

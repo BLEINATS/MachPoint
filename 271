@@ -1,116 +1,105 @@
 /*
-  ## MIGRATION: Fix Reservation Creation Function (Robust)
-  ### Description:
-  This migration fixes a persistent error ("type does not exist") by changing the function signature to not depend directly on the custom ENUM type.
-  ### Changes:
-  1.  **Ensures `reservation_status` ENUM type exists**: This is still needed for the table column.
-  2.  **Drops old versions of the function**: Removes any previous, faulty versions to prevent conflicts.
-  3.  **Recreates the function `create_reservation_with_credit_v2`**: The `p_status` parameter is now `text` instead of `public.reservation_status` to avoid parsing errors. The function body remains the same, relying on implicit casting when inserting into the table.
-  4.  **Grants permissions**: Ensures that authenticated users can execute this function.
-  This approach is more robust and should resolve the migration error.
+# [Operation Name]
+Fix Credit Cancellation Logic
+
+## Query Description: [This operation adjusts the credit system to correctly handle cancellations for all client types. It modifies the `credit_transactions` table to allow for logging transactions for clients who are not registered platform users, and updates the cancellation function to use this new flexibility. This ensures that all clients receive credit correctly upon cancellation, improving data consistency.]
+
+## Metadata:
+- Schema-Category: "Structural"
+- Impact-Level: "Medium"
+- Requires-Backup: false
+- Reversible: true
+
+## Structure Details:
+- Modifies `credit_transactions` table: makes `profile_id` column nullable.
+- Replaces `handle_client_cancellation_final` function: improves logic for finding client profiles and logging transactions.
+
+## Security Implications:
+- RLS Status: Unchanged
+- Policy Changes: No
+- Auth Requirements: None
+
+## Performance Impact:
+- Indexes: None
+- Triggers: None
+- Estimated Impact: Low. The changes affect a function call during cancellation, which is not a high-frequency operation.
 */
 
--- Step 1: Ensure the ENUM type exists for the table column.
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'reservation_status') THEN
-        CREATE TYPE public.reservation_status AS ENUM ('confirmada', 'pendente', 'cancelada');
-    END IF;
-END$$;
+-- Step 1: Make profile_id nullable in credit_transactions
+ALTER TABLE public.credit_transactions
+ALTER COLUMN profile_id DROP NOT NULL;
 
--- Step 2: Drop any previous versions of the function to avoid conflicts.
--- Try dropping with all possible old signatures.
-DROP FUNCTION IF EXISTS public.create_reservation_with_credit_v2(uuid,uuid,uuid,text,text,date,time,time,public.reservation_status,text,numeric,numeric,text,text,text,boolean,text,date,jsonb);
-DROP FUNCTION IF EXISTS public.create_reservation_with_credit_v2(uuid,uuid,uuid,text,text,date,time,time,text,text,numeric,numeric,text,text,text,boolean,text,date,jsonb);
-
--- Step 3: Create the new, correct version of the function with a `text` parameter for status.
-CREATE OR REPLACE FUNCTION public.create_reservation_with_credit_v2(
-    p_arena_id uuid,
-    p_quadra_id uuid,
-    p_profile_id uuid,
-    p_client_name text,
-    p_client_phone text,
-    p_date date,
-    p_start_time time,
-    p_end_time time,
-    p_status text, -- Changed to TEXT
-    p_type text,
-    p_total_price numeric,
-    p_credit_to_use numeric,
-    p_payment_status text,
-    p_sport_type text,
-    p_notes text,
-    p_is_recurring boolean,
-    p_recurring_type text,
-    p_recurring_end_date date,
-    p_rented_items jsonb
-)
-RETURNS uuid
+-- Step 2: Update the cancellation function to handle all client types
+CREATE OR REPLACE FUNCTION public.handle_client_cancellation_final(p_reserva_id uuid)
+RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
 AS $$
 DECLARE
-    v_aluno_id uuid;
-    v_new_reserva_id uuid;
-    v_final_total_price numeric;
-    v_final_payment_status text;
+  v_reserva RECORD;
+  v_aluno_profile RECORD;
+  v_credit_amount NUMERIC;
+  v_hours_until_reservation INT;
 BEGIN
-    -- 1. Find or create the 'aluno' profile
-    IF p_profile_id IS NOT NULL THEN
-        SELECT id INTO v_aluno_id FROM public.alunos
-        WHERE arena_id = p_arena_id AND profile_id = p_profile_id;
-        IF v_aluno_id IS NULL THEN
-            INSERT INTO public.alunos (arena_id, profile_id, name, phone, status, join_date, plan_name)
-            VALUES (p_arena_id, p_profile_id, p_client_name, p_client_phone, 'ativo', CURRENT_DATE, 'Avulso')
-            RETURNING id INTO v_aluno_id;
-        END IF;
+  -- 1. Fetch reservation details
+  SELECT * INTO v_reserva FROM public.reservas WHERE id = p_reserva_id;
+
+  IF v_reserva IS NULL THEN
+    RAISE EXCEPTION 'Reserva não encontrada.';
+  END IF;
+
+  -- 2. Calculate hours until reservation
+  v_hours_until_reservation := EXTRACT(EPOCH FROM (v_reserva.date + v_reserva.start_time - NOW())) / 3600;
+
+  -- 3. Determine credit amount based on policy
+  IF v_hours_until_reservation >= 24 THEN
+    v_credit_amount := v_reserva.total_price;
+  ELSIF v_hours_until_reservation >= 12 THEN
+    v_credit_amount := v_reserva.total_price * 0.5;
+  ELSE
+    v_credit_amount := 0;
+  END IF;
+
+  -- 4. Update reservation status
+  UPDATE public.reservas
+  SET status = 'cancelada'
+  WHERE id = p_reserva_id;
+
+  -- 5. Apply credit and log transaction if applicable
+  IF v_credit_amount > 0 THEN
+    -- Find the 'aluno' profile.
+    -- First, try by profile_id, which is the most reliable link.
+    IF v_reserva.profile_id IS NOT NULL THEN
+      SELECT * INTO v_aluno_profile FROM public.alunos WHERE profile_id = v_reserva.profile_id AND arena_id = v_reserva.arena_id LIMIT 1;
     END IF;
 
-    -- 2. Handle credit usage
-    v_final_total_price := p_total_price;
-    v_final_payment_status := p_payment_status;
-
-    IF p_credit_to_use > 0 AND v_aluno_id IS NOT NULL THEN
-        -- Deduct credit from aluno's balance
-        UPDATE public.alunos
-        SET credit_balance = coalesce(credit_balance, 0) - p_credit_to_use
-        WHERE id = v_aluno_id;
-
-        -- Record the credit transaction
-        INSERT INTO public.credit_transactions (aluno_id, arena_id, amount, type, description)
-        VALUES (v_aluno_id, p_arena_id, -p_credit_to_use, 'reservation_payment', 'Pagamento da reserva');
-        
-        -- Adjust final price and payment status
-        v_final_total_price := p_total_price - p_credit_to_use;
-        IF v_final_total_price <= 0 THEN
-            v_final_payment_status := 'pago';
-        END IF;
+    -- If not found by profile_id (or if profile_id was null), try by name. This is less reliable but a good fallback.
+    IF v_aluno_profile IS NULL AND v_reserva."clientName" IS NOT NULL THEN
+      SELECT * INTO v_aluno_profile FROM public.alunos WHERE name = v_reserva."clientName" AND arena_id = v_reserva.arena_id LIMIT 1;
     END IF;
 
-    -- 3. Insert the new reservation
-    INSERT INTO public.reservas (
-        arena_id, quadra_id, profile_id, clientName, clientPhone, date, start_time, end_time, 
-        status, type, total_price, credit_used, payment_status, sport_type, notes, 
-        isRecurring, recurringType, recurringEndDate, rented_items, aluno_id
-    ) VALUES (
-        p_arena_id, p_quadra_id, p_profile_id, p_client_name, p_client_phone, p_date, p_start_time, p_end_time,
-        p_status::public.reservation_status, p_type, v_final_total_price, p_credit_to_use, v_final_payment_status, p_sport_type, p_notes,
-        p_is_recurring, p_recurring_type, p_recurring_end_date, p_rented_items, v_aluno_id
-    ) RETURNING id INTO v_new_reserva_id;
-
-    -- Update credit transaction with reservation ID
-    IF p_credit_to_use > 0 AND v_aluno_id IS NOT NULL THEN
-        UPDATE public.credit_transactions
-        SET related_reservation_id = v_new_reserva_id
-        WHERE aluno_id = v_aluno_id AND type = 'reservation_payment' AND related_reservation_id IS NULL
-        ORDER BY created_at DESC
-        LIMIT 1;
+    -- If we still can't find the aluno, we can't apply credit.
+    IF v_aluno_profile IS NULL THEN
+      RAISE NOTICE 'Perfil de aluno não encontrado para a reserva. Crédito não aplicado.';
+      RETURN;
     END IF;
 
-    RETURN v_new_reserva_id;
+    -- Update aluno's credit balance
+    UPDATE public.alunos
+    SET credit_balance = credit_balance + v_credit_amount
+    WHERE id = v_aluno_profile.id;
+
+    -- Insert into credit transactions log. profile_id can now be null.
+    INSERT INTO public.credit_transactions (aluno_id, arena_id, amount, type, description, related_reservation_id, profile_id)
+    VALUES (
+      v_aluno_profile.id,
+      v_reserva.arena_id,
+      v_credit_amount,
+      'cancellation_credit',
+      'Crédito de cancelamento da reserva #' || SUBSTRING(v_reserva.id::text, 1, 8),
+      v_reserva.id,
+      v_aluno_profile.profile_id -- This can be null, and the table now allows it.
+    );
+  END IF;
 END;
 $$;
-
--- Step 4: Grant permissions
-GRANT EXECUTE ON FUNCTION public.create_reservation_with_credit_v2(uuid,uuid,uuid,text,text,date,time,time,text,text,numeric,numeric,text,text,text,boolean,text,date,jsonb) TO authenticated;

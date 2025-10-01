@@ -1,123 +1,73 @@
 import React from 'react';
-import { GamificationAchievement } from '../../types';
-import Button from '../Forms/Button';
+import { GamificationSettings } from '../../types';
 import Input from '../Forms/Input';
-import { Plus, Trash2, Star } from 'lucide-react';
-import { v4 as uuidv4 } from 'uuid';
-import * as LucideIcons from 'lucide-react';
+import { ToggleSwitch } from './ToggleSwitch';
+import { Info } from 'lucide-react';
 
-// Componente para renderizar ícones dinamicamente
-const DynamicIcon = ({ name, ...props }: { name: string } & React.ComponentProps<typeof LucideIcons.Icon>) => {
-  const IconComponent = (LucideIcons as any)[name];
-  if (!IconComponent) {
-    return <Star {...props} />; // Ícone padrão
-  }
-  return <IconComponent {...props} />;
-};
-
-interface AchievementsSettingsProps {
-  achievements: GamificationAchievement[];
-  setAchievements: React.Dispatch<React.SetStateAction<GamificationAchievement[]>>;
+interface GeneralSettingsProps {
+  settings: GamificationSettings | null;
+  setSettings: React.Dispatch<React.SetStateAction<GamificationSettings | null>>;
 }
 
-const AchievementsSettings: React.FC<AchievementsSettingsProps> = ({ achievements, setAchievements }) => {
-  const handleAchievementChange = (id: string, field: keyof GamificationAchievement, value: any) => {
-    setAchievements(prev => prev.map(ach => ach.id === id ? { ...ach, [field]: value } : ach));
+const GeneralSettings: React.FC<GeneralSettingsProps> = ({ settings, setSettings }) => {
+  if (!settings) return null;
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const { name, value } = e.target;
+    setSettings(prev => prev ? { ...prev, [name]: Number(value) } : null);
   };
 
-  const addAchievement = () => {
-    setAchievements(prev => [
-      ...prev,
-      {
-        id: uuidv4(),
-        arena_id: '',
-        name: 'Nova Conquista',
-        description: '',
-        type: 'first_reservation',
-        points_reward: 10,
-        icon: 'Star',
-      },
-    ]);
-  };
-
-  const removeAchievement = (id: string) => {
-    setAchievements(prev => prev.filter(ach => ach.id !== id));
+  const handleToggle = (isEnabled: boolean) => {
+    setSettings(prev => prev ? { ...prev, is_enabled: isEnabled } : null);
   };
 
   return (
     <div className="bg-white dark:bg-brand-gray-800 rounded-lg shadow-md p-6 border border-brand-gray-200 dark:border-brand-gray-700">
-      <div className="flex justify-between items-center mb-6">
-        <h3 className="text-xl font-semibold">Conquistas e Medalhas</h3>
-        <Button onClick={addAchievement} size="sm"><Plus className="h-4 w-4 mr-2" /> Nova Conquista</Button>
-      </div>
-      <div className="space-y-4">
-        {achievements.map(ach => (
-          <div key={ach.id} className="p-4 bg-brand-gray-50 dark:bg-brand-gray-900/50 rounded-lg space-y-4">
-            <div className="flex justify-between items-start">
-              <div className="flex items-start gap-4 flex-1">
-                {/* Icon Preview */}
-                <div className="flex flex-col items-center">
-                  <label className="block text-xs font-medium text-brand-gray-500 dark:text-brand-gray-400 mb-2">Ícone</label>
-                  <div className="p-3 bg-brand-gray-200 dark:bg-brand-gray-800 rounded-lg">
-                    <DynamicIcon name={ach.icon} className="h-6 w-6 text-yellow-500" />
-                  </div>
-                </div>
-                {/* Name Input */}
-                <div className="flex-1">
-                  <Input
-                    label="Nome da Conquista"
-                    placeholder="Nome da Conquista"
-                    value={ach.name}
-                    onChange={(e) => handleAchievementChange(ach.id, 'name', e.target.value)}
-                    className="font-semibold !text-base"
-                  />
-                </div>
-              </div>
-              {/* Delete Button */}
-              <Button variant="ghost" size="sm" onClick={() => removeAchievement(ach.id)} className="text-red-500 ml-4">
-                <Trash2 className="h-4 w-4" />
-              </Button>
-            </div>
-            <Input
-              label="Descrição"
-              placeholder="Descrição da conquista"
-              value={ach.description}
-              onChange={(e) => handleAchievementChange(ach.id, 'description', e.target.value)}
-            />
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-brand-gray-700 dark:text-brand-gray-300 mb-1">Tipo de Gatilho</label>
-                <select
-                  value={ach.type}
-                  onChange={(e) => handleAchievementChange(ach.id, 'type', e.target.value)}
-                  className="w-full form-select rounded-md border-brand-gray-300 dark:border-brand-gray-600 bg-white dark:bg-brand-gray-800 text-brand-gray-900 dark:text-white"
-                >
-                  <option value="first_reservation">Primeira Reserva</option>
-                  <option value="play_all_courts">Jogar em todas as quadras</option>
-                  <option value="weekly_frequency">Frequência Semanal</option>
-                  <option value="loyalty_10">Lealdade (10 reservas)</option>
-                  <option value="loyalty_50">Lealdade (50 reservas)</option>
-                  <option value="loyalty_100">Lealdade (100 reservas)</option>
-                </select>
-              </div>
-              <Input
-                label="Recompensa (Pontos)"
-                type="number"
-                value={ach.points_reward.toString()}
-                onChange={(e) => handleAchievementChange(ach.id, 'points_reward', Number(e.target.value))}
-              />
-              <Input
-                label="Ícone (Lucide)"
-                value={ach.icon}
-                onChange={(e) => handleAchievementChange(ach.id, 'icon', e.target.value)}
-                placeholder="Ex: Star, Crown, Heart"
-              />
-            </div>
+      <h3 className="text-xl font-semibold mb-6">Configurações Gerais</h3>
+      <div className="space-y-6">
+        
+        <div className="rounded-lg p-4 bg-blue-50 dark:bg-brand-blue-500/10 border border-blue-200 dark:border-brand-blue-500/20">
+          <h4 className="font-semibold mb-2 flex items-center text-blue-900 dark:text-blue-200"><Info className="h-5 w-5 mr-2" />Como Configurar o MatchPlay Rewards</h4>
+          <ol className="list-decimal list-inside space-y-2 text-sm text-blue-800 dark:text-blue-300">
+            <li><strong>Ative o Sistema:</strong> Use o botão abaixo para habilitar o sistema de gamificação.</li>
+            <li><strong>Defina a Pontuação:</strong> Configure quantos pontos seus clientes ganharão por reserva ou por valor gasto.</li>
+            <li><strong>Configure os Níveis:</strong> Na aba "Níveis", defina os ranks (Bronze, Prata, Ouro) e quantos pontos são necessários para alcançá-los.</li>
+            <li><strong>Crie Recompensas:</strong> Na aba "Recompensas", crie os prêmios que seus clientes poderão resgatar com os pontos acumulados.</li>
+            <li><strong>Gerencie as Conquistas:</strong> Na aba "Conquistas", você pode revisar e ajustar as medalhas automáticas que os clientes ganham ao atingir marcos.</li>
+          </ol>
+        </div>
+
+        <div className="flex items-center justify-between p-4 bg-brand-gray-50 dark:bg-brand-gray-900/50 rounded-lg">
+          <div>
+            <h4 className="font-medium text-brand-gray-900 dark:text-white">Ativar Sistema de Gamificação</h4>
+            <p className="text-sm text-brand-gray-500 dark:text-brand-gray-400">Habilite ou desabilite o MatchPlay Rewards para seus clientes.</p>
           </div>
-        ))}
+          <ToggleSwitch enabled={settings.is_enabled} setEnabled={handleToggle} />
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <Input
+            label="Pontos por Reserva"
+            name="points_per_reservation"
+            type="number"
+            value={settings.points_per_reservation.toString()}
+            onChange={handleChange}
+            placeholder="Ex: 10"
+            disabled={!settings.is_enabled}
+          />
+          <Input
+            label="Pontos por Real Gasto (R$)"
+            name="points_per_real"
+            type="number"
+            value={settings.points_per_real.toString()}
+            onChange={handleChange}
+            placeholder="Ex: 1"
+            disabled={!settings.is_enabled}
+          />
+        </div>
       </div>
     </div>
   );
 };
 
-export default AchievementsSettings;
+export default GeneralSettings;

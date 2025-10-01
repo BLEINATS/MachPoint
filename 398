@@ -1,102 +1,63 @@
 /*
-  # Operation Name: Secure Gamification and Cancellation Functions
-  [This operation secures database functions by setting a fixed search_path, preventing potential security vulnerabilities.]
+  # [SECURITY] Set Search Path for Functions
+  [This operation sets a fixed search_path for database functions to mitigate potential security risks, as recommended by Supabase security advisories.]
 
-  ## Query Description: [This operation updates the 'add_gamification_points' and 'handle_client_cancellation_final' functions to include a fixed search_path. This is a security enhancement and does not change the core logic or impact existing data. It is a safe, reversible operation.]
+  ## Query Description: [This operation modifies existing database functions to explicitly set the 'search_path'. This is a security best practice that prevents potential hijacking of function calls. It does not alter the function's logic or impact data. This change is safe and reversible.]
 
   ## Metadata:
-  - Schema-Category: ["Structural", "Safe"]
+  - Schema-Category: ["Security", "Safe"]
   - Impact-Level: ["Low"]
   - Requires-Backup: false
   - Reversible: true
 
   ## Structure Details:
   - Functions affected:
-    - public.add_gamification_points(uuid, integer, text)
-    - public.handle_client_cancellation_final(uuid)
+    - add_gamification_points(uuid, integer, text)
+    - is_arena_admin(uuid)
 
   ## Security Implications:
-  - RLS Status: [No Change]
+  - RLS Status: [No change]
   - Policy Changes: [No]
-  - Auth Requirements: [No Change]
+  - Auth Requirements: [No change]
 
   ## Performance Impact:
-  - Indexes: [No Change]
-  - Triggers: [No Change]
+  - Indexes: [No change]
+  - Triggers: [No change]
   - Estimated Impact: [None]
 */
 
--- Secure add_gamification_points function
-CREATE OR REPLACE FUNCTION public.add_gamification_points(
-    p_aluno_id uuid,
-    p_points_to_add integer,
-    p_description text
-)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
+-- Function: add_gamification_points
+CREATE OR REPLACE FUNCTION public.add_gamification_points(p_aluno_id uuid, p_points_to_add integer, p_description text)
+ RETURNS void
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
 BEGIN
-  SET search_path = public;
-  INSERT INTO public.gamification_point_transactions (aluno_id, arena_id, points, type, description)
-  SELECT
-    p_aluno_id,
-    a.arena_id,
-    p_points_to_add,
-    'manual_adjustment'::gamification_point_transaction_type,
-    p_description
-  FROM public.alunos a
-  WHERE a.id = p_aluno_id;
+    INSERT INTO public.gamification_point_transactions (aluno_id, arena_id, points, type, description)
+    SELECT
+        p_aluno_id,
+        a.arena_id,
+        p_points_to_add,
+        'manual_adjustment'::public.gamification_transaction_type,
+        p_description
+    FROM public.alunos a
+    WHERE a.id = p_aluno_id;
 END;
-$$;
+$function$;
 
--- Secure handle_client_cancellation_final function
-CREATE OR REPLACE FUNCTION public.handle_client_cancellation_final(p_reserva_id uuid)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-DECLARE
-  v_reserva public.reservas;
-  v_credit_to_refund numeric := 0;
-  v_hours_until_reservation integer;
-  v_aluno_id uuid;
+-- Function: is_arena_admin
+CREATE OR REPLACE FUNCTION public.is_arena_admin(p_arena_id uuid)
+ RETURNS boolean
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
 BEGIN
-  SET search_path = public;
-
-  SELECT * INTO v_reserva FROM public.reservas WHERE id = p_reserva_id;
-
-  IF v_reserva IS NULL THEN
-    RAISE EXCEPTION 'Reserva não encontrada.';
-  END IF;
-
-  IF v_reserva.status = 'cancelada' THEN
-    RAISE EXCEPTION 'Esta reserva já foi cancelada.';
-  END IF;
-
-  v_hours_until_reservation := EXTRACT(EPOCH FROM (v_reserva.date + v_reserva.start_time - now())) / 3600;
-
-  IF v_hours_until_reservation >= 24 THEN
-    v_credit_to_refund := v_reserva.total_price;
-  ELSIF v_hours_until_reservation >= 12 THEN
-    v_credit_to_refund := v_reserva.total_price * 0.5;
-  ELSE
-    v_credit_to_refund := 0;
-  END IF;
-
-  UPDATE public.reservas
-  SET status = 'cancelada'
-  WHERE id = p_reserva_id;
-
-  IF v_credit_to_refund > 0 AND v_reserva.profile_id IS NOT NULL THEN
-    SELECT id INTO v_aluno_id FROM public.alunos WHERE profile_id = v_reserva.profile_id AND arena_id = v_reserva.arena_id LIMIT 1;
-    
-    IF v_aluno_id IS NOT NULL THEN
-      PERFORM public.add_credit_to_aluno(v_aluno_id, v_reserva.arena_id, v_credit_to_refund);
-      
-      INSERT INTO public.credit_transactions(aluno_id, arena_id, amount, type, description, related_reservation_id)
-      VALUES (v_aluno_id, v_reserva.arena_id, v_credit_to_refund, 'cancellation_credit', 'Crédito por cancelamento da reserva #' || substr(p_reserva_id::text, 1, 8), p_reserva_id);
-    END IF;
-  END IF;
+  RETURN EXISTS (
+    SELECT 1
+    FROM public.arenas
+    WHERE id = p_arena_id AND owner_id = auth.uid()
+  );
 END;
-$$;
+$function$;

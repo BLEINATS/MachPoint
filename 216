@@ -1,41 +1,61 @@
 /*
-  # [Operation Name]
-  [This operation secures the 'add_credit_to_aluno' function by setting a fixed search_path, mitigating a security advisory.]
-  ## Query Description: [This script safely drops and recreates a database function to apply security best practices. It modifies the function's definition to prevent potential search_path hijacking vulnerabilities, without altering its core logic or impacting existing data. This is a low-risk, preventative security enhancement.]
-  ## Metadata:
-  - Schema-Category: 'Security'
-  - Impact-Level: 'Low'
-  - Requires-Backup: false
-  - Reversible: true
-  ## Structure Details:
-  - Function 'add_credit_to_aluno' will be dropped and recreated.
-  ## Security Implications:
-  - RLS Status: Unchanged
-  - Policy Changes: No
-  - Auth Requirements: Admin privileges
-  ## Performance Impact:
-  - Indexes: None
-  - Triggers: None
-  - Estimated Impact: Negligible. This change only affects the function's security context.
-*/
-DROP FUNCTION IF EXISTS public.add_credit_to_aluno(uuid, uuid, numeric);
-CREATE OR REPLACE FUNCTION public.add_credit_to_aluno(
-    aluno_id_to_update uuid,
-    arena_id_to_check uuid,
-    amount_to_add numeric
+          # [Function] check_duplicate_reservation (version 3)
+          [This function checks for overlapping reservations. This version replaces the `OVERLAPS` operator with a manual comparison (`start_time < p_end_time AND end_time > p_start_time`) to correctly handle adjacent (back-to-back) reservations, preventing them from being flagged as conflicts.]
+
+          ## Query Description: [This operation replaces the `check_duplicate_reservation` function to fix a logic error in how it detects time conflicts. The previous version incorrectly blocked valid back-to-back reservations. This is a safe, low-risk change that only affects server-side validation logic.]
+          
+          ## Metadata:
+          - Schema-Category: ["Structural"]
+          - Impact-Level: ["Low"]
+          - Requires-Backup: [false]
+          - Reversible: [true]
+          
+          ## Structure Details:
+          - Function: `check_duplicate_reservation(uuid, uuid, date, time, time, uuid)`
+          
+          ## Security Implications:
+          - RLS Status: [N/A]
+          - Policy Changes: [No]
+          - Auth Requirements: [N/A]
+          
+          ## Performance Impact:
+          - Indexes: [N/A]
+          - Triggers: [N/A]
+          - Estimated Impact: [None. The logic is equivalent in performance for this use case.]
+          */
+CREATE OR REPLACE FUNCTION public.check_duplicate_reservation(
+    p_arena_id uuid,
+    p_quadra_id uuid,
+    p_date date,
+    p_start_time time,
+    p_end_time time,
+    p_exclude_reserva_id uuid DEFAULT NULL
 )
-RETURNS void
+RETURNS boolean
 LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
 AS $$
+DECLARE
+    v_conflict_exists boolean;
 BEGIN
-    IF NOT is_arena_admin(arena_id_to_check) THEN
-        RAISE EXCEPTION 'Permissão negada. Apenas administradores da arena podem adicionar crédito.';
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.reservas
+        WHERE
+            arena_id = p_arena_id AND
+            quadra_id = p_quadra_id AND
+            date = p_date AND
+            status <> 'cancelada' AND
+            (p_exclude_reserva_id IS NULL OR id <> p_exclude_reserva_id) AND
+            -- Manual overlap check to correctly handle adjacent bookings
+            start_time < p_end_time AND
+            end_time > p_start_time
+    )
+    INTO v_conflict_exists;
+
+    IF v_conflict_exists THEN
+        RAISE EXCEPTION 'Conflito de horário: Já existe uma reserva para esta quadra neste horário.';
     END IF;
 
-    UPDATE public.alunos
-    SET credit_balance = credit_balance + amount_to_add
-    WHERE id = aluno_id_to_update AND arena_id = arena_id_to_check;
+    RETURN v_conflict_exists;
 END;
 $$;

@@ -1,83 +1,96 @@
 /*
-# [Function] `get_or_create_client_profile`
-Creates or retrieves a user's 'aluno' profile for a specific arena. This replaces the previous function to ensure correct invocation.
+# [Function and RLS Cleanup] Create secure function to create aluno profiles
+This migration replaces the previous RLS policy-based approach with a more robust and secure SECURITY DEFINER function.
 
 ## Query Description:
-This operation drops the old `ensure_my_aluno_profile` function and creates a new, robust version named `get_or_create_client_profile`. This function is designed to be called by authenticated users to get or create their client profile (`aluno` record) within a specific arena. This centralized database function enhances security and consistency. It uses `SECURITY DEFINER` to safely perform insertions while respecting user boundaries. This script also grants the necessary execution permissions to authenticated users.
+This migration performs two actions:
+1. Drops the RLS policy "Allow users to create their own aluno profile" which was causing issues.
+2. Creates a new function `ensure_aluno_profile_exists` that securely creates an 'aluno' record for the calling user if one doesn't exist. This function runs with elevated privileges but is safe because it operates strictly on the authenticated user's ID (`auth.uid()`). This is the standard and recommended Supabase pattern for this type of operation.
+
+This change will permanently fix the "row-level security policy" error when new clients make their first reservation.
 
 ## Metadata:
-- Schema-Category: ["Structural", "Safe"]
-- Impact-Level: ["Low"]
+- Schema-Category: "Structural"
+- Impact-Level: "Low"
 - Requires-Backup: false
-- Reversible: true (the function can be dropped)
+- Reversible: false (The old policy is dropped, but the function can be dropped to reverse the creation)
 
 ## Structure Details:
-- Function: `public.get_or_create_client_profile(p_arena_id uuid, p_profile_id uuid)`
-- Returns: `alunos` (a single row)
+- Table: `public.alunos`
+- Policy Dropped: "Allow users to create their own aluno profile"
+- Function Created: `public.ensure_aluno_profile_exists(target_arena_id uuid)`
 
 ## Security Implications:
-- RLS Status: N/A
-- Policy Changes: No.
-- Auth Requirements: Grants `EXECUTE` to the `authenticated` role.
-- `SECURITY DEFINER`: Runs with owner privileges for safe data insertion.
-- `search_path`: Set to prevent search path hijacking.
+- RLS Status: Modifies RLS configuration by removing a policy.
+- Policy Changes: Yes (DROP)
+- Auth Requirements: User must be authenticated to call the new function.
+- Search Path: The new function explicitly sets a secure `search_path` to address the "Function Search Path Mutable" security advisory.
 
 ## Performance Impact:
-- Indexes: No change.
-- Triggers: No change.
+- Indexes: None
+- Triggers: None
 - Estimated Impact: Low.
 */
 
--- Drop the previous function if it exists, to ensure a clean state.
-DROP FUNCTION IF EXISTS public.ensure_my_aluno_profile(uuid, uuid);
+-- Step 1: Drop the old, problematic RLS policy.
+DROP POLICY IF EXISTS "Allow users to create their own aluno profile" ON public.alunos;
 
--- Create the new function with a new name.
-CREATE OR REPLACE FUNCTION public.get_or_create_client_profile(
-    p_arena_id uuid,
-    p_profile_id uuid
-)
-RETURNS alunos
+-- Step 2: Create the new, secure function to handle aluno profile creation.
+CREATE OR REPLACE FUNCTION public.ensure_aluno_profile_exists(target_arena_id uuid)
+RETURNS public.alunos
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public, pg_temp
+-- Set a secure search_path to address the security advisory
+SET search_path = public
 AS $$
 DECLARE
-    v_aluno_record alunos;
-    v_profile_record profiles;
+  calling_user_id uuid;
+  user_profile public.profiles;
+  aluno_record public.alunos;
 BEGIN
-    -- Security check: Ensure the calling user matches the profile ID.
-    IF auth.uid() != p_profile_id THEN
-        RAISE EXCEPTION 'Operation not allowed: You can only manage your own profile.';
-    END IF;
+  -- Get the user ID of the person calling the function
+  calling_user_id := auth.uid();
 
-    -- Attempt to find an existing aluno record.
-    SELECT * INTO v_aluno_record
-    FROM public.alunos
-    WHERE arena_id = p_arena_id AND profile_id = p_profile_id;
+  -- If the user is not authenticated, raise an error
+  IF calling_user_id IS NULL THEN
+    RAISE EXCEPTION 'User is not authenticated.';
+  END IF;
 
-    -- If found, return it.
-    IF FOUND THEN
-        RETURN v_aluno_record;
-    END IF;
+  -- Check if an 'aluno' record already exists for this user in this arena
+  SELECT *
+  INTO aluno_record
+  FROM public.alunos
+  WHERE profile_id = calling_user_id AND arena_id = target_arena_id;
 
-    -- If not found, get profile details to create a new aluno record.
-    SELECT * INTO v_profile_record
-    FROM public.profiles
-    WHERE id = p_profile_id;
+  -- If it exists, return it
+  IF aluno_record IS NOT NULL THEN
+    RETURN aluno_record;
+  END IF;
 
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Profile not found for the current user.';
-    END IF;
+  -- If not, get the user's profile details from the public.profiles table
+  SELECT *
+  INTO user_profile
+  FROM public.profiles
+  WHERE id = calling_user_id;
 
-    -- Create the new aluno record.
-    INSERT INTO public.alunos (arena_id, profile_id, name, email, phone, status, plan_name, join_date)
-    VALUES (p_arena_id, p_profile_id, v_profile_record.name, v_profile_record.email, null, 'ativo', 'Avulso', now())
-    RETURNING * INTO v_aluno_record;
+  -- If profile doesn't exist, we can't proceed
+  IF user_profile IS NULL THEN
+    RAISE EXCEPTION 'User profile not found for id %', calling_user_id;
+  END IF;
 
-    -- Return the newly created record.
-    RETURN v_aluno_record;
+  -- Create the new 'aluno' record
+  INSERT INTO public.alunos (profile_id, arena_id, name, email, status, plan_name, join_date)
+  VALUES (
+    calling_user_id,
+    target_arena_id,
+    user_profile.name,
+    user_profile.email,
+    'ativo',
+    'Avulso',
+    CURRENT_DATE
+  )
+  RETURNING * INTO aluno_record;
+
+  RETURN aluno_record;
 END;
 $$;
-
--- Grant execution permission to authenticated users.
-GRANT EXECUTE ON FUNCTION public.get_or_create_client_profile(uuid, uuid) TO authenticated;

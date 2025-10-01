@@ -1,96 +1,134 @@
 /*
-# [Function and RLS Cleanup] Create secure function to create aluno profiles
-This migration replaces the previous RLS policy-based approach with a more robust and secure SECURITY DEFINER function.
+# [Fix] RLS for Credit Transactions and Refactor Cancellation Function
+[This migration adds a Row-Level Security policy to the `credit_transactions` table, allowing users to insert their own credit records. It also refactors the reservation cancellation function to use `SECURITY INVOKER` for improved security and reliability, which should resolve the persistent "function not found" error.]
 
-## Query Description:
-This migration performs two actions:
-1. Drops the RLS policy "Allow users to create their own aluno profile" which was causing issues.
-2. Creates a new function `ensure_aluno_profile_exists` that securely creates an 'aluno' record for the calling user if one doesn't exist. This function runs with elevated privileges but is safe because it operates strictly on the authenticated user's ID (`auth.uid()`). This is the standard and recommended Supabase pattern for this type of operation.
-
-This change will permanently fix the "row-level security policy" error when new clients make their first reservation.
+## Query Description: [This is a structural and security enhancement. It ensures that users can only manage credit transactions linked to their own profiles and makes the cancellation function more robust by running it with the caller's permissions. This is a safe operation.]
 
 ## Metadata:
-- Schema-Category: "Structural"
-- Impact-Level: "Low"
+- Schema-Category: ["Structural", "Security"]
+- Impact-Level: ["Low"]
 - Requires-Backup: false
-- Reversible: false (The old policy is dropped, but the function can be dropped to reverse the creation)
+- Reversible: false (requires manual reversal of policies and function)
 
 ## Structure Details:
-- Table: `public.alunos`
-- Policy Dropped: "Allow users to create their own aluno profile"
-- Function Created: `public.ensure_aluno_profile_exists(target_arena_id uuid)`
+- Table: `credit_transactions` (new RLS policy)
+- Function: `client_cancel_booking_and_apply_credit` (dropped)
+- Function: `cancel_reservation_and_get_credit` (created with `SECURITY INVOKER`)
 
 ## Security Implications:
-- RLS Status: Modifies RLS configuration by removing a policy.
-- Policy Changes: Yes (DROP)
-- Auth Requirements: User must be authenticated to call the new function.
-- Search Path: The new function explicitly sets a secure `search_path` to address the "Function Search Path Mutable" security advisory.
+- RLS Status: [Enabled] on `credit_transactions`
+- Policy Changes: [Yes], new policy added.
+- Auth Requirements: [User must be authenticated]
 
 ## Performance Impact:
-- Indexes: None
-- Triggers: None
-- Estimated Impact: Low.
+- Indexes: [N/A]
+- Triggers: [N/A]
+- Estimated Impact: [Low]
 */
 
--- Step 1: Drop the old, problematic RLS policy.
-DROP POLICY IF EXISTS "Allow users to create their own aluno profile" ON public.alunos;
+-- Step 1: Enable RLS on the credit_transactions table if not already enabled.
+-- It's safe to run this even if it's already enabled.
+ALTER TABLE public.credit_transactions ENABLE ROW LEVEL SECURITY;
 
--- Step 2: Create the new, secure function to handle aluno profile creation.
-CREATE OR REPLACE FUNCTION public.ensure_aluno_profile_exists(target_arena_id uuid)
-RETURNS public.alunos
+-- Step 2: Drop any existing policy with the same name to avoid conflicts.
+DROP POLICY IF EXISTS "Allow users to insert their own credit transactions" ON public.credit_transactions;
+
+-- Step 3: Create a policy that allows a user to insert a credit transaction
+-- if the 'aluno_id' of the transaction belongs to them.
+CREATE POLICY "Allow users to insert their own credit transactions"
+ON public.credit_transactions
+FOR INSERT
+TO authenticated
+WITH CHECK (
+  EXISTS (
+    SELECT 1
+    FROM public.alunos a
+    WHERE a.id = credit_transactions.aluno_id AND a.profile_id = auth.uid()
+  )
+);
+
+-- Step 4: Drop the old function to ensure a clean slate.
+DROP FUNCTION IF EXISTS public.client_cancel_booking_and_apply_credit(uuid);
+
+-- Step 5: Create the new function with SECURITY INVOKER.
+CREATE OR REPLACE FUNCTION public.cancel_reservation_and_get_credit(p_reserva_id uuid)
+RETURNS void
 LANGUAGE plpgsql
-SECURITY DEFINER
--- Set a secure search_path to address the security advisory
-SET search_path = public
+-- Use SECURITY INVOKER: The function will run with the permissions of the user calling it.
+-- This is why we needed the RLS policy on credit_transactions.
+SECURITY INVOKER
 AS $$
 DECLARE
-  calling_user_id uuid;
-  user_profile public.profiles;
-  aluno_record public.alunos;
+    v_reserva "public"."reservas";
+    v_arena "public"."arenas";
+    v_aluno "public"."alunos";
+    v_hours_until_reservation int;
+    v_credit_to_apply numeric := 0;
+    v_policy_text text;
 BEGIN
-  -- Get the user ID of the person calling the function
-  calling_user_id := auth.uid();
+    -- The function now runs as the user, so RLS on 'reservas' will automatically
+    -- check for ownership. We just need to select the reservation.
+    SELECT * INTO v_reserva
+    FROM "public"."reservas"
+    WHERE id = p_reserva_id;
 
-  -- If the user is not authenticated, raise an error
-  IF calling_user_id IS NULL THEN
-    RAISE EXCEPTION 'User is not authenticated.';
-  END IF;
+    -- If RLS prevents the select, v_reserva will be NULL.
+    IF v_reserva IS NULL THEN
+        RAISE EXCEPTION 'Reservation not found or you do not have permission to cancel it.';
+    END IF;
 
-  -- Check if an 'aluno' record already exists for this user in this arena
-  SELECT *
-  INTO aluno_record
-  FROM public.alunos
-  WHERE profile_id = calling_user_id AND arena_id = target_arena_id;
+    -- Get arena details
+    SELECT * INTO v_arena
+    FROM "public"."arenas"
+    WHERE id = v_reserva.arena_id;
 
-  -- If it exists, return it
-  IF aluno_record IS NOT NULL THEN
-    RETURN aluno_record;
-  END IF;
+    IF v_arena IS NULL THEN
+        RAISE EXCEPTION 'Arena not found for this reservation.';
+    END IF;
 
-  -- If not, get the user's profile details from the public.profiles table
-  SELECT *
-  INTO user_profile
-  FROM public.profiles
-  WHERE id = calling_user_id;
+    -- Calculate hours until reservation
+    v_hours_until_reservation := EXTRACT(EPOCH FROM (v_reserva.date + v_reserva.start_time - now())) / 3600;
 
-  -- If profile doesn't exist, we can't proceed
-  IF user_profile IS NULL THEN
-    RAISE EXCEPTION 'User profile not found for id %', calling_user_id;
-  END IF;
+    -- Determine credit based on policy
+    IF v_hours_until_reservation >= 24 THEN
+        v_credit_to_apply := v_reserva.total_price;
+        v_policy_text := 'Cancelamento com +24h';
+    ELSIF v_hours_until_reservation >= 12 THEN
+        v_credit_to_apply := v_reserva.total_price * 0.5;
+        v_policy_text := 'Cancelamento entre 12h e 24h';
+    ELSE
+        v_credit_to_apply := 0;
+        v_policy_text := 'Cancelamento com -12h';
+    END IF;
 
-  -- Create the new 'aluno' record
-  INSERT INTO public.alunos (profile_id, arena_id, name, email, status, plan_name, join_date)
-  VALUES (
-    calling_user_id,
-    target_arena_id,
-    user_profile.name,
-    user_profile.email,
-    'ativo',
-    'Avulso',
-    CURRENT_DATE
-  )
-  RETURNING * INTO aluno_record;
+    -- Update the reservation status. RLS policy on 'reservas' allows this.
+    UPDATE "public"."reservas"
+    SET status = 'cancelada'
+    WHERE id = p_reserva_id;
 
-  RETURN aluno_record;
+    -- Apply credit if applicable
+    IF v_credit_to_apply > 0 THEN
+        -- Find the corresponding 'aluno' profile
+        SELECT * INTO v_aluno
+        FROM "public"."alunos"
+        WHERE profile_id = auth.uid() AND arena_id = v_reserva.arena_id;
+
+        IF v_aluno IS NOT NULL THEN
+            -- Update credit balance. RLS policy on 'alunos' allows this.
+            UPDATE "public"."alunos"
+            SET credit_balance = credit_balance + v_credit_to_apply
+            WHERE id = v_aluno.id;
+
+            -- Log the transaction. The new RLS policy on 'credit_transactions' allows this.
+            INSERT INTO "public"."credit_transactions" (aluno_id, arena_id, amount, type, description, related_reservation_id)
+            VALUES (v_aluno.id, v_reserva.arena_id, v_credit_to_apply, 'cancellation_credit', 'Crédito (' || v_policy_text || ') da reserva #' || substr(v_reserva.id::text, 1, 8), v_reserva.id);
+        ELSE
+            RAISE NOTICE 'Could not find an "aluno" profile for user to apply credit.';
+        END IF;
+    END IF;
+
 END;
 $$;
+
+-- Step 6: Grant execute permission to the authenticated role.
+GRANT EXECUTE ON FUNCTION public.cancel_reservation_and_get_credit(uuid) TO authenticated;

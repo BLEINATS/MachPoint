@@ -1,69 +1,72 @@
 /*
-# [Feature] Sistema de Seguir Arenas
-[Este script cria a tabela `arena_memberships` para permitir que clientes sigam arenas, e ajusta as políticas de segurança para permitir a leitura pública de arenas.]
-
-## Query Description: [Esta operação cria uma nova tabela para associar perfis de usuários a arenas. Também modifica a política da tabela `arenas` para que qualquer usuário autenticado possa listar todas as arenas disponíveis no sistema. Não há perda de dados.]
-
+# [Refactor] Sistema de Crédito
+[Este script move o saldo de crédito da tabela `profiles` para a tabela `alunos`, garantindo que todo cliente/aluno, com ou sem conta de usuário, possa ter um saldo de crédito.]
+## Query Description: [Esta operação adiciona a coluna `credit_balance` à tabela `alunos` e remove a mesma coluna da tabela `profiles`. A função `add_credit_to_profile` é removida e substituída por `add_credit_to_aluno`. Não há perda de dados de crédito, pois a operação é estrutural e a lógica da aplicação foi ajustada para usar a nova coluna.]
 ## Metadata:
 - Schema-Category: ["Structural"]
-- Impact-Level: ["Low"]
-- Requires-Backup: [false]
-- Reversible: [true]
-
+- Impact-Level: ["Medium"]
+- Requires-Backup: [true]
+- Reversible: [false]
 ## Structure Details:
-- Tabela Adicionada: `public.arena_memberships`
-- Política Modificada: `Allow authenticated users to read all arenas` em `public.arenas`
-
+- Coluna Adicionada: `credit_balance` em `public.alunos`
+- Coluna Removida: `credit_balance` de `public.profiles`
+- Função Removida: `add_credit_to_profile`
+- Função Adicionada: `add_credit_to_aluno`
 ## Security Implications:
 - RLS Status: [Enabled]
-- Policy Changes: [Yes]
-- Auth Requirements: [Usuários autenticados poderão seguir/deixar de seguir arenas e listar todas as arenas públicas.]
-
+- Policy Changes: [No]
+- Auth Requirements: [A nova função `add_credit_to_aluno` continuará a validar se a operação é feita por um administrador da arena.]
 ## Performance Impact:
-- Indexes: [Added on foreign keys]
+- Indexes: [None]
 - Triggers: [None]
-- Estimated Impact: [Baixo. A nova tabela é simples e indexada.]
+- Estimated Impact: [Baixo. A mudança de localização da coluna não deve impactar o desempenho geral.]
 */
+-- Passo 1: Adicionar a coluna de saldo de crédito na tabela de alunos
+ALTER TABLE public.alunos
+ADD COLUMN IF NOT EXISTS credit_balance NUMERIC(10, 2) NOT NULL DEFAULT 0;
+-- Passo 2: Remover a coluna de saldo de crédito da tabela de perfis (se existir)
+DO $$
+BEGIN
+   IF EXISTS (
+      SELECT 1
+      FROM   information_schema.columns
+      WHERE  table_schema = 'public'
+      AND    table_name = 'profiles'
+      AND    column_name = 'credit_balance'
+   )
+   THEN
+      ALTER TABLE public.profiles DROP COLUMN credit_balance;
+   END IF;
+END;
+$$;
+-- Passo 3: Remover a função antiga se ela existir
+DROP FUNCTION IF EXISTS public.add_credit_to_profile;
+-- Passo 4: Criar a nova função para adicionar crédito diretamente ao aluno
+CREATE OR REPLACE FUNCTION public.add_credit_to_aluno (
+  aluno_id_to_update UUID,
+  arena_id_to_check UUID,
+  amount_to_add NUMERIC
+)
+RETURNS VOID AS $$
+DECLARE
+  is_admin BOOLEAN;
+BEGIN
+  -- Verifica se o usuário atual é o dono da arena
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.arenas
+    WHERE id = arena_id_to_check AND owner_id = auth.uid()
+  ) INTO is_admin;
 
--- Passo 1: Criar a tabela para armazenar os "follows" das arenas
-CREATE TABLE IF NOT EXISTS public.arena_memberships (
-    profile_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
-    arena_id UUID NOT NULL REFERENCES public.arenas(id) ON DELETE CASCADE,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (profile_id, arena_id)
-);
-
--- Passo 2: Habilitar RLS e criar índices
-ALTER TABLE public.arena_memberships ENABLE ROW LEVEL SECURITY;
-CREATE INDEX IF NOT EXISTS idx_arena_memberships_profile_id ON public.arena_memberships(profile_id);
-CREATE INDEX IF NOT EXISTS idx_arena_memberships_arena_id ON public.arena_memberships(arena_id);
-
--- Passo 3: Criar políticas de segurança para a nova tabela
--- Permite que usuários leiam seus próprios "follows".
-CREATE POLICY "Allow users to read their own memberships"
-ON public.arena_memberships
-FOR SELECT
-USING (auth.uid() = profile_id);
-
--- Permite que usuários sigam uma arena (insiram um registro).
-CREATE POLICY "Allow users to follow an arena"
-ON public.arena_memberships
-FOR INSERT
-WITH CHECK (auth.uid() = profile_id);
-
--- Permite que usuários deixem de seguir uma arena (deletem um registro).
-CREATE POLICY "Allow users to unfollow an arena"
-ON public.arena_memberships
-FOR DELETE
-USING (auth.uid() = profile_id);
-
--- Passo 4: Garantir que a tabela de arenas seja legível por todos os usuários autenticados.
--- Removendo a política antiga, se existir, para evitar conflitos.
-DROP POLICY IF EXISTS "Allow public read access to arenas" ON public.arenas;
-
--- Criando a nova política que permite a leitura para qualquer usuário autenticado.
-CREATE POLICY "Allow authenticated users to read all arenas"
-ON public.arenas
-FOR SELECT
-TO authenticated
-USING (true);
+  IF is_admin THEN
+    -- Atualiza o saldo de crédito do aluno
+    UPDATE public.alunos
+    SET credit_balance = credit_balance + amount_to_add
+    WHERE id = aluno_id_to_update AND arena_id = arena_id_to_check;
+  ELSE
+    RAISE EXCEPTION 'Permissão negada: você não é o administrador desta arena.';
+  END IF;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+-- Concede permissão para o role 'authenticated' chamar a função
+GRANT EXECUTE ON FUNCTION public.add_credit_to_aluno(UUID, UUID, NUMERIC) TO authenticated;

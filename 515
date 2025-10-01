@@ -1,87 +1,546 @@
-/*
-# [SAFE-FIX] Corrige a função de gamificação e previne travamentos
+import { Arena, Quadra, Aluno, Professor, Turma, Reserva, PricingRule, Profile, GamificationReward, GamificationAchievement, GamificationLevel, Evento, GamificationPointTransaction } from '../types';
+import { format, addDays } from 'date-fns';
 
-Este script corrige a função `handle_reservation_completion` que estava causando um erro ao tentar acessar uma coluna inexistente (`points_per_booking`).
+export const mockAdminProfile: Profile = {
+    id: 'mock-admin-user-1',
+    name: 'Admin da Arena',
+    email: 'admin@matchplay.com',
+    avatar_url: null,
+    role: 'admin_arena',
+    created_at: new Date().toISOString(),
+};
 
-## Descrição da Query:
-Esta operação é projetada para ser segura em um ambiente de produção.
-1.  **`SET LOCAL lock_timeout`**: Previne que o banco de dados "trave". Se a tabela estiver ocupada, a migração falhará rapidamente em vez de esperar indefinidamente, permitindo que você tente novamente em alguns segundos.
-2.  **`DROP TRIGGER`**: Remove temporariamente o gatilho que depende da função, permitindo que a função seja atualizada sem conflitos.
-3.  **`CREATE OR REPLACE FUNCTION`**: Atualiza a função com a lógica corrigida (usando `points_per_reservation`).
-4.  **`CREATE TRIGGER`**: Recria o gatilho, conectando a tabela de volta à função corrigida.
-Tudo é executado em uma única transação para garantir a integridade.
+export const mockClientProfile: Profile = {
+    id: 'mock-profile-2', // Match the profile_id in mockAlunos for Maria
+    name: 'Maria Oliveira (Mock)',
+    email: 'maria.mock@email.com',
+    avatar_url: null,
+    role: 'cliente',
+    created_at: new Date().toISOString(),
+};
 
-## Metadata:
-- Schema-Category: "Structural"
-- Impact-Level: "Medium"
-- Requires-Backup: false
-- Reversible: true (revertendo para a versão anterior da função)
 
-## Security Implications:
-- RLS Status: A função respeita o RLS existente.
-- Policy Changes: No
-- Auth Requirements: Admin
-*/
+export const mockArena: Arena = {
+  id: 'mock-arena-1',
+  owner_id: 'mock-admin-user-1',
+  name: 'Arena de Testes Offline',
+  slug: 'arena-testes-offline',
+  city: 'Offline City',
+  state: 'OS',
+  created_at: new Date().toISOString(),
+};
 
-BEGIN;
+const baseMockQuadras: Omit<Quadra, 'pricing_rules'>[] = [
+  {
+    id: 'mock-quadra-1',
+    arena_id: 'mock-arena-1',
+    name: 'Quadra 1 (Areia)',
+    court_type: 'Areia',
+    sports: ['Beach Tennis', 'Futevôlei'],
+    status: 'ativa',
+    description: 'Nossa quadra principal de areia.',
+    amenities: ['Iluminação', 'Vestiário'],
+    horarios: {
+      weekday: { start: '08:00', end: '22:00' },
+      saturday: { start: '09:00', end: '20:00' },
+      sunday: { start: '09:00', end: '18:00' },
+    },
+    booking_duration_minutes: 60,
+    capacity: 4,
+    photos: [
+      'https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://placehold.co/600x400/3b82f6/white?text=Quadra+1',
+      'https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://placehold.co/600x400/1e293b/white?text=Vista+2'
+    ],
+    cover_photo: 'https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://placehold.co/600x400/3b82f6/white?text=Quadra+1',
+    created_at: new Date().toISOString(),
+  },
+  {
+    id: 'mock-quadra-2',
+    arena_id: 'mock-arena-1',
+    name: 'Quadra 2 (Rápida)',
+    court_type: 'Piso Rápido (Hard)',
+    sports: ['Tênis'],
+    status: 'ativa',
+    description: 'Quadra de tênis com piso rápido.',
+    amenities: ['Iluminação'],
+    horarios: {
+      weekday: { start: '07:00', end: '23:00' },
+      saturday: { start: '08:00', end: '22:00' },
+      sunday: { start: '08:00', end: '20:00' },
+    },
+    booking_duration_minutes: 60,
+    capacity: 4,
+    photos: [
+      'https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://placehold.co/600x400/16a34a/white?text=Quadra+2'
+    ],
+    cover_photo: 'https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://img-wrapper.vercel.app/image?url=https://placehold.co/600x400/16a34a/white?text=Quadra+2',
+    created_at: new Date().toISOString(),
+  },
+];
 
--- Define um tempo limite de 5 segundos para evitar travamentos.
--- Se a tabela estiver muito ocupada, a migração falhará rápido em vez de travar.
-SET LOCAL lock_timeout = '5s';
+export const mockPricingRules: PricingRule[] = [
+    {
+        id: 'rule-1',
+        quadra_id: 'mock-quadra-1',
+        arena_id: 'mock-arena-1',
+        sport_type: 'Qualquer Esporte',
+        start_time: '08:00',
+        end_time: '18:00',
+        days_of_week: [1, 2, 3, 4, 5],
+        price_single: 80,
+        price_monthly: 70,
+        is_active: true,
+        is_default: true,
+    },
+    {
+        id: 'rule-2',
+        quadra_id: 'mock-quadra-1',
+        arena_id: 'mock-arena-1',
+        sport_type: 'Qualquer Esporte',
+        start_time: '18:00',
+        end_time: '22:00',
+        days_of_week: [1, 2, 3, 4, 5],
+        price_single: 100,
+        price_monthly: 90,
+        is_active: true,
+        is_default: false,
+    },
+    {
+        id: 'rule-3',
+        quadra_id: 'mock-quadra-1',
+        arena_id: 'mock-arena-1',
+        sport_type: 'Qualquer Esporte',
+        start_time: '09:00',
+        end_time: '20:00',
+        days_of_week: [6], // Sábado
+        price_single: 120,
+        price_monthly: 110,
+        is_active: true,
+        is_default: false,
+    },
+    {
+        id: 'rule-4',
+        quadra_id: 'mock-quadra-1',
+        arena_id: 'mock-arena-1',
+        sport_type: 'Qualquer Esporte',
+        start_time: '09:00',
+        end_time: '18:00',
+        days_of_week: [0], // Domingo
+        price_single: 110,
+        price_monthly: 100,
+        is_active: true,
+        is_default: false,
+    },
+    {
+        id: 'rule-5',
+        quadra_id: 'mock-quadra-2',
+        arena_id: 'mock-arena-1',
+        sport_type: 'Tênis',
+        start_time: '07:00',
+        end_time: '23:00',
+        days_of_week: [0, 1, 2, 3, 4, 5, 6],
+        price_single: 90,
+        price_monthly: 80,
+        is_active: true,
+        is_default: true,
+    },
+];
 
--- Remove o gatilho que depende da função para permitir a alteração.
-DROP TRIGGER IF EXISTS on_reservation_completion ON public.reservas;
+export const mockQuadras: Quadra[] = baseMockQuadras.map(quadra => ({
+    ...quadra,
+    pricing_rules: mockPricingRules.filter(rule => rule.quadra_id === quadra.id)
+}));
 
--- Corrige a função, trocando 'points_per_booking' por 'points_per_reservation' e melhorando a lógica.
-CREATE OR REPLACE FUNCTION public.handle_reservation_completion()
-RETURNS TRIGGER AS $$
-DECLARE
-  settings_row public.gamification_settings;
-  points_to_add INT;
-  aluno_profile public.alunos;
-BEGIN
-  -- Só executa se o status da reserva mudou para 'realizada'
-  IF NEW.status = 'realizada' AND OLD.status <> 'realizada' THEN
-    
-    -- Busca as configurações de gamificação para a arena
-    SELECT * INTO settings_row
-    FROM public.gamification_settings
-    WHERE arena_id = NEW.arena_id
-    LIMIT 1;
 
-    -- Se a gamificação não estiver ativa (is_enabled), não faz nada
-    IF settings_row IS NULL OR NOT settings_row.is_enabled THEN
-      RETURN NEW;
-    END IF;
+export const mockAlunos: Aluno[] = [
+  {
+    id: 'mock-aluno-1',
+    arena_id: 'mock-arena-1',
+    profile_id: 'mock-profile-1',
+    name: 'João da Silva (Mock)',
+    email: 'joao.mock@email.com',
+    phone: '(11) 99999-1111',
+    status: 'ativo',
+    sport: 'Beach Tennis',
+    plan_name: 'Plano Mensal - 2x/semana',
+    monthly_fee: 250,
+    join_date: '2024-01-15',
+    created_at: new Date().toISOString(),
+    credit_balance: 50,
+    gamification_points: 0,
+  },
+  {
+    id: 'mock-aluno-2',
+    arena_id: 'mock-arena-1',
+    profile_id: 'mock-profile-2',
+    name: 'Maria Oliveira (Mock)',
+    email: 'maria.mock@email.com',
+    phone: '(21) 98888-2222',
+    status: 'ativo',
+    sport: 'Tênis',
+    plan_name: 'Avulso',
+    monthly_fee: 0,
+    join_date: '2024-03-10',
+    created_at: new Date().toISOString(),
+    credit_balance: 0,
+    gamification_points: 0,
+  },
+];
 
-    -- Calcula os pontos com base na reserva
-    points_to_add := settings_row.points_per_reservation;
-    
-    -- Adiciona pontos com base no valor gasto, se aplicável
-    IF settings_row.points_per_real > 0 AND NEW.total_price > 0 THEN
-      points_to_add := points_to_add + floor(NEW.total_price * settings_row.points_per_real);
-    END IF;
+export const mockProfessores: Professor[] = [
+    {
+        id: 'mock-prof-1',
+        arena_id: 'mock-arena-1',
+        name: 'Carlos Treinador (Mock)',
+        email: 'carlos.mock@email.com',
+        phone: '(31) 97777-3333',
+        specialties: ['Beach Tennis', 'Funcional'],
+        created_at: new Date().toISOString(),
+    }
+];
 
-    -- Adiciona os pontos ao aluno, se houver algum
-    IF NEW.profile_id IS NOT NULL AND points_to_add > 0 THEN
-      SELECT * INTO aluno_profile FROM public.alunos WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id;
-      
-      IF FOUND THEN
-        -- Usando PERFORM para chamar a função que não retorna valor
-        PERFORM public.add_gamification_points(aluno_profile.id, points_to_add, 'Reserva concluída');
-      END IF;
-    END IF;
+export const mockTurmas: Turma[] = [
+    {
+        id: 'mock-turma-1',
+        arena_id: 'mock-arena-1',
+        name: 'Beach Tennis Iniciante - Noite',
+        sport: 'Beach Tennis',
+        professor_id: 'mock-prof-1',
+        quadra_id: 'mock-quadra-1',
+        daysOfWeek: [1, 3], // Seg e Qua
+        start_time: '19:00',
+        end_time: '20:00',
+        start_date: '2024-01-01',
+        capacity: 8,
+        student_ids: ['mock-aluno-1'],
+        created_at: new Date().toISOString(),
+    }
+];
 
-  END IF;
+export const mockReservas: Reserva[] = [
+  {
+    id: 'mock-reserva-1',
+    arena_id: 'mock-arena-1',
+    quadra_id: 'mock-quadra-1',
+    profile_id: 'mock-profile-2',
+    clientName: 'Maria Oliveira (Mock)',
+    date: format(new Date(), 'yyyy-MM-dd'),
+    start_time: '10:00',
+    end_time: '11:00',
+    status: 'confirmada',
+    type: 'avulsa',
+    total_price: 80,
+    payment_status: 'pago',
+    created_at: new Date().toISOString(),
+  },
+  {
+    id: 'mock-reserva-2',
+    arena_id: 'mock-arena-1',
+    quadra_id: 'mock-quadra-2',
+    clientName: 'Visitante (Mock)',
+    date: format(addDays(new Date(), 1), 'yyyy-MM-dd'),
+    start_time: '14:00',
+    end_time: '16:00',
+    status: 'confirmada',
+    type: 'avulsa',
+    total_price: 200,
+    payment_status: 'pendente',
+    created_at: new Date().toISOString(),
+  },
+  {
+    id: 'mock-reserva-3',
+    arena_id: 'mock-arena-1',
+    quadra_id: 'mock-quadra-1',
+    profile_id: 'mock-profile-1', // João's profile
+    clientName: 'João da Silva (Mock)',
+    date: format(addDays(new Date(), -5), 'yyyy-MM-dd'),
+    start_time: '19:00',
+    end_time: '20:00',
+    status: 'realizada',
+    type: 'avulsa',
+    total_price: 100,
+    payment_status: 'pago',
+    created_at: new Date().toISOString(),
+  },
+  {
+    id: 'mock-reserva-4',
+    arena_id: 'mock-arena-1',
+    quadra_id: 'mock-quadra-2',
+    profile_id: 'mock-profile-2', // Maria's profile
+    clientName: 'Maria Oliveira (Mock)',
+    date: format(addDays(new Date(), -2), 'yyyy-MM-dd'),
+    start_time: '10:00',
+    end_time: '11:00',
+    status: 'realizada',
+    type: 'avulsa',
+    total_price: 80,
+    payment_status: 'pago',
+    created_at: new Date().toISOString(),
+  },
+  {
+    id: 'mock-reserva-evento-1',
+    arena_id: 'mock-arena-1',
+    quadra_id: 'mock-quadra-1',
+    evento_id: 'mock-evento-1',
+    clientName: 'Evento: Festa de Outubro',
+    date: '2025-10-07',
+    start_time: '19:00',
+    end_time: '22:00',
+    status: 'confirmada',
+    type: 'evento',
+    total_price: 300,
+    payment_status: 'pago',
+    created_at: new Date().toISOString(),
+  },
+];
 
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+export const mockEventos: Evento[] = [
+  {
+    id: 'mock-evento-1',
+    arena_id: 'mock-arena-1',
+    name: 'Festa de Outubro',
+    type: 'festa',
+    status: 'confirmado',
+    clientName: 'Empresa Mock',
+    clientPhone: '(11) 99999-9999',
+    clientEmail: 'contato@empresamock.com',
+    startDate: '2025-10-07',
+    endDate: '2025-10-07',
+    startTime: '18:00',
+    endTime: '23:00',
+    expectedGuests: 50,
+    quadras_ids: ['mock-quadra-1'],
+    additionalSpaces: ['Churrasqueira'],
+    services: [{ name: 'Limpeza', price: 150, included: false }],
+    totalValue: 450,
+    depositValue: 225,
+    paymentConditions: '50% de sinal',
+    notes: 'Evento de confraternização da empresa.',
+    checklist: [],
+    payments: [],
+    created_at: new Date().toISOString(),
+    include_court_reservation: true,
+    court_start_time: '19:00',
+    court_end_time: '22:00',
+  }
+];
 
--- Recria o gatilho para ser acionado após a atualização de uma reserva
-CREATE TRIGGER on_reservation_completion
-AFTER UPDATE ON public.reservas
-FOR EACH ROW
-EXECUTE FUNCTION public.handle_reservation_completion();
+export const mockGamificationLevels: GamificationLevel[] = [
+  {
+    id: 'lvl_1',
+    arena_id: 'mock-arena-1',
+    name: 'Bronze',
+    points_required: 0,
+    level_rank: 1,
+  },
+  {
+    id: 'lvl_2',
+    arena_id: 'mock-arena-1',
+    name: 'Prata',
+    points_required: 500,
+    level_rank: 2,
+  },
+  {
+    id: 'lvl_3',
+    arena_id: 'mock-arena-1',
+    name: 'Ouro',
+    points_required: 1500,
+    level_rank: 3,
+  },
+  {
+    id: 'lvl_4',
+    arena_id: 'mock-arena-1',
+    name: 'Platina',
+    points_required: 3000,
+    level_rank: 4,
+  },
+];
 
-COMMIT;
+export const mockGamificationAchievements: GamificationAchievement[] = [
+  {
+    id: 'ach_1',
+    arena_id: 'mock-arena-1',
+    name: 'Novato',
+    description: 'Faça sua primeira reserva na arena.',
+    type: 'first_reservation',
+    points_reward: 50,
+    icon: 'Sparkles',
+  },
+  {
+    id: 'ach_2',
+    arena_id: 'mock-arena-1',
+    name: 'Fidelidade Bronze',
+    description: 'Complete 10 reservas.',
+    type: 'loyalty_10',
+    points_reward: 100,
+    icon: 'Award',
+  },
+  {
+    id: 'ach_3',
+    arena_id: 'mock-arena-1',
+    name: 'Fidelidade Prata',
+    description: 'Complete 50 reservas.',
+    type: 'loyalty_50',
+    points_reward: 500,
+    icon: 'Medal',
+  },
+  {
+    id: 'ach_4',
+    arena_id: 'mock-arena-1',
+    name: 'Fidelidade Ouro',
+    description: 'Complete 100 reservas.',
+    type: 'loyalty_100',
+    points_reward: 1000,
+    icon: 'Trophy',
+  },
+  {
+    id: 'ach_5',
+    arena_id: 'mock-arena-1',
+    name: 'Madrugador',
+    description: 'Jogue antes das 8h da manhã.',
+    type: 'first_reservation', // Placeholder, needs specific logic
+    points_reward: 25,
+    icon: 'Sunrise',
+  },
+  {
+    id: 'ach_6',
+    arena_id: 'mock-arena-1',
+    name: 'Noturno',
+    description: 'Jogue após as 22h.',
+    type: 'first_reservation', // Placeholder, needs specific logic
+    points_reward: 25,
+    icon: 'Moon',
+  },
+  {
+    id: 'ach_7',
+    arena_id: 'mock-arena-1',
+    name: 'Explorador',
+    description: 'Jogue em todas as quadras da arena.',
+    type: 'play_all_courts',
+    points_reward: 150,
+    icon: 'Map',
+  },
+  {
+    id: 'ach_8',
+    arena_id: 'mock-arena-1',
+    name: 'Rato de Quadra',
+    description: 'Jogue 3 vezes na mesma semana.',
+    type: 'weekly_frequency',
+    points_reward: 75,
+    icon: 'CalendarClock',
+  },
+  {
+    id: 'ach_9',
+    arena_id: 'mock-arena-1',
+    name: 'Aniversariante',
+    description: 'Jogue no mês do seu aniversário.',
+    type: 'first_reservation', // Placeholder, needs specific logic
+    points_reward: 100,
+    icon: 'Cake',
+  },
+];
+
+export const mockGamificationRewards: GamificationReward[] = [
+  {
+    id: 'rew_1',
+    arena_id: 'mock-arena-1',
+    title: 'R$ 10 de Desconto',
+    description: 'Use seus pontos para ganhar R$ 10 de desconto em qualquer reserva.',
+    points_cost: 200,
+    type: 'discount',
+    value: 10,
+    quantity: null,
+    is_active: true,
+  },
+  {
+    id: 'rew_2',
+    arena_id: 'mock-arena-1',
+    title: 'Água de Coco Grátis',
+    description: 'Troque seus pontos por uma água de coco geladinha.',
+    points_cost: 50,
+    type: 'free_item',
+    value: null,
+    quantity: 100,
+    is_active: true,
+  },
+  {
+    id: 'rew_3',
+    arena_id: 'mock-arena-1',
+    title: '1 Hora de Reserva Grátis',
+    description: 'Resgate 1 hora de reserva em qualquer quadra (horários de baixa demanda).',
+    points_cost: 800,
+    type: 'free_hour',
+    value: null,
+    quantity: 10,
+    is_active: true,
+  },
+  {
+    id: 'rew_4',
+    arena_id: 'mock-arena-1',
+    title: 'R$ 25 de Desconto',
+    description: 'Um desconto maior para economizar na sua próxima partida.',
+    points_cost: 500,
+    type: 'discount',
+    value: 25,
+    quantity: null,
+    is_active: true,
+  },
+  {
+    id: 'rew_5',
+    arena_id: 'mock-arena-1',
+    title: 'Aluguel de Raquete Grátis',
+    description: 'Esqueceu a sua? Resgate uma raquete para sua partida sem custo.',
+    points_cost: 150,
+    type: 'free_item',
+    value: null,
+    quantity: 50,
+    is_active: true,
+  },
+  {
+    id: 'rew_6',
+    arena_id: 'mock-arena-1',
+    title: 'Isotônico Grátis',
+    description: 'Recupere as energias com um isotônico por nossa conta.',
+    points_cost: 80,
+    type: 'free_item',
+    value: null,
+    quantity: null,
+    is_active: true,
+  },
+  {
+    id: 'rew_7',
+    arena_id: 'mock-arena-1',
+    title: 'Traga um Amigo',
+    description: 'Ganhe R$ 50 de desconto na reserva para cobrir o valor do seu convidado.',
+    points_cost: 600,
+    type: 'discount',
+    value: 50,
+    quantity: 20,
+    is_active: true,
+  },
+  {
+    id: 'rew_8',
+    arena_id: 'mock-arena-1',
+    title: 'Tubo de Bolas Novas',
+    description: 'Jogue com bolas novas! Resgate um tubo de bolas para sua partida.',
+    points_cost: 400,
+    type: 'free_item',
+    value: null,
+    quantity: 30,
+    is_active: true,
+  },
+];
+
+export const mockGamificationPointTransactions: GamificationPointTransaction[] = [
+    {
+        id: 'mock_tx_welcome',
+        arena_id: 'mock-arena-1',
+        aluno_id: 'mock-aluno-1', // João
+        points: 50,
+        type: 'manual_adjustment',
+        description: 'Bônus de Boas-Vindas',
+        related_reservation_id: null,
+        related_achievement_id: null,
+        created_at: new Date().toISOString(),
+    }
+];

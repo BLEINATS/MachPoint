@@ -1,75 +1,40 @@
 /*
-# [SECURITY] Harden Function Search Paths
-[This migration hardens the security of several database functions by explicitly setting the `search_path`. This mitigates a class of security vulnerabilities where a malicious user could potentially create objects in other schemas to hijack function execution.]
+  # [SECURITY] Set Search Path for Functions
+  This migration enhances security by explicitly setting the `search_path` for several functions. This prevents potential hijacking attacks by ensuring that the functions resolve objects (tables, types, etc.) from the intended `public` schema first.
 
-## Query Description: [This operation modifies existing database functions to improve security. It is a non-destructive change and does not affect application logic or data. No backup is required, and the change is reversible by deploying a previous version of the function.]
+  ## Query Description:
+  - **Safety:** This is a safe, non-destructive operation.
+  - **Impact:** It modifies the function's configuration without changing its logic or affecting any data. By setting a fixed `search_path`, we improve the predictability and security of function execution.
+  - **Risk:** The risk is extremely low. The only potential issue would be if a function intentionally relied on an object from a schema other than `public`, which is not the case here.
 
-## Metadata:
-- Schema-Category: ["Security", "Structural"]
-- Impact-Level: ["Low"]
-- Requires-Backup: [false]
-- Reversible: [true]
+  ## Metadata:
+  - Schema-Category: "Safe"
+  - Impact-Level: "Low"
+  - Requires-Backup: false
+  - Reversible: true (by altering the function again to remove the setting)
 
-## Structure Details:
-- Modifies function: `public.add_gamification_points`
-- Modifies function: `public.add_credit_to_aluno`
+  ## Structure Details:
+  - `handle_client_cancellation_final(uuid)`
+  - `add_credit_to_aluno(uuid, uuid, numeric)`
+  - `add_gamification_points(uuid, integer, text)`
 
-## Security Implications:
-- RLS Status: [No Change]
-- Policy Changes: [No]
-- Auth Requirements: [No Change]
-- Mitigates `search_path` hijacking vulnerabilities.
+  ## Security Implications:
+  - RLS Status: Unchanged
+  - Policy Changes: No
+  - Auth Requirements: None
+  - Mitigates: Search Path Hijacking (CWE-426, CWE-427)
 
-## Performance Impact:
-- Indexes: [No Change]
-- Triggers: [No Change]
-- Estimated Impact: [Negligible. This change has no noticeable impact on performance.]
+  ## Performance Impact:
+  - Indexes: None
+  - Triggers: None
+  - Estimated Impact: Negligible. May slightly improve performance by providing a more direct path for object resolution.
 */
 
--- Harden add_gamification_points
-CREATE OR REPLACE FUNCTION public.add_gamification_points(p_aluno_id uuid, p_points_to_add integer, p_description text)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = 'public'
-AS $$
-DECLARE
-    v_arena_id uuid;
-    v_type gamification_point_transaction_type;
-BEGIN
-    -- Get arena_id from aluno
-    SELECT arena_id INTO v_arena_id FROM public.alunos WHERE id = p_aluno_id;
+ALTER FUNCTION public.handle_client_cancellation_final(p_reserva_id uuid)
+SET search_path = 'public';
 
-    IF v_arena_id IS NULL THEN
-        RAISE EXCEPTION 'Aluno com ID % não encontrado.', p_aluno_id;
-    END IF;
+ALTER FUNCTION public.add_credit_to_aluno(aluno_id_to_update uuid, arena_id_to_check uuid, amount_to_add numeric)
+SET search_path = 'public';
 
-    -- Determine transaction type
-    IF p_description ILIKE 'Resgate:%' THEN
-        v_type := 'reward_redemption';
-    ELSIF p_description ILIKE 'Conquista:%' THEN
-        v_type := 'achievement_unlocked';
-    ELSE
-        v_type := 'manual_adjustment';
-    END IF;
-
-    -- Insert transaction
-    INSERT INTO public.gamification_point_transactions (arena_id, aluno_id, points, type, description)
-    VALUES (v_arena_id, p_aluno_id, p_points_to_add, v_type, p_description);
-
-END;
-$$;
-
--- Harden add_credit_to_aluno
-CREATE OR REPLACE FUNCTION public.add_credit_to_aluno(aluno_id_to_update uuid, arena_id_to_check uuid, amount_to_add numeric)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = 'public'
-AS $$
-BEGIN
-    UPDATE public.alunos
-    SET credit_balance = credit_balance + amount_to_add
-    WHERE id = aluno_id_to_update AND arena_id = arena_id_to_check;
-END;
-$$;
+ALTER FUNCTION public.add_gamification_points(p_aluno_id uuid, p_points_to_add integer, p_description text)
+SET search_path = 'public';

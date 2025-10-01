@@ -1,73 +1,87 @@
 /*
-# [BUGFIX] Corrige erro ao salvar reserva relacionado à gamificação
+# [SAFE-FIX] Corrige a função de gamificação e previne travamentos
 
-Corrige um erro de digitação na função `handle_reservation_completion` que impedia o salvamento de reservas. A função tentava acessar o campo `points_per_booking` em vez de `points_per_reservation` nas configurações de gamificação.
+Este script corrige a função `handle_reservation_completion` que estava causando um erro ao tentar acessar uma coluna inexistente (`points_per_booking`).
 
-## Query Description: [Esta operação corrige uma função de gatilho do banco de dados. Primeiro, removemos o gatilho existente para evitar erros de dependência. Em seguida, substituímos a função defeituosa pela versão corrigida e, por fim, recriamos o gatilho. A alteração é segura e não afeta dados existentes, apenas corrige a lógica para futuras reservas.]
+## Descrição da Query:
+Esta operação é projetada para ser segura em um ambiente de produção.
+1.  **`SET LOCAL lock_timeout`**: Previne que o banco de dados "trave". Se a tabela estiver ocupada, a migração falhará rapidamente em vez de esperar indefinidamente, permitindo que você tente novamente em alguns segundos.
+2.  **`DROP TRIGGER`**: Remove temporariamente o gatilho que depende da função, permitindo que a função seja atualizada sem conflitos.
+3.  **`CREATE OR REPLACE FUNCTION`**: Atualiza a função com a lógica corrigida (usando `points_per_reservation`).
+4.  **`CREATE TRIGGER`**: Recria o gatilho, conectando a tabela de volta à função corrigida.
+Tudo é executado em uma única transação para garantir a integridade.
 
 ## Metadata:
 - Schema-Category: "Structural"
-- Impact-Level: "Low"
+- Impact-Level: "Medium"
 - Requires-Backup: false
-- Reversible: false
-
-## Structure Details:
-- Modifies function: `public.handle_reservation_completion`
-- Modifies trigger: `on_reservation_completed` on table `public.reservas`
+- Reversible: true (revertendo para a versão anterior da função)
 
 ## Security Implications:
-- RLS Status: Unchanged
+- RLS Status: A função respeita o RLS existente.
 - Policy Changes: No
-- Auth Requirements: None
+- Auth Requirements: Admin
 */
 
--- Step 1: Drop the existing trigger to avoid dependency errors.
-DROP TRIGGER IF EXISTS on_reservation_completed ON public.reservas;
+BEGIN;
 
--- Step 2: Correct the function by replacing 'points_per_booking' with 'points_per_reservation'.
+-- Define um tempo limite de 5 segundos para evitar travamentos.
+-- Se a tabela estiver muito ocupada, a migração falhará rápido em vez de travar.
+SET LOCAL lock_timeout = '5s';
+
+-- Remove o gatilho que depende da função para permitir a alteração.
+DROP TRIGGER IF EXISTS on_reservation_completion ON public.reservas;
+
+-- Corrige a função, trocando 'points_per_booking' por 'points_per_reservation' e melhorando a lógica.
 CREATE OR REPLACE FUNCTION public.handle_reservation_completion()
 RETURNS TRIGGER AS $$
 DECLARE
-  settings public.gamification_settings;
-  points_to_add INT := 0;
+  settings_row public.gamification_settings;
+  points_to_add INT;
+  aluno_profile public.alunos;
 BEGIN
-  -- Only run if the status is updated to 'realizada'
+  -- Só executa se o status da reserva mudou para 'realizada'
   IF NEW.status = 'realizada' AND OLD.status <> 'realizada' THEN
-    -- Fetch gamification settings for the arena
-    SELECT * INTO settings FROM public.gamification_settings WHERE arena_id = NEW.arena_id;
+    
+    -- Busca as configurações de gamificação para a arena
+    SELECT * INTO settings_row
+    FROM public.gamification_settings
+    WHERE arena_id = NEW.arena_id
+    LIMIT 1;
 
-    -- If gamification is not enabled for the arena, exit
-    IF settings IS NULL OR NOT settings.is_enabled THEN
+    -- Se a gamificação não estiver ativa (is_enabled), não faz nada
+    IF settings_row IS NULL OR NOT settings_row.is_enabled THEN
       RETURN NEW;
     END IF;
 
-    -- Calculate points from the reservation itself
-    IF settings.points_per_reservation > 0 THEN
-      points_to_add := points_to_add + settings.points_per_reservation;
+    -- Calcula os pontos com base na reserva
+    points_to_add := settings_row.points_per_reservation;
+    
+    -- Adiciona pontos com base no valor gasto, se aplicável
+    IF settings_row.points_per_real > 0 AND NEW.total_price > 0 THEN
+      points_to_add := points_to_add + floor(NEW.total_price * settings_row.points_per_real);
     END IF;
 
-    -- Calculate points from the value spent
-    IF settings.points_per_real > 0 AND NEW.total_price > 0 THEN
-      points_to_add := points_to_add + floor(NEW.total_price * settings.points_per_real);
+    -- Adiciona os pontos ao aluno, se houver algum
+    IF NEW.profile_id IS NOT NULL AND points_to_add > 0 THEN
+      SELECT * INTO aluno_profile FROM public.alunos WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id;
+      
+      IF FOUND THEN
+        -- Usando PERFORM para chamar a função que não retorna valor
+        PERFORM public.add_gamification_points(aluno_profile.id, points_to_add, 'Reserva concluída');
+      END IF;
     END IF;
 
-    -- If there are points to add and a valid user, call the function to add points
-    IF points_to_add > 0 AND NEW.aluno_id IS NOT NULL THEN
-      PERFORM public.add_gamification_points(
-        p_aluno_id := NEW.aluno_id,
-        p_points_to_add := points_to_add,
-        p_description := 'Conclusão da reserva',
-        p_related_reservation_id := NEW.id
-      );
-    END IF;
   END IF;
 
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Step 3: Recreate the trigger.
-CREATE TRIGGER on_reservation_completed
+-- Recria o gatilho para ser acionado após a atualização de uma reserva
+CREATE TRIGGER on_reservation_completion
 AFTER UPDATE ON public.reservas
 FOR EACH ROW
 EXECUTE FUNCTION public.handle_reservation_completion();
+
+COMMIT;

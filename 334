@@ -1,68 +1,76 @@
--- 1. Drop the existing trigger to allow function replacement.
-DROP TRIGGER IF EXISTS on_reservation_completed_add_points ON public.reservas;
-
--- 2. Drop the faulty function.
-DROP FUNCTION IF EXISTS public.handle_reservation_completion();
-
--- 3. Recreate the function with the correct field name ('is_enabled' instead of 'is_active').
 /*
-# [Function] handle_reservation_completion
-This function is triggered when a reservation status is updated to 'realizada'.
-It awards gamification points to the client based on the arena's settings.
-*/
-CREATE OR REPLACE FUNCTION public.handle_reservation_completion()
-RETURNS TRIGGER AS $$
+          # [Function Security] Secure create_booking_with_credit
+          [This operation secures the `create_booking_with_credit` function by setting a fixed search_path, which is a security best practice.]
+
+          ## Query Description: [This operation will redefine the `create_booking_with_credit` function to enhance its security by explicitly setting the `search_path`. This change does not alter the function's logic but prevents potential security vulnerabilities. No data will be affected, and the function's behavior will remain the same.]
+          
+          ## Metadata:
+          - Schema-Category: ["Structural"]
+          - Impact-Level: ["Low"]
+          - Requires-Backup: [false]
+          - Reversible: [true]
+          
+          ## Structure Details:
+          - Function: `public.create_booking_with_credit(uuid,uuid,date,character varying,character varying,numeric,public.payment_status_enum,character varying,jsonb,uuid)`
+          
+          ## Security Implications:
+          - RLS Status: [No Change]
+          - Policy Changes: [No]
+          - Auth Requirements: [authenticated]
+          
+          ## Performance Impact:
+          - Indexes: [No Change]
+          - Triggers: [No Change]
+          - Estimated Impact: [None]
+          */
+CREATE OR REPLACE FUNCTION public.create_booking_with_credit(p_arena_id uuid, p_quadra_id uuid, p_date date, p_start_time character varying, p_end_time character varying, p_total_price numeric, p_payment_status public.payment_status_enum, p_sport_type character varying, p_rented_items jsonb, p_aluno_id uuid)
+ RETURNS TABLE(reserva_id uuid, success boolean, message text)
+ LANGUAGE plpgsql
+AS $function$
 DECLARE
-    settings public.gamification_settings;
-    aluno_profile public.alunos;
-    points_to_add INT;
+    v_aluno public.alunos;
+    v_new_reserva_id uuid;
+    v_credit_to_use numeric;
 BEGIN
-    -- Find the gamification settings for the specific arena
-    SELECT * INTO settings
-    FROM public.gamification_settings
-    WHERE arena_id = NEW.arena_id;
+    -- Set a secure search_path
+    SET search_path = 'public';
 
-    -- If gamification is not enabled or no settings found, exit
-    IF NOT FOUND OR NOT settings.is_enabled THEN
-        RETURN NEW;
+    -- Get aluno details
+    SELECT * INTO v_aluno FROM public.alunos WHERE id = p_aluno_id AND arena_id = p_arena_id;
+
+    IF v_aluno IS NULL THEN
+        RETURN QUERY SELECT NULL::uuid, false, 'Aluno não encontrado.'::text;
+        RETURN;
     END IF;
 
-    -- Find the 'aluno' profile linked to the reservation's 'profile_id'
-    SELECT * INTO aluno_profile
-    FROM public.alunos
-    WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id;
+    -- Determine credit to use
+    v_credit_to_use := LEAST(v_aluno.credit_balance, p_total_price);
 
-    -- If no 'aluno' profile is found, exit
-    IF NOT FOUND THEN
-        RETURN NEW;
-    END IF;
+    -- Insert new reservation
+    INSERT INTO public.reservas (
+        arena_id, quadra_id, date, start_time, end_time, total_price, 
+        payment_status, sport_type, rented_items, profile_id, clientName, clientPhone, credit_used
+    ) VALUES (
+        p_arena_id, p_quadra_id, p_date, p_start_time, p_end_time, p_total_price,
+        p_payment_status, p_sport_type, p_rented_items, v_aluno.profile_id, v_aluno.name, v_aluno.phone, v_credit_to_use
+    ) RETURNING id INTO v_new_reserva_id;
 
-    -- Calculate points to add
-    points_to_add := 0;
-    if settings.points_per_reservation > 0 then
-        points_to_add := points_to_add + settings.points_per_reservation;
-    end if;
-    if settings.points_per_real > 0 and NEW.total_price > 0 then
-        points_to_add := points_to_add + floor(NEW.total_price * settings.points_per_real);
-    end if;
-
-    -- If there are points to add, update the aluno's balance and record the transaction
-    IF points_to_add > 0 THEN
+    -- Update aluno's credit balance if credit was used
+    IF v_credit_to_use > 0 THEN
         UPDATE public.alunos
-        SET gamification_points = coalesce(gamification_points, 0) + points_to_add
-        WHERE id = aluno_profile.id;
+        SET credit_balance = credit_balance - v_credit_to_use
+        WHERE id = p_aluno_id;
 
-        INSERT INTO public.gamification_point_transactions(arena_id, aluno_id, points, type, description, related_reservation_id)
-        VALUES(NEW.arena_id, aluno_profile.id, points_to_add, 'reservation_completed', 'Reserva finalizada', NEW.id);
+        -- Log the credit transaction
+        INSERT INTO public.credit_transactions (aluno_id, arena_id, amount, type, description, related_reservation_id)
+        VALUES (p_aluno_id, p_arena_id, -v_credit_to_use, 'reservation_payment', 'Pagamento da reserva #' || v_new_reserva_id, v_new_reserva_id);
     END IF;
 
-    RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+    RETURN QUERY SELECT v_new_reserva_id, true, 'Reserva criada com sucesso.'::text;
 
--- 4. Recreate the trigger to call the corrected function.
-CREATE TRIGGER on_reservation_completed_add_points
-AFTER UPDATE ON public.reservas
-FOR EACH ROW
-WHEN (NEW.status = 'realizada' AND OLD.status &lt;&gt; 'realizada')
-EXECUTE FUNCTION public.handle_reservation_completion();
+EXCEPTION
+    WHEN others THEN
+        RETURN QUERY SELECT NULL::uuid, false, SQLERRM;
+END;
+$function$
+;

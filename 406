@@ -1,8 +1,8 @@
 /*
-# [SECURITY] Set Search Path for handle_new_user_profile
-This operation enhances security by setting a fixed `search_path` for the `handle_new_user_profile` function. This prevents potential hijacking attacks by ensuring the function resolves objects only from the specified schemas.
+# [SECURITY] Set Search Path for Functions
+[This operation secures database functions by explicitly setting the search_path. This prevents potential hijacking attacks by ensuring functions resolve objects in the intended schema ('public') first, mitigating risks associated with mutable search paths.]
 
-## Query Description: [This is a non-destructive security enhancement. It ensures that the function for creating new user profiles operates in a predictable and secure environment, reducing the risk of unauthorized access or data manipulation. No data will be changed.]
+## Query Description: [This operation modifies the configuration of existing database functions to enhance security. It sets a fixed `search_path` to `public`, preventing malicious users from manipulating function execution by creating objects with the same name in other schemas. This is a safe, non-destructive operation that does not alter data or logic.]
 
 ## Metadata:
 - Schema-Category: ["Security", "Safe"]
@@ -11,16 +11,23 @@ This operation enhances security by setting a fixed `search_path` for the `handl
 - Reversible: [true]
 
 ## Structure Details:
-- Function: `public.handle_new_user_profile()`
+[
+  - Modifies function: `handle_new_reservation_notification()`,
+  - Modifies function: `handle_new_user_profile()`
+]
 
 ## Security Implications:
-- RLS Status: [Not Applicable]
+- RLS Status: [Not Changed]
 - Policy Changes: [No]
 - Auth Requirements: [None]
 
 ## Performance Impact:
-- Indexes: [None]
-- Triggers: [None]
-- Estimated Impact: [Negligible performance impact. This is a security best practice.]
+- Indexes: [Not Changed]
+- Triggers: [Not Changed]
+- Estimated Impact: [None. This is a metadata change with no performance overhead.]
 */
-ALTER FUNCTION public.handle_new_user_profile() SET search_path = public;
+ALTER FUNCTION public.handle_new_reservation_notification()
+SET search_path = 'public';
+
+ALTER FUNCTION public.handle_new_user_profile()
+SET search_path = 'public';

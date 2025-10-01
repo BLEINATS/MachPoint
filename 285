@@ -1,70 +1,63 @@
--- Fixes the gamification_levels table and creates a function to seed default data.
--- This script is idempotent and safe to re-run.
+-- Drop the trigger first to remove dependency
+DROP TRIGGER IF EXISTS on_reservation_completed_add_points ON public.reservas;
 
--- Step 1: Fix the 'gamification_levels' table structure.
-DO $$
+-- Drop the old function
+DROP FUNCTION IF EXISTS public.handle_reservation_completion();
+
+-- Recreate the function with the correct field name 'is_enabled'
+CREATE OR REPLACE FUNCTION public.handle_reservation_completion()
+RETURNS TRIGGER AS $$
+DECLARE
+    settings public.gamification_settings;
+    aluno_profile public.alunos;
+    points_to_add INT;
 BEGIN
-    -- If the old 'rank' column exists, rename it to 'level_rank'.
-    IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'gamification_levels' AND column_name = 'rank'
-    ) THEN
-        ALTER TABLE public.gamification_levels RENAME COLUMN "rank" TO level_rank;
+    -- Fetch settings for the arena
+    SELECT * INTO settings
+    FROM public.gamification_settings
+    WHERE arena_id = NEW.arena_id;
+
+    -- Check if gamification is enabled using the correct column 'is_enabled'
+    IF settings IS NULL OR NOT settings.is_enabled THEN
+        RETURN NEW;
     END IF;
 
-    -- If 'level_rank' column still doesn't exist, add it.
-    IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'gamification_levels' AND column_name = 'level_rank'
-    ) THEN
-        ALTER TABLE public.gamification_levels ADD COLUMN level_rank integer NOT NULL DEFAULT 0;
+    -- Find the corresponding student profile
+    SELECT * INTO aluno_profile
+    FROM public.alunos
+    WHERE profile_id = NEW.profile_id AND arena_id = NEW.arena_id;
+
+    IF aluno_profile IS NULL THEN
+        RETURN NEW; -- No student profile to add points to
     END IF;
+
+    -- Calculate points based on settings
+    points_to_add := 0;
+    IF settings.points_per_reservation > 0 THEN
+        points_to_add := points_to_add + settings.points_per_reservation;
+    END IF;
+    IF settings.points_per_real > 0 AND NEW.total_price > 0 THEN
+        points_to_add := points_to_add + floor(NEW.total_price * settings.points_per_real);
+    END IF;
+
+    IF points_to_add > 0 THEN
+        -- Add points to the student
+        UPDATE public.alunos
+        SET gamification_points = COALESCE(gamification_points, 0) + points_to_add
+        WHERE id = aluno_profile.id;
+
+        -- Insert into transaction history
+        INSERT INTO public.gamification_point_transactions(arena_id, aluno_id, points, type, description, related_reservation_id)
+        VALUES(NEW.arena_id, aluno_profile.id, points_to_add, 'reservation_completed', 'Reserva concluída', NEW.id);
+    END IF;
+
+    RETURN NEW;
 END;
-$$;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Step 2: Create a function to seed default gamification data.
-CREATE OR REPLACE FUNCTION public.seed_gamification_defaults(p_arena_id uuid)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-AS $$
-BEGIN
-    -- Seed General Settings if they don't exist for this arena
-    IF NOT EXISTS (SELECT 1 FROM public.gamification_settings WHERE arena_id = p_arena_id) THEN
-        INSERT INTO public.gamification_settings (arena_id, is_enabled, points_per_reservation, points_per_real)
-        VALUES (p_arena_id, true, 10, 1);
-    END IF;
-
-    -- Seed Levels if they don't exist for this arena
-    IF NOT EXISTS (SELECT 1 FROM public.gamification_levels WHERE arena_id = p_arena_id) THEN
-        INSERT INTO public.gamification_levels (arena_id, name, points_required, level_rank)
-        VALUES
-            (p_arena_id, 'Bronze', 0, 1),
-            (p_arena_id, 'Prata', 500, 2),
-            (p_arena_id, 'Ouro', 1500, 3),
-            (p_arena_id, 'Platina', 3000, 4);
-    END IF;
-
-    -- Seed Rewards if they don't exist for this arena
-    IF NOT EXISTS (SELECT 1 FROM public.gamification_rewards WHERE arena_id = p_arena_id) THEN
-        INSERT INTO public.gamification_rewards (arena_id, title, description, points_cost, type, value, quantity, is_active)
-        VALUES
-            (p_arena_id, 'Desconto de R$ 20', 'Use seus pontos para ganhar R$ 20 de desconto em qualquer reserva.', 200, 'discount', 20, null, true),
-            (p_arena_id, 'Hora Grátis (Horário Comercial)', 'Troque seus pontos por uma hora de quadra gratuita de Seg a Sex, das 8h às 18h.', 500, 'free_hour', null, 50, true),
-            (p_arena_id, 'Aluguel de Raquete Grátis', 'Não tem raquete? Use seus pontos para alugar uma por nossa conta.', 50, 'free_item', null, null, true);
-    END IF;
-
-    -- Seed Achievements if they don't exist for this arena
-    IF NOT EXISTS (SELECT 1 FROM public.gamification_achievements WHERE arena_id = p_arena_id) THEN
-        INSERT INTO public.gamification_achievements (arena_id, name, description, type, points_reward, icon)
-        VALUES
-            (p_arena_id, 'Primeira Reserva', 'Concedido ao fazer sua primeira reserva na arena.', 15, 'Star'),
-            (p_arena_id, 'Fidelidade Bronze', 'Concedido ao completar 10 reservas.', 50, 'Award'),
-            (p_arena_id, 'Madrugador', 'Concedido por jogar antes das 8h da manhã.', 20, 'Sunrise'),
-            (p_arena_id, 'Coruja', 'Concedido por jogar após as 22h.', 20, 'Moon');
-    END IF;
-END;
-$$;
-
--- Grant execute permission on the new function
-GRANT EXECUTE ON FUNCTION public.seed_gamification_defaults(uuid) TO authenticated;
+-- Recreate the trigger to call the corrected function
+CREATE TRIGGER on_reservation_completed_add_points
+AFTER UPDATE OF status ON public.reservas
+FOR EACH ROW
+WHEN (NEW.status = 'realizada' AND OLD.status <> 'realizada')
+EXECUTE FUNCTION public.handle_reservation_completion();

@@ -1,90 +1,50 @@
-# MachPoint - Sistema de Gestão de Arenas Esportivas
+import React from 'react';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import ProtectedRoute from './components/Auth/ProtectedRoute';
+import Home from './pages/Home';
+import ArenaSignup from './pages/ArenaSignup';
+import Dashboard from './pages/Dashboard';
+import ArenaPublic from './pages/ArenaPublic';
+import Settings from './pages/Settings';
+import Reservations from './pages/Reservations';
+import Quadras from './pages/Quadras';
+import ClientProfile from './pages/ClientProfile';
+import AuthPortal from './pages/AuthPortal';
+import Arenas from './pages/Arenas';
+import Alunos from './pages/Alunos';
+import Torneios from './pages/Torneios';
+import TorneioDetail from './pages/TorneioDetail';
+import Eventos from './pages/Eventos';
+import EventoDetail from './pages/EventoDetail';
+import Gamification from './pages/Gamification';
 
-## Visão Geral
-MachPoint é um sistema completo de gestão para arenas esportivas, desenvolvido em React com TypeScript e Vite. O sistema permite o gerenciamento de quadras, reservas, alunos, eventos e torneios.
+function App() {
+  return (
+    <Routes>
+      {/* Public Routes */}
+      <Route path="/" element={<Home />} />
+      <Route path="/auth" element={<AuthPortal />} />
+      <Route path="/cadastro-arena" element={<ArenaSignup />} />
+      <Route path="/arenas" element={<Arenas />} />
+      <Route path="/:slug" element={<ArenaPublic />} />
 
-## Estado Atual do Projeto
-**Data da restauração:** 25 de setembro de 2025
-**Status:** ✅ Projeto restaurado com sucesso do repositório GitHub
-**URL do repositório:** https://github.com/BLEINATS/MachPoint
+      {/* Protected Routes */}
+      <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+      <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
+      <Route path="/reservas" element={<ProtectedRoute><Reservations /></ProtectedRoute>} />
+      <Route path="/quadras" element={<ProtectedRoute><Quadras /></ProtectedRoute>} />
+      <Route path="/alunos" element={<ProtectedRoute><Alunos /></ProtectedRoute>} />
+      <Route path="/torneios" element={<ProtectedRoute><Torneios /></ProtectedRoute>} />
+      <Route path="/torneios/:id" element={<ProtectedRoute><TorneioDetail /></ProtectedRoute>} />
+      <Route path="/eventos" element={<ProtectedRoute><Eventos /></ProtectedRoute>} />
+      <Route path="/eventos/:id" element={<ProtectedRoute><EventoDetail /></ProtectedRoute>} />
+      <Route path="/gamification" element={<ProtectedRoute><Gamification /></ProtectedRoute>} />
+      <Route path="/perfil" element={<ProtectedRoute><ClientProfile /></ProtectedRoute>} />
+      
+      {/* Redirect any other path */}
+      <Route path="*" element={<Navigate to="/" />} />
+    </Routes>
+  );
+}
 
-### Estrutura do Projeto
-- **Frontend:** React 18 + TypeScript + Vite
-- **UI Framework:** Tailwind CSS + Framer Motion
-- **Banco de dados:** Supabase (PostgreSQL)
-- **Autenticação:** Supabase Auth
-- **Roteamento:** React Router DOM
-- **Charts:** ECharts
-- **Ícones:** Lucide React
-
-### Principais Funcionalidades
-- **Dashboard Cliente:** Painel personalizado para clientes e alunos
-- **Gestão de Quadras:** Cadastro e gerenciamento de quadras esportivas
-- **Sistema de Reservas:** Agendamento com regras de preços dinâmicas
-- **Gestão de Alunos:** Controle de mensalidades e créditos
-- **Eventos e Torneios:** Organização de competições
-- **Sistema de Créditos:** Cancelamentos e reembolsos automáticos
-
-## Arquitetura Técnica
-
-### Estrutura de Pastas
-```
-src/
-├── components/           # Componentes React reutilizáveis
-│   ├── Alunos/          # Gestão de alunos e turmas
-│   ├── Auth/            # Autenticação
-│   ├── Client/          # Dashboard do cliente
-│   ├── Dashboard/       # Analytics e estatísticas
-│   ├── Events/          # Eventos e torneios
-│   ├── Forms/           # Componentes de formulários
-│   ├── Layout/          # Layout base
-│   ├── Quadras/         # Gestão de quadras
-│   ├── Reservations/    # Sistema de reservas
-│   └── Settings/        # Configurações
-├── context/             # Context API (Auth, Theme, Toast)
-├── lib/                 # Configurações externas (Supabase)
-├── pages/               # Páginas principais
-├── types/               # Definições TypeScript
-└── utils/               # Utilitários e helpers
-```
-
-### Base de Dados
-O projeto utiliza Supabase com múltiplas migrações para:
-- Gestão de arenas e perfis
-- Sistema de quadras e preços
-- Reservas e recorrências
-- Sistema de créditos
-- Eventos e torneios
-- RLS (Row Level Security) policies
-
-## Configuração de Desenvolvimento
-
-### Servidor Local
-- **Host:** 0.0.0.0
-- **Porta:** 5000
-- **Hot Reload:** Configurado com polling para ambiente Replit
-
-### Workflow Configurado
-```bash
-npm run dev  # Inicia o servidor de desenvolvimento
-```
-
-## Últimas Alterações
-**25/09/2025:**
-- ✅ Projeto restaurado do GitHub com sucesso
-- ✅ Dependências instaladas com `--legacy-peer-deps`
-- ✅ Corrigido problema de export/import do ClientDashboard
-- ✅ Adicionado tipo `Reserva` como alias de `Reservation`
-- ✅ Workflow configurado e executando na porta 5000
-- ✅ Supabase configurado e conectado
-
-## Próximos Passos
-1. Revisar e resolver avisos LSP restantes
-2. Testar funcionalidades principais
-3. Verificar integrações com Supabase
-4. Configurar variáveis de ambiente se necessário
-
-## Notas Técnicas
-- ECharts versão 6.x com echarts-for-react pode gerar avisos de peer dependency
-- React Router futuro flags configuráveis para v7
-- Projeto otimizado para desenvolvimento no Replit com allowedHosts automático
+export default App;
